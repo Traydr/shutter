@@ -1,0 +1,61 @@
+# Foundation Phase 2 deployment spike
+
+This runbook applies only after an operator has reviewed the account, project,
+domain, allowlist, and secret values. Repository checks exercise the same
+authorization and cache ordering locally; this checklist captures the live
+provider evidence required to close Phase 2.
+
+## Cloudflare
+
+1. Create the private `shutter-renditions` R2 bucket.
+2. Apply `infra/cloudflare/r2-lifecycle.json` with:
+
+   ```sh
+   pnpm --filter @shutter/edge exec wrangler r2 bucket lifecycle set shutter-renditions --file ../../infra/cloudflare/r2-lifecycle.json
+   ```
+
+3. List the lifecycle rules and confirm the only object-expiration prefix is
+   `cache/`, with an age of 2,592,000 seconds. No `masters/` rule may exist.
+4. Set Worker secrets `CAPABILITY_KEYS`, `ORIGIN_BASE_URL`, and
+   `ORIGIN_AUTH_TOKEN`. `CAPABILITY_KEYS` is JSON shaped as
+   `{ "space-id": { "kid": "unpadded-base64url-32-byte-key" } }` and may
+   contain overlapping verification keys.
+5. Deploy the Worker. The configuration intentionally has no `nodejs_compat`.
+6. Create a rate-limiting rule for `/v1/`, keyed by client IP, at 300 requests
+   per 10 seconds with a 10-second block.
+
+## Railway
+
+1. Replace imgproxy's unreachable source prefix only after the matching Space
+   origin or UploadThing project allowlist has been reviewed.
+2. Preview `.railway/railway.ts` with `railway config plan`. Review every
+   resource and variable change.
+3. Apply only through the ordinary reviewed Railway workflow. Generate strong,
+   independent `ORIGIN_AUTH_TOKEN`, `IMGPROXY_SECRET`, `IMGPROXY_KEY`, and
+   `IMGPROXY_SALT` values in Railway. The imgproxy key and salt are hex encoded.
+4. Give Control a public HTTPS origin and put that exact URL in the Worker's
+   `ORIGIN_BASE_URL`. Keep imgproxy private-only.
+
+## Live evidence
+
+- Direct requests to `/internal/v1/spike/rendition` without the Worker origin
+  bearer return `401` and no bytes. imgproxy does the same without its separate
+  bearer and rejects unsigned paths.
+- A private master request with a tampered, expired, wrong-Space, or
+  wrong-purpose capability returns no rendition bytes, including when its
+  canonical Cache API and R2 entries exist.
+- A valid private request reports `r2-hit` after Cache API eviction and
+  `edge-hit` on the following request, while the browser response remains
+  `Cache-Control: private, no-store`.
+- A public located-source R2 or edge hit succeeds independently of capability
+  renewal. A miss requires a valid, allowlisted `image_source` capability.
+- Responses carry the protocol cache tag internally. Purging that tag removes
+  matching edge entries globally; deleting both `cache/` and `masters/` Source
+  prefixes prevents R2 repopulation.
+- Workers analytics show AES-GCM plus the private cache-hit path below 10 ms CPU
+  on representative gallery traffic.
+- A 301-request burst inside 10 seconds triggers the configured rate-limit rule,
+  while representative Ernesta and Pane View gallery loads stay below it.
+
+Record account IDs, deployment URLs, secret values, and Source Locators only in
+the provider secret stores or the private operational record—not in this repo.

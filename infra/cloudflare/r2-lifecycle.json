@@ -1,0 +1,17 @@
+{
+  "rules": [
+    {
+      "id": "expire-disposable-renditions-after-30-days",
+      "enabled": true,
+      "conditions": {
+        "prefix": "cache/"
+      },
+      "deleteObjectsTransition": {
+        "condition": {
+          "type": "Age",
+          "maxAge": 2592000
+        }
+      }
+    }
+  ]
+}

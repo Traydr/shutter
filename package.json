@@ -12,8 +12,9 @@
     "build:packages": "pnpm -r --filter './packages/*' --sort --if-present build",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "format": "biome check --write .",
-    "lint": "biome ci . && pnpm lint:edge-boundary",
+    "lint": "biome ci . && pnpm lint:edge-boundary && pnpm lint:phase2-config",
     "lint:edge-boundary": "node scripts/check-edge-boundary.mjs",
+    "lint:phase2-config": "node scripts/check-phase2-config.mjs",
     "test": "pnpm test:node && pnpm test:worker",
     "test:node": "pnpm build:packages && vitest run --config vitest.node.config.ts",
     "test:worker": "pnpm build:packages && pnpm --filter @shutter/edge test",
@@ -22,6 +23,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.2",
     "@types/node": "^22.18.0",
+    "railway": "3.3.1",
     "typescript": "6.0.3",
     "vitest": "4.1.4"
   }
