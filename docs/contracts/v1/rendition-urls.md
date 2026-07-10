@@ -4,6 +4,8 @@
 
 ```text
 GET /v1/public/{space}/resolver/{resolver}/{sourceRef}?w={width}&q={quality}
+GET /v1/public/{space}/located/{sourceId}/{capability}?w={width}&q={quality}
+GET /v1/public/{space}/master/{kind}/{sourceId}?w={width}&q={quality}
 GET /v1/private/{space}/source/{capability}?w={width}&q={quality}
 GET /v1/private/{space}/master/{capability}?w={width}&q={quality}
 ```
@@ -11,14 +13,16 @@ GET /v1/private/{space}/master/{capability}?w={width}&q={quality}
 `sourceRef` is one percent-encoded path segment interpreted only by the named,
 Space-configured Source Resolver. It is never accepted as an arbitrary URL.
 
-The private source route accepts only `image_source`. The private master route
-accepts only `master_preview`; its kind is taken from the authenticated claims.
-The route class must match the configured Space policy.
+`sourceId` is likewise one percent-encoded path segment. On the public located
+route it must equal the `image_source` claim. Edge cache and R2 are checked
+before capability decryption; the capability is required and validated only
+when Shutter must fetch the application-owned original. The capability is not
+part of public cache identity.
 
-V1 also requires canonical public routes for capability-located originals and
-stored Master Previews. A located-original capability is checked only before an
-application-owned source fetch; it is excluded from public cache identity. A
-public Master Preview is addressed by Source ID and kind without a capability.
+The public master route accepts `kind` values `video` and `pdf` and requires no
+capability. The private source route accepts only `image_source`. The private
+master route accepts only `master_preview`; its kind is taken from authenticated
+claims. Every route class must match configured Space policy.
 
 ## Parameters
 
@@ -37,3 +41,8 @@ normalizes `w` and `q`, and derives an internal canonical cache key from Space,
 Source ID, input kind, normalized width, and normalized quality. The expiring
 capability is excluded from that key and the response is served without a
 normalization redirect.
+
+Private browser responses use `Cache-Control: private, no-store`. The Worker
+may store a separately cloned response at its non-public canonical Cache API key
+for 24 hours, but it must validate the request capability before every lookup
+and must never forward the internal cache header to the browser.

@@ -47,6 +47,16 @@ Railway origin carry a separate origin credential, and the origin rejects
 untrusted direct access. The exact public canonical-URL routing remains subject
 to an implementation spike.
 
+V1 launches on Workers Free with security-sensitive routes configured to fail
+closed. A Cloudflare Free rate-limiting rule covers delivery paths, counts cached
+requests, and initially blocks a client IP after 300 requests in a 10-second
+window. The rule is an approximate abuse and cost guard, not an authorization
+boundary: Cloudflare counters are data-center scoped and enforcement can lag.
+Operations warn at 70,000 Worker requests in a UTC day and treat 90,000 as a
+critical upgrade threshold. Normal traffic approaching the 100,000-request Free
+limit triggers migration to Workers Paid; Shutter never bypasses private
+authorization to remain under quota.
+
 ## Implementation stack
 
 Shutter is a TypeScript pnpm workspace. Shutter Control and both Executors run
@@ -66,6 +76,17 @@ it unavoidable.
 The Worker owns no database state and uses no D1, KV, or Durable Objects in v1.
 Its only durable binding is the R2 Rendition Store. Jobs and operational metadata
 remain in Postgres on Railway.
+
+Postgres contains one application table in v1: `rendition_jobs`. Its composite
+identity is `(space_id, source_id, kind)`. The row holds only current operational
+state: the opaque Source Capability while work is active, execution-cycle and
+attempt counters, retry and lease timing, processing token, output metadata, and
+sanitized failure code. There are no Asset, Source, attempt-history, purge,
+delivery-token, or Space tables. Attempts are correlated in structured logs by
+job identity, cycle, attempt number, and processing token.
+
+The Source Capability column is cleared when a job becomes ready or terminal;
+reactivation supplies a new valid capability. Source Purge deletes the job row.
 
 Workspace packages are internal and are not published to npm in v1. Ernesta and
 Pane View each keep a thin local Shutter adapter for capability creation, Unpic
@@ -236,6 +257,14 @@ s-maxage=2592000`: Source Purge can invalidate Cloudflare and R2 immediately,
 while the shorter browser lifetime bounds cache copies that Shutter cannot
 recall from a user's device.
 
+Private responses use `Cache-Control: private, no-store`. The Worker therefore
+receives and validates a Source Capability for every network response instead
+of allowing a browser cache to bypass Shutter authorization. Internally, the
+Worker clones an authorized rendition into its canonical Cache API key with a
+24-hour edge TTL; the response sent to the browser retains `no-store`. Private
+optimized objects remain eligible for the same 30-day R2 cache-object lifecycle,
+and every read from either internal layer still sits behind Worker validation.
+
 Public and private Spaces use distinct URL shapes. Public URLs use an allowlisted
 Source Resolver when the fetch location is derivable; otherwise an encrypted
 Source Capability supplies a presigned locator but is excluded from the public
@@ -247,21 +276,21 @@ The initial canonical delivery routes are:
 
 ```text
 /v1/public/{space}/resolver/{resolver}/{sourceRef}?w=640&q=75
+/v1/public/{space}/located/{sourceId}/{capability}?w=640&q=75
+/v1/public/{space}/master/{kind}/{sourceId}?w=640&q=75
 /v1/private/{space}/source/{capability}?w=640&q=75
 /v1/private/{space}/master/{capability}?w=640&q=75
 ```
 
 The public route accepts a resolver-specific, percent-encoded source reference.
-The private source route requires `image_source`; the private master route
-requires `master_preview`. Unpic adapters modify only `w` and `q`.
-
-V1 also includes public delivery for an original whose Source Locator is not
-derivable and public delivery of a stored Master Preview. The former uses an
-`image_source` capability only to authorize an original-source fetch on a cache
-miss; the public cache identity excludes the capability. The latter uses the
-public Space, Source ID, and video/PDF kind directly because the stored output is
-intentionally public. Their exact route shapes are defined alongside the other
-canonical delivery routes rather than deferred to a later protocol version.
+The public located-source route uses an `image_source` capability only to
+authorize an application-owned original fetch on a cache and R2 miss. Its clear
+Source ID must match the authenticated claim and forms cache identity without
+the capability. The public master route addresses an intentionally public
+stored output by Source ID and `video` or `pdf` kind without a capability. The
+private source route requires `image_source`; the private master route requires
+`master_preview`. Every source reference and Source ID is a percent-encoded
+single path segment. Unpic adapters modify only `w` and `q`.
 
 A non-canonical public width or quality receives a `308 Permanent Redirect` to
 the normalized URL, allowing the ordinary CDN to cache only canonical image
@@ -344,9 +373,18 @@ fresh capability.
 Job completion is polling-based in v1. Idempotent submission returns an existing
 ready Master Preview or a Rendition Job reference. Applications poll that
 resource with bounded backoff through `pending`, `processing`, `ready`, or a
-terminal failure; a ready response includes the Master Preview reference and
-dimensions. Webhook completion may be added later without changing job
-semantics.
+terminal failure. A ready response includes a stable Master Preview descriptor:
+Source ID, kind, actual dimensions, and WebP format. It never contains an
+expiring URL or Source Capability. The application adapter constructs a public
+master URL or, after end-user authorization, issues a `master_preview`
+capability for the private route. Webhook completion may be added later without
+changing job semantics.
+
+Pending and processing job representations use `202 Accepted` with their
+canonical `Location` and a `Retry-After` hint. Ready and persisted failed states
+use `200 OK`; the JSON status and sanitized failure object describe the durable
+resource state. Request rejection does not mutate a job, while temporary Control
+or Postgres failure returns `5xx` for an idempotent retry.
 
 One logical job exists for each `(space_id, source_id, kind)` tuple, where kind
 is `video` or `pdf`. Its canonical resource is submitted with `PUT
@@ -354,15 +392,27 @@ is `video` or `pdf`. Its canonical resource is submitted with `PUT
 ID or idempotency key is required. Repeating the same request returns the
 current job and never creates a second Master Preview identity. A fresh Source
 Capability submitted to a `source_expired` job reactivates that record with a
-new retry window. Other terminal outcomes remain unchanged unless the Source
-Object is purged and submitted under a new Source ID.
+new retry window. A new valid `PUT` also reactivates `attempts_exhausted`, which
+means temporary failures consumed one automatic five-attempt execution cycle.
+Each reactivation starts a new bounded execution cycle on the same logical job.
+Deterministic source failures remain unchanged unless the Source Object is
+purged or changed bytes are submitted under a new Source ID.
 
 Each job receives at most five attempts with retry delays of one minute, five
 minutes, thirty minutes, and two hours. An attempt has a ten-minute hard timeout,
 a fifteen-minute processing lease, and a one-minute heartbeat. A five-minute
 recovery sweep requeues expired leases and work whose initial wake was missed.
 Missing, unsupported, oversized, corrupt, or password-protected input is
-terminal; network, Railway, R2, and executor-process failures are retryable.
+permanently terminal for that Source ID. Network, Railway, R2, and
+executor-process failures are retried automatically; consuming all five attempts
+produces the manually resubmittable terminal result `attempts_exhausted`.
+
+Failed polling representations expose only a stable failure code and recovery
+action. `source_expired` directs the application to renew the capability,
+`attempts_exhausted` permits a retry, deterministic media failures require a
+replacement Source Object, and unexpected invariants direct the caller to an
+operator. Presigned locators, upstream response bodies, stack traces, command
+lines, and Executor stderr are never returned by the public API.
 
 Video and PDF have separate Executors from the beginning. imgproxy is also a
 separate deployment because it is a standalone on-demand renderer.
@@ -374,5 +424,4 @@ credentials. Its internal source URLs must be encrypted and signed.
 
 ## Open choices
 
-- The exact public located-source and public Master Preview route shapes.
 - The final internal pnpm package names and import boundaries.

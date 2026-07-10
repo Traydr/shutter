@@ -67,6 +67,12 @@ invokes the Worker, including a cache hit. Exceeding the free request allowance
 requires the paid Workers plan or causes failures; a private route must fail
 closed rather than bypass the Worker.
 
+Cloudflare Free also provides one path-based rate-limiting rule with a 10-second
+counting period. Counters are scoped per data center and enforcement can lag, so
+the rule reduces simple per-IP abuse but cannot enforce a precise global origin
+or cost budget. Shutter starts at 300 requests per client IP per 10 seconds,
+counts cached assets, and validates the threshold against real gallery loads.
+
 Cloudflare makes cache purge by URL, prefix, hostname, and tag available on the
 Free plan. Cache API custom keys have purge caveats, so Shutter should tag
 renditions by a hashed Space/source identity and verify global tag purge in the
@@ -80,6 +86,8 @@ Sources:
 - [Workers Free limits](https://developers.cloudflare.com/workers/platform/limits/)
 - [Cloudflare cache features by plan](https://developers.cloudflare.com/cache/plans/)
 - [Cloudflare cache purge availability and limits](https://developers.cloudflare.com/cache/how-to/purge-cache/)
+- [Cloudflare rate-limiting availability](https://developers.cloudflare.com/waf/rate-limiting-rules/)
+- [Cloudflare request-rate calculation](https://developers.cloudflare.com/waf/rate-limiting-rules/request-rate/)
 
 ## Accepted topology
 
@@ -93,16 +101,18 @@ be disabled or bypassed for this path.
 ### Public Spaces
 
 Public URLs put immutable source identity and normalized transformation in the
-canonical path. A trusted Source Resolver such as UploadThing can derive the
-origin directly; otherwise an encrypted capability supplies a presigned Source
-Locator outside the Cloudflare cache key. Ordinary CDN caching can then reuse
-the canonical public path globally without fragmenting entries across renewed
-locators. On a miss, Shutter validates the resolver or capability and rejects
-any Space whose trusted policy is not public.
+canonical path. Resolver-backed originals and public Master Previews use the
+ordinary CDN. A public located-source route passes through the Worker so it can
+derive a canonical Cache API key that excludes the encrypted presigned locator;
+it consults cache and R2 before decrypting the capability for an original-source
+miss. Renewed capabilities therefore reuse existing bytes without making a
+private locator part of public cache identity. Shutter rejects any route whose
+trusted Space policy is not public.
 
 ### Deployment boundary
 
-- **Cloudflare Worker**: capability gateway and private edge cache.
+- **Cloudflare Worker**: private capability gateway and cache, plus the public
+  located-source canonical cache.
 - **Cloudflare CDN**: public canonical rendition cache.
 - **Railway**: Shutter Control, imgproxy, Executors, job database, and central
   Rendition Store.

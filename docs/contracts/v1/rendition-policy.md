@@ -51,6 +51,8 @@ distance resolves upward. Master Preview materialization is fixed at quality
 ## Delivery lifetime
 
 - Private image Source Capability: 24 hours.
+- Private browser response: `Cache-Control: private, no-store`.
+- Private Worker Cache API entry: 24 hours behind capability validation.
 - Public browser cache: 1 day.
 - Public Cloudflare edge cache: 30 days.
 - R2 optimized-image cache: 30 days after object creation.

@@ -28,6 +28,16 @@ Retryable failures:
 - Executor process crash or timeout.
 - Missed dispatch or expired processing lease.
 
+If retryable failures consume all five automatic attempts, the execution cycle
+ends as `attempts_exhausted`. It does not imply invalid source bytes and a new
+valid job `PUT` may start another five-attempt cycle on the same logical job.
+Deterministic terminal failures cannot be manually restarted in place.
+
+Public polling maps execution outcomes to the stable codes in `job-api.md`.
+Provider-specific errors and process output must not become failure codes or API
+messages. Unexpected configuration and invariant failures are sanitized as
+`configuration_error` or `internal_invariant` and require operator attention.
+
 Every claim, heartbeat, completion, and failure transition compares the current
 processing token so a stale attempt cannot overwrite a newer result.
 
