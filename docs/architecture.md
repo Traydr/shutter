@@ -40,26 +40,24 @@ flowchart LR
 ## Storage
 
 A Shutter Space adopts one application-provided storage location at first:
-provider, bucket, optional prefix, and credentials. A separate bucket per Space
-is the preferred Railway isolation choice. Shutter's storage interface also
-permits a distinct prefix in a shared bucket for small apps, but Railway does
-not document prefix-scoped or read-only Bucket credentials; that arrangement is
-therefore logical organization rather than an access boundary.
+provider, bucket, and optional prefix. A separate bucket per Space is the
+preferred Railway isolation choice. Shutter's storage interface also permits a
+distinct prefix in a shared bucket for small apps, but Railway does not document
+prefix-scoped or read-only Bucket credentials; that arrangement is logical
+organization rather than an access boundary.
 
 Shutter stores references to Source Objects; it does not proxy uploads or become
 the storage owner. Executors write Derivatives to the application-owned location
-under Shutter-managed prefixes.
+under Shutter-managed prefixes. The application issues direct-upload grants and,
+after upload, performs Source Registration.
 
 Railway Buckets are an S3-compatible storage choice, not a Shutter requirement.
-They are private and belong to a Railway project and environment. A Space may
-therefore adopt a Bucket from another Railway project by storing that Bucket's
-S3 credentials as sealed Shutter configuration. Railway variable references and
-private service networking work only within one project and environment, so they
-cannot connect an application project directly to the separate Shutter project.
-Cross-project Shutter calls use a public custom domain with application
-authentication; Shutter reaches the adopted Bucket through S3 credentials.
-Rotating a Bucket credential requires updating the sealed Space configuration
-in Shutter before the old credential is invalidated.
+They are private and belong to a Railway project and environment. Shutter never
+stores an adopted Bucket's credentials. When it needs source bytes, it requests
+a fresh Source Grant from the owning application. Railway variable references
+and private service networking work only within one project and environment, so
+cross-project Source Grant calls use a public custom domain with application
+authentication.
 
 ## Image delivery
 
@@ -67,8 +65,10 @@ Image Optimization is request-driven:
 
 1. A consuming application authorizes its user and obtains a Delivery Capability
    from Shutter when the Space is private.
-2. The browser requests a signed imgproxy URL through an edge cache.
-3. imgproxy reads the permitted Source Object directly from storage.
+2. Shutter obtains a fresh Source Grant and encrypts it inside a signed imgproxy
+   source URL.
+3. The browser requests that URL through an edge cache; imgproxy reads the
+   permitted Source Object through the Source Grant.
 4. The response resizes within the requested width and height, preserves
    composition, and WebP-encodes at requested quality.
 
@@ -87,20 +87,18 @@ re-wakes jobs whose initial dispatch was missed.
 Video and PDF have separate Executors from the beginning. imgproxy is also a
 separate deployment because it is a standalone on-demand renderer.
 
-For Railway-backed Spaces, the imgproxy deployment scope remains a deliberate
-deployment choice. imgproxy expects one credential source with read access to
-every Bucket named in its S3 source URLs. Railway documents Bucket credentials
-per Bucket/project but does not document a shared multi-Bucket principal. Shutter
-must therefore prove whether one imgproxy can safely read several adopted Railway
-Buckets; otherwise the image renderer belongs beside each Space's Bucket.
+Because imgproxy reads HTTPS Source Grants rather than `s3://` URLs, one central
+imgproxy deployment can serve several Spaces without holding their Bucket
+credentials. Its source URLs must be encrypted and signed. A spike must still
+measure how Source Grant expiry affects cache reuse before this becomes the
+default delivery path.
 
 ## Open choices
 
 - The exact service-to-service authentication mechanism.
 - Quality defaults and permitted values for Image Optimization.
 - Private delivery-capability lifetime and cache policy.
+- Source Grant lifetime, renewal, and cache-reuse behavior for imgproxy.
 - Source-object deletion and derivative garbage-collection timing.
 - The implementation language and package layout for Shutter Control and the
   two Executors.
-- Whether one imgproxy credential source can read all adopted Railway Buckets,
-  or renderers must deploy per Space.

@@ -26,6 +26,12 @@ The consuming application's declaration to Shutter that a direct upload has
 completed and is ready to become a Shutter Asset.
 _Avoid_: Upload callback, storage polling
 
+**Source Grant**:
+A short-lived read capability issued by a consuming application for a Source
+Object after Shutter requests access. Shutter uses it to create a Rendition but
+never stores the application's storage credentials.
+_Avoid_: Shared bucket credential, permanent source URL
+
 **Rendition**:
 A visual representation of a Shutter Asset. A Rendition is produced on demand
 from a Source Object or materialized as a stored Derivative.

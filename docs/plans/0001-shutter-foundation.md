@@ -13,6 +13,8 @@ media lifecycle behavior.
 - Applications provision their own bucket or prefix and retention policy.
 - Applications authorize and issue their own direct-upload grants, then perform
   Source Registration after upload succeeds.
+- Applications issue short-lived Source Grants to Shutter on demand; Shutter
+  never stores their storage credentials.
 - Shutter owns the media catalog, Renditions, and durable jobs.
 - Applications may mirror original storage references, but Shutter Asset records
   own rendition lifecycle.
@@ -39,20 +41,18 @@ media lifecycle behavior.
 
 ### 2. Adopt storage safely
 
-- Define a storage adapter for S3-compatible locations using one credential set
-  per Space. Treat Railway Bucket credentials as bucket-level authority because
-  Railway does not document prefix-scoped or read-only credentials.
+- Define a Source Grant adapter for application-owned S3-compatible locations.
+  It obtains a fresh read grant for every executor attempt and stores no Bucket
+  credential in Shutter.
 - Define immutable source-key/version conventions and Shutter-managed derivative
   prefixes.
 - Define post-upload Source Registration and verification without proxying
   object bytes or issuing direct-upload grants through Shutter.
-- Define sealed, per-Space storage credentials for application-owned Railway
-  Buckets that live in other Railway projects; do not rely on cross-project
-  variable references or private networking.
-- Run a two-project Railway spike: test whether an imgproxy credential source
-  can read more than one adopted Railway Bucket. Use the result to choose either
-  one shared image renderer or a renderer per Space; do not assume a shared
-  multi-Bucket credential exists.
+- Define authenticated cross-project Source Grant calls over public custom
+  domains; do not rely on Railway variable references or private networking.
+- Run a two-project Railway spike: validate Source Grant renewal, encrypted
+  imgproxy source URLs, and cache reuse when a Source Grant expires. Do not
+  attach Bucket credentials to Shutter during this spike.
 - Define deletion requests and delayed garbage collection without allowing an
   application to delete storage outside its Space.
 
@@ -93,6 +93,8 @@ media lifecycle behavior.
 - Replacing a source creates a new Asset and does not invalidate old cache keys.
 - An application cannot mint a private Delivery Capability without first
   authorizing its user.
+- Shutter cannot read a Source Object without a fresh Source Grant and never
+  persists an application's Bucket credential.
 - Image URLs accept only width, optional height, and quality, and always produce
   an uncropped WebP Rendition.
 - An interrupted Executor job is retried safely and never causes an application
