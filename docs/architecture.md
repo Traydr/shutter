@@ -99,10 +99,18 @@ contract must therefore supply both Unpic breakpoints and Shutter normalization.
 
 Video posters and PDF covers are durable jobs. Shutter Control persists each job,
 wakes the matching Executor over private networking, and records completion or
-retry state. The Executor writes the result to the Rendition Store. Each
-serverless Executor claims and completes at most one job per invocation; it
+retry state. The Executor writes one canonical high-quality Master Preview to
+the Rendition Store. Unpic and imgproxy then produce normalized responsive image
+sizes from that master through the ordinary image-delivery pipeline rather than
+scheduling size-specific video or PDF work. Each serverless Executor claims and
+completes at most one job per invocation; it
 records a terminal outcome before returning. A recovery sweep re-wakes jobs
 whose initial dispatch was missed.
+
+The v1 Master Preview contract is fixed: video captures the frame at one second
+with a first-decodable-frame fallback, PDF renders the first page, and the result
+is a composition-preserving quality-90 WebP within 1920 pixels. Callers cannot
+select timestamps, pages, crop modes, or output formats.
 
 The submitting application supplies a job-scoped Source Capability whose
 lifetime covers the bounded retry window. Shutter does not call applications to

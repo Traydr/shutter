@@ -42,6 +42,13 @@ A materialized Rendition stored by Shutter separately from its application-owned
 Source Object, such as a video poster or PDF cover preview.
 _Avoid_: Optimized image, transformed image
 
+**Master Preview**:
+The single high-quality Derivative materialized for a video or PDF Source
+Object: a one-second video frame with first-decodable-frame fallback, or the
+first PDF page, encoded as a quality-90 WebP within 1920 pixels. Responsive
+thumbnail sizes are Image Optimizations of this master.
+_Avoid_: Size-specific poster set, original media copy
+
 **Rendition Store**:
 Shutter-owned storage containing only generated or cached Rendition bytes. It
 does not contain Source Objects or authoritative application media records.
