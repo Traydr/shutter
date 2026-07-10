@@ -54,4 +54,7 @@ original locator. Rendition width and quality are outside every capability and
 are constrained by the Space Rendition Policy.
 
 The three purposes are non-interchangeable. A route validates purpose before
-performing a cache lookup, R2 read, job mutation, or source fetch.
+performing a cache lookup, R2 read, job mutation, or source fetch. The sole
+exception is the intentionally public located-source route: it checks public
+edge and R2 cache entries first, then decrypts and validates `image_source` only
+if it must fetch the application-owned original.

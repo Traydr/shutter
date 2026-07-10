@@ -11,9 +11,19 @@ GET /v1/spaces/{spaceId}/sources/{sourceId}/previews/{kind}
 `spaceId`. The tuple `(space_id, source_id, kind)` is the job's natural unique
 key; clients do not supply a job ID or separate idempotency key.
 
+Job API requests authenticate with the Space API credential in an
+`Authorization: Bearer <token>` header. That credential is separate from Source
+Capability keys and must belong to the `spaceId` in the route.
+
 Submission requires a `preview_job` Source Capability whose Space, Source ID,
 and kind exactly match the route. Image and master-preview capabilities are
-rejected.
+rejected. The `PUT` body is strict JSON and contains no other fields:
+
+```json
+{
+  "sourceCapability": "v1.<kid>.<iv>.<ciphertext-and-tag>"
+}
+```
 
 ## Submission behavior
 

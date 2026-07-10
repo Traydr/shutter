@@ -24,7 +24,9 @@ Requested width normalizes to the smallest canonical width greater than or
 equal to it. Requests above 3840 normalize to 3840. imgproxy uses
 `without_enlargement`, so an input smaller than the target retains its original
 dimensions. Unpic's 24px automatic background is a separate placeholder request
-and does not join the responsive `srcset` ladder.
+and does not join the responsive `srcset` ladder. `24` is nevertheless a
+canonical exception: it renders and caches at exactly 24px rather than
+normalizing to 320px.
 
 Consumers pass `SHUTTER_WIDTHS` explicitly to Unpic; they do not rely on
 package-default breakpoint generation.

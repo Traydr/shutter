@@ -1,0 +1,11 @@
+node_modules/
+.pnpm-store/
+dist/
+.wrangler/
+.vite/
+coverage/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.dev.vars

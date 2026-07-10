@@ -1,0 +1,28 @@
+{
+  "name": "shutter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.1.0",
+  "engines": {
+    "node": ">=22.13.0 <23"
+  },
+  "scripts": {
+    "build": "pnpm -r --sort --if-present build",
+    "build:packages": "pnpm -r --filter './packages/*' --sort --if-present build",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "format": "biome check --write .",
+    "lint": "biome ci . && pnpm lint:edge-boundary",
+    "lint:edge-boundary": "node scripts/check-edge-boundary.mjs",
+    "test": "pnpm test:node && pnpm test:worker",
+    "test:node": "pnpm build:packages && vitest run --config vitest.node.config.ts",
+    "test:worker": "pnpm build:packages && pnpm --filter @shutter/edge test",
+    "typecheck": "pnpm build:packages && pnpm -r --sort --if-present typecheck"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.2",
+    "@types/node": "^22.18.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.4"
+  }
+}

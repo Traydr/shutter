@@ -17,7 +17,10 @@ Space-configured Source Resolver. It is never accepted as an arbitrary URL.
 route it must equal the `image_source` claim. Edge cache and R2 are checked
 before capability decryption; the capability is required and validated only
 when Shutter must fetch the application-owned original. The capability is not
-part of public cache identity.
+part of public cache identity. This is the deliberate public located-source
+exception to the general rule that a route validates capability purpose before
+cache access: an already-materialized public Rendition remains public after the
+source-fetch capability expires.
 
 The public master route accepts `kind` values `video` and `pdf` and requires no
 capability. The private source route accepts only `image_source`. The private
@@ -26,15 +29,15 @@ claims. Every route class must match configured Space policy.
 
 ## Parameters
 
-`w` and `q` are the only accepted query parameters. Width is required by the
-consumer adapter; quality may be omitted and uses the Space default. Values are
-normalized by the V1 Rendition Policy. Malformed values and all unknown query
-parameters return an uncacheable `400 Bad Request`.
+`w` and `q` are the only accepted query parameters. Width is required; omitting
+it returns an uncacheable `400 Bad Request`. Quality may be omitted and uses the
+Space default. Values are normalized by the V1 Rendition Policy. Duplicate,
+malformed, and unknown query parameters also return an uncacheable `400`.
 
-For the public route, valid non-canonical or omitted values receive `308
-Permanent Redirect` to the URL with explicit normalized `w` and `q`, in that
-order. A conforming Unpic adapter emits canonical values directly and therefore
-does not incur a redirect.
+For the public route, valid non-canonical values or an omitted quality receive
+`308 Permanent Redirect` to the URL with explicit normalized `w` and `q`, in
+that order. A conforming Unpic adapter emits canonical values directly and
+therefore does not incur a redirect.
 
 For private routes, the Worker validates the capability before cache access,
 normalizes `w` and `q`, and derives an internal canonical cache key from Space,

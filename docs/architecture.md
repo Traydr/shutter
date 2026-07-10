@@ -296,8 +296,9 @@ A non-canonical public width or quality receives a `308 Permanent Redirect` to
 the normalized URL, allowing the ordinary CDN to cache only canonical image
 responses. The private Worker normalizes before deriving its internal cache key
 and serves the response without a redirect. Missing parameters normalize to the
-Space defaults. Invalid values and unknown query parameters fail with an
-uncacheable `400` response rather than entering a cache key.
+Space defaults only where a default exists: quality defaults to the Space value,
+while width is required. Invalid, duplicate, and unknown query parameters fail
+with an uncacheable `400` response rather than entering a cache key.
 
 The initial image surface is deliberately narrow: width and quality. Width is
 normalized to the Space's canonical responsive ladder, quality is normalized to
@@ -327,7 +328,8 @@ forming a second cache-key dimension.
 
 The v1 canonical widths are `320, 640, 750, 828, 960, 1080, 1280, 1668, 1920,
 2048, 2560, 3200, 3840`; Unpic's 24px background placeholder is a separate
-low-resolution request. Ernesta permits qualities `30, 50, 75` and Pane View
+low-resolution request and an exact canonical exception outside that responsive
+ladder. Ernesta permits qualities `30, 50, 75` and Pane View
 permits `30, 75, 80`, both defaulting to `75`. Master Preview encoding remains
 fixed at quality `90`. Width normalizes upward and imgproxy never enlarges a
 smaller source.
