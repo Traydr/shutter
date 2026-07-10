@@ -10,15 +10,19 @@ users, business records, or application storage provisioning.
 
 ## Shape
 
-```text
-Application → Shutter Control → durable Rendition Jobs
-      │                                  │
-      └──────────────────────────────→ application-owned source storage
-
-Browser → cache → imgproxy → application-owned S3 storage
-                         
-Shutter Video ────────────────────────→ Shutter Rendition Store
-Shutter PDF ──────────────────────────→ Shutter Rendition Store
+```mermaid
+flowchart LR
+  app["Ernesta or Pane View"] --> control["Shutter Control on Railway"]
+  control --> jobs[("Rendition Jobs")]
+  jobs --> video["Video Executor"]
+  jobs --> pdf["PDF Executor"]
+  video --> r2["Shutter Rendition Store on R2"]
+  pdf --> r2
+  browser["Browser"] --> edge["Cloudflare delivery edge"]
+  edge --> r2
+  edge --> origin["Shutter image origin on Railway"]
+  origin --> imgproxy["imgproxy"]
+  imgproxy --> sources["Application-owned Source Objects"]
 ```
 
 See [the architecture record](./docs/architecture.md), [decisions](./docs/adr/),

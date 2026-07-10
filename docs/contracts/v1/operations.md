@@ -27,3 +27,11 @@ The threshold is validated against representative Ernesta pages and large Pane
 View galleries before production cutover. Cloudflare rate counters are not a
 global exact budget: they are data-center scoped and enforcement may lag. The
 rule is an abuse and cost guard, not part of authorization correctness.
+
+## Cutover ownership
+
+Production cutover is performed manually by the operator. Shutter implements no
+traffic splitter, timed observation gate, automatic rollback, provider-retirement
+workflow, or cutover controller. Consumer deployment configuration may keep old
+and new providers selectable, while the operator owns switch timing, observation,
+rollback, and final cleanup.

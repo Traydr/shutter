@@ -114,7 +114,7 @@ closed. A published SDK can be reconsidered if the consumer count grows.
 ## Space authentication
 
 Each Shutter Space has separate server-only credentials for separate authority:
-an API token authenticates job submission, status, purge, and administration;
+an API token authenticates job submission, status, and purge;
 a capability-encryption key lets the consuming application issue stateless,
 opaque Source Capabilities with authenticated encryption. Browser clients
 receive only encrypted capabilities. Both credential types have key identifiers
@@ -422,6 +422,11 @@ than `s3://` URLs, one central
 imgproxy deployment can serve several Spaces without holding their Bucket
 credentials. Its internal source URLs must be encrypted and signed.
 
-## Open choices
+## Workspace boundaries
 
-- The final internal pnpm package names and import boundaries.
+Deployable apps are `edge`, `control`, `executor-video`, and `executor-pdf`.
+Internal packages are `protocol` for Web-standard capability, URL, policy, and
+API contracts; `space-config` for checked-in non-secret policies; and `testkit`
+for cross-runtime fixtures and conformance helpers. Drizzle schema and migrations
+remain private to Control because Executors claim through its authenticated API
+rather than connecting directly to Postgres.

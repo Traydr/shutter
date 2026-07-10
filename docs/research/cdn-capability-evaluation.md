@@ -21,8 +21,8 @@ that respects origin `Cache-Control` and uses surrogate keys, but a Railway
 employee stated in late June 2026 that the one-click CDN was temporarily
 unavailable while changes were being made.
 
-Consequently, Railway is suitable as Shutter's origin runtime, private service
-network, and Rendition Store location, but its CDN cannot currently be a design
+Consequently, Railway is suitable as Shutter's origin runtime and private
+service network, but its CDN cannot currently be a design
 dependency for authorization-aware private caching. If the CDN returns, its
 documented behavior should be re-evaluated with a spike before using it even for
 public canonical rendition URLs.
@@ -114,8 +114,8 @@ trusted Space policy is not public.
 - **Cloudflare Worker**: private capability gateway and cache, plus the public
   located-source canonical cache.
 - **Cloudflare CDN**: public canonical rendition cache.
-- **Railway**: Shutter Control, imgproxy, Executors, job database, and central
-  Rendition Store.
+- **Railway**: Shutter Control, imgproxy, Executors, and job database.
+- **Cloudflare R2**: central Rendition Store.
 
 Accepted for an implementation spike on 2026-07-10. See ADR 0014.
 

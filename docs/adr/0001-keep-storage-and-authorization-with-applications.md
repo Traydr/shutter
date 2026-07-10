@@ -1,8 +1,9 @@
 # Keep storage and authorization with consuming applications
 
 Consuming applications own Source Object storage, end-user authorization,
-business metadata, and upload lifecycle. For image delivery, they issue signed,
-time-limited Source Capabilities for immutable Source Objects; Shutter validates
+business metadata, and upload lifecycle. For image delivery, they issue
+encrypted, authenticated, time-limited Source Capabilities for immutable Source
+Objects; Shutter validates
 those capabilities from stateless Rendition URLs and never stores source Bucket
 credentials. Shutter separately owns storage for only the generated or cached
 Rendition bytes it produces. This keeps Ernesta's public listings and Latch
