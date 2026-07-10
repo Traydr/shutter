@@ -18,6 +18,12 @@ const wrangler = await readFile(new URL("../apps/edge/wrangler.jsonc", import.me
 if (!wrangler.includes('"binding": "RENDITION_STORE"')) {
   throw new Error("Worker must bind the Rendition Store natively");
 }
+if (
+  !wrangler.includes('"pattern": "shutter-edge.traydr.dev"') ||
+  !wrangler.includes('"custom_domain": true')
+) {
+  throw new Error("Worker must retain the reviewed shutter-edge.traydr.dev custom domain");
+}
 if (wrangler.includes("nodejs_compat")) {
   throw new Error("Worker must not enable nodejs_compat");
 }

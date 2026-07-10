@@ -32,7 +32,10 @@ provider evidence required to close Phase 2.
    resource and variable change.
 3. Apply only through the ordinary reviewed Railway workflow. Generate strong,
    independent `ORIGIN_AUTH_TOKEN`, `IMGPROXY_SECRET`, `IMGPROXY_KEY`, and
-   `IMGPROXY_SALT` values in Railway. The imgproxy key and salt are hex encoded.
+   `IMGPROXY_SALT` values directly in Railway after the services are created.
+   Railway rejects `preserve()` during new-service creation, so add preservation
+   to IaC only after that first apply. Give Control the same imgproxy values.
+   The imgproxy key and salt are hex encoded.
 4. Give Control a public HTTPS origin and put that exact URL in the Worker's
    `ORIGIN_BASE_URL`. Keep imgproxy private-only.
 

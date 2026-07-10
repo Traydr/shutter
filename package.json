@@ -22,9 +22,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",
+    "@railway/cli": "5.26.0",
     "@types/node": "^22.18.0",
-    "railway": "3.3.1",
+    "railway": "3.5.2",
     "typescript": "6.0.3",
-    "vitest": "4.1.4"
+    "vitest": "4.1.4",
+    "wrangler": "4.107.1"
   }
 }
