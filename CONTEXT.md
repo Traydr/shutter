@@ -7,7 +7,7 @@ ownership of uploads, source storage, media records, and end-user authorization.
 
 **Shutter Space**:
 An isolated application configuration in Shutter with a storage location,
-source policy, and cache policy.
+source policy, cache policy, API credentials, and capability-verification keys.
 _Avoid_: Shared bucket, public tenant
 
 **Source Object**:
@@ -15,10 +15,27 @@ An immutable original owned by a consuming application and presented to Shutter
 as the input to a Rendition. Changed bytes are a different Source Object.
 _Avoid_: Mutable media file, overwritten original
 
+**Source ID**:
+An application-issued immutable identifier for a Source Object. It determines
+cache, job, storage, idempotency, and purge identity independently of location.
+_Avoid_: Source URL, bucket key, Shutter Asset ID
+
+**Source Locator**:
+The replaceable description of how Shutter can fetch a Source Object, such as an
+allowlisted public provider path or a presigned HTTPS GET URL. Changing storage
+providers changes the locator, not the Source ID.
+_Avoid_: Source identity, permanent bucket credential
+
+**Source Resolver**:
+A trusted Shutter Space mapping from a public provider locator to an allowlisted
+HTTPS fetch location, such as UploadThing project and file keys.
+_Avoid_: Arbitrary URL proxy, media catalog
+
 **Source Capability**:
-A signed, time-limited credential issued by a consuming application for one
-immutable Source Object. It authorizes a Rendition URL or a bounded Rendition
-Job without giving Shutter the application's storage credentials.
+A time-limited, encrypted, and authenticated credential issued by a consuming
+application that binds one Source ID to a private or otherwise non-public Source
+Locator. It authorizes a Rendition URL or bounded Rendition Job without exposing
+source details or storage credentials.
 _Avoid_: Shared bucket credential, permanent source URL, Source Grant
 
 **Rendition**:
