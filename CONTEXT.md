@@ -6,8 +6,9 @@ ownership of uploads, source storage, media records, and end-user authorization.
 ## Language
 
 **Shutter Space**:
-An isolated application configuration in Shutter with a storage location,
-source policy, cache policy, API credentials, and capability-verification keys.
+An isolated policy and authority boundary for one consuming application. It
+defines source trust, rendition and cache policy, and the credentials that the
+application uses with Shutter.
 _Avoid_: Shared bucket, public tenant
 
 **Source Object**:
@@ -33,9 +34,10 @@ _Avoid_: Arbitrary URL proxy, media catalog
 
 **Source Capability**:
 A time-limited, encrypted, and authenticated credential issued by a consuming
-application that binds one Source ID to a private or otherwise non-public Source
-Locator. It authorizes a Rendition URL or bounded Rendition Job without exposing
-source details or storage credentials.
+application that binds one Source ID to exactly one purpose: optimize a private
+Source Object, read a stored Master Preview, or run a bounded Rendition Job. A
+capability contains a Source Locator only when its purpose must fetch an
+application-owned Source Object.
 _Avoid_: Shared bucket credential, permanent source URL, Source Grant
 
 **Rendition**:
@@ -44,9 +46,8 @@ or materialized as a stored Derivative.
 _Avoid_: Media URL, arbitrary transformation pipeline
 
 **Image Optimization**:
-An on-demand Image Rendition that resizes a Source Object within requested width
-and height while preserving composition, then WebP-encodes it at the requested
-quality.
+An on-demand Image Rendition that resizes a Source Object to a requested width
+while preserving its composition, then WebP-encodes it at the requested quality.
 _Avoid_: General-purpose image manipulation, crop-to-fill
 
 **Rendition Policy**:
@@ -72,14 +73,16 @@ does not contain Source Objects or authoritative application media records.
 _Avoid_: Source bucket, media catalog
 
 **Source Purge**:
-An authenticated application request to remove every cached Rendition, stored
-Derivative, and Rendition Job associated with one immutable source identity.
+Post-revocation cleanup requested by a consuming application after it has made a
+Source Object unavailable. It removes every cached Rendition, stored Derivative,
+and Rendition Job associated with that immutable source identity; it does not
+revoke an otherwise valid Source Capability.
 _Avoid_: Media deletion, capability revocation
 
 **Rendition Job**:
-The operational record used to create one materialized Rendition, including its
-status, bounded retry deadline, attempts, and output metadata. It is not an
-authoritative media record.
+The single operational record for one Shutter Space, Source Object, and
+materialized rendition kind. It tracks status, bounded retry deadline, attempts,
+and output metadata, but is not an authoritative media record.
 _Avoid_: Shutter Asset, media catalog entry
 
 **Rendition URL**:

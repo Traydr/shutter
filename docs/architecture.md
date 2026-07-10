@@ -18,7 +18,7 @@ flowchart LR
   control --> jobs[("Rendition Jobs")]
   jobs --> video["Shutter Video"]
   jobs --> pdf["Shutter PDF"]
-  video --> derived["Shutter Rendition Store"]
+  video --> derived["Shutter Rendition Store on R2"]
   pdf --> derived
   browser["Browser"] --> worker["Cloudflare Worker"]
   worker --> privateCache["Private edge cache"]
@@ -26,17 +26,20 @@ flowchart LR
   privateCache --> origin["Shutter origin on Railway"]
   publicCache --> origin
   origin --> image["imgproxy"] --> source
+  worker --> derived
   origin --> derived
   app -->|"Source Capability after app authorization"| browser
 ```
 
 ## Deployment boundary
 
-Cloudflare is Shutter's delivery edge. A Cloudflare Worker decrypts and validates
-private Source Capabilities before every data-center-local edge-cache lookup;
-ordinary Cloudflare CDN caching serves canonical public Renditions. Railway
-hosts Shutter Control, imgproxy, the isolated Executors, the job database, and
-the central Rendition Store.
+Cloudflare is Shutter's delivery edge and durable Rendition storage provider. A
+Cloudflare Worker decrypts and validates private Source Capabilities before
+every data-center-local edge-cache lookup and can read stored Renditions through
+an R2 binding; ordinary Cloudflare CDN caching serves canonical public
+Renditions. Railway hosts Shutter Control, imgproxy, the isolated Executors, and
+the job database. Executors write Master Previews to R2 through its
+S3-compatible API.
 
 Railway CDN caching is disabled or bypassed on private origin paths so it cannot
 respond before Cloudflare authorization. Requests from Cloudflare to the
@@ -47,9 +50,8 @@ to an implementation spike.
 ## Implementation stack
 
 Shutter is a TypeScript pnpm workspace. Shutter Control and both Executors run
-on Node with Hono; Drizzle manages the Postgres job schema; the Rendition Store
-uses an S3-compatible Railway Bucket; imgproxy remains a separate upstream
-container image.
+on Node with Hono; Drizzle manages the Postgres job schema; R2 is the Rendition
+Store; imgproxy remains a separate upstream container image.
 
 The Cloudflare edge app is a web-native Hono Worker. It uses `wrangler.jsonc` as
 configuration source of truth, the official Cloudflare Vite plugin for local
@@ -61,8 +63,17 @@ capability packages must not import Node built-ins or rely on `Buffer`; the
 Worker does not enable `nodejs_compat` unless a measured future dependency makes
 it unavoidable.
 
-The Worker owns no durable state and uses no D1, KV, Durable Objects, or R2 in
-v1. Jobs, Rendition metadata, and durable bytes remain on Railway.
+The Worker owns no database state and uses no D1, KV, or Durable Objects in v1.
+Its only durable binding is the R2 Rendition Store. Jobs and operational metadata
+remain in Postgres on Railway.
+
+Workspace packages are internal and are not published to npm in v1. Ernesta and
+Pane View each keep a thin local Shutter adapter for capability creation, Unpic
+URL transformation, and job API calls. Shutter owns versioned protocol fixtures
+for capability encryption, URL construction, width and quality normalization,
+and API payloads; each consumer runs those fixtures as conformance tests. URLs
+and capabilities carry an explicit `v1` version so incompatible drift fails
+closed. A published SDK can be reconsidered if the consumer count grows.
 
 ## Ownership
 
@@ -74,7 +85,7 @@ v1. Jobs, Rendition metadata, and durable bytes remain on Railway.
 | Direct-upload authorization and grant | Consuming application |
 | Source Object bytes | Consuming application |
 | Media identity and source-to-rendition relationships | Consuming application |
-| Space configuration, Rendition Jobs, attempts, retries | Shutter |
+| Space policy configuration, Rendition Jobs, attempts, retries | Shutter |
 | Image Optimization | imgproxy, configured by Shutter |
 | Generated and cached Rendition bytes | Shutter Rendition Store |
 | Video and PDF materialization | Their Shutter Executors |
@@ -89,6 +100,37 @@ receive only encrypted capabilities. Both credential types have key identifiers
 and permit overlapping verification during rotation.
 Source fetches are additionally limited to the Space's configured HTTPS origin
 allowlist.
+
+Only the Cloudflare Worker and Shutter Control hold capability-decryption keys.
+The video and PDF Executors authenticate with separate role credentials that
+permit them to claim only their own job kind; they are neither capability
+issuers nor long-term capability-key holders.
+
+V1 Source Capabilities are a strict discriminated union. `image_source`
+authorizes Image Optimization of an application-owned original and includes its
+Source Locator. `master_preview` authorizes delivery and resizing of an existing
+video or PDF Master Preview, binds its kind, and contains no original locator.
+`preview_job` authorizes materialization of one video or PDF kind and includes
+the original locator. A route accepts only its designated purpose; capabilities
+cannot be exchanged between image delivery, stored-preview delivery, and job
+submission.
+
+## Space configuration
+
+Shutter Spaces are static deployment configuration in v1, not database records.
+There is no Space CRUD API, tenant administration surface, or runtime policy
+editor. The repository holds each Space's non-secret configuration: stable ID,
+public or private route class, Source Resolvers and HTTPS origin allowlist,
+rendition policy, and cache lifetimes. Cloudflare and Railway secret stores hold
+API tokens, capability keys, origin credentials, and their key identifiers.
+
+The initial configuration contains only Ernesta and Pane View. A Space addition
+or policy change is a reviewed code change followed by deployment. Persisted
+Rendition Jobs record only the stable `space_id`; secret values and a copy of the
+full Space configuration are never stored with a job. Deployments must retain
+configuration for any Space referenced by unfinished jobs, and credential
+rotation keeps overlapping verification keys until all capabilities issued by
+the retired key have expired.
 
 ## Storage
 
@@ -115,13 +157,46 @@ rendition kind, and normalized parameters. Applications retain the
 meaningful relationship between their media records and returned Rendition
 references. Private reads pass through the Shutter authorization gateway.
 
-Optimized image bytes are disposable cache entries and may be evicted after a
-Space-configured idle period or when the Space exceeds its storage budget. Video
-posters and PDF covers are durable Derivatives retained until the consuming
+The v1 Rendition Store is Cloudflare R2. The Worker reads it through a native R2
+binding after authorization; Railway Executors write Master Previews through
+R2's S3-compatible API. Cache and master prefixes have separate lifecycle
+policies so disposable Image Optimizations can expire without deleting durable
+Master Previews.
+
+Optimized image bytes under `cache/{space}/` are disposable cache entries with
+an R2 lifecycle rule that deletes them 30 days after creation. V1 does not track
+last access or enforce per-Space storage budgets. Video posters and PDF covers
+under `masters/{space}/` are durable Derivatives retained until the consuming
 application requests a Source Purge. A Source Purge removes every cached image
-variant, stored Derivative, and operational Rendition Job for that immutable
-source identity; revoking or allowing a Source Capability to expire removes
-access but does not itself delete bytes.
+variant, stored Derivative, and operational Rendition Job for that Source ID;
+revoking or allowing a Source Capability to expire removes access but does not
+itself delete bytes.
+
+## Source Purge
+
+Source Purge is authenticated, idempotent post-revocation cleanup:
+
+```http
+POST /v1/spaces/{spaceId}/sources/{sourceId}/purge
+```
+
+Before calling it, the consuming application must make the Source Object
+unavailable, stop issuing capabilities for it, and stop submitting work for it.
+Shutter cannot use purge as instant authorization revocation: a still-valid
+capability can recreate a rendition while its Source Locator remains fetchable.
+
+All Cloudflare cache entries for a source carry a tag derived from a hash of the
+Space ID and Source ID. R2 keys group cached renditions and Master Previews under
+equivalent per-source prefixes. While serializing Control operations for that
+source, Shutter invalidates its jobs, deletes all matching R2 objects through
+paginated prefix listing, globally purges its Cloudflare cache tag, and then
+returns `204 No Content`. The R2 deletion precedes the edge purge so a concurrent
+edge request cannot repopulate a globally purged cache from a stored rendition.
+
+The operation returns success only after all three stores are cleared. A partial
+failure returns a retryable service error; repeating the same request safely
+repeats every step. A stale Executor whose processing-token comparison fails
+must delete any output it uploaded and cannot recreate job state after purge.
 
 ## Image delivery
 
@@ -140,13 +215,26 @@ Image Optimization is request-driven:
    ordinary Cloudflare CDN caching.
 5. imgproxy reads only the permitted Source Object on a cache miss and returns
    the optimized response through the configured cache.
-6. The response resizes within the requested width and height, preserves
-   composition, and WebP-encodes at requested quality.
+6. The response resizes to the normalized requested width, preserves composition,
+   and WebP-encodes at requested quality.
 
 Cache policy is trusted Space configuration, not a caller-controlled query
 parameter. Private cache objects use a stable key derived from Source ID and
 normalized rendition parameters, so a refreshed Source Capability
 can reuse existing bytes without extending the previous capability's access.
+
+Private image Source Capabilities live for 24 hours in v1. Public optimized
+images use a 30-day Cloudflare edge TTL and the same 30-day R2 cache lifetime,
+while browsers retain public responses for one day.
+Public sources resolved directly, such as UploadThing, need no capability. When
+a public source still needs a presigned locator, its capability authorizes an
+origin miss only and is excluded from the CDN key; renewing it reuses the same
+30-day cached rendition.
+
+Public responses use `Cache-Control: public, max-age=86400,
+s-maxage=2592000`: Source Purge can invalidate Cloudflare and R2 immediately,
+while the shorter browser lifetime bounds cache copies that Shutter cannot
+recall from a user's device.
 
 Public and private Spaces use distinct URL shapes. Public URLs use an allowlisted
 Source Resolver when the fetch location is derivable; otherwise an encrypted
@@ -155,17 +243,65 @@ CDN cache key. Private URLs keep the capability on the Worker-authorized route,
 and the Worker derives a non-public canonical key only after decryption. Shutter
 rejects a URL whose route class does not match the Space's configured policy.
 
-The initial image surface is deliberately narrow: width, optional height, and
-quality. Width is normalized to the Space's canonical responsive ladder, height
-is an optional bounding box, quality is normalized to the Space's permitted
-values, and output is WebP. It excludes caller-selected source URLs, crop modes,
+The initial canonical delivery routes are:
+
+```text
+/v1/public/{space}/resolver/{resolver}/{sourceRef}?w=640&q=75
+/v1/private/{space}/source/{capability}?w=640&q=75
+/v1/private/{space}/master/{capability}?w=640&q=75
+```
+
+The public route accepts a resolver-specific, percent-encoded source reference.
+The private source route requires `image_source`; the private master route
+requires `master_preview`. Unpic adapters modify only `w` and `q`.
+
+V1 also includes public delivery for an original whose Source Locator is not
+derivable and public delivery of a stored Master Preview. The former uses an
+`image_source` capability only to authorize an original-source fetch on a cache
+miss; the public cache identity excludes the capability. The latter uses the
+public Space, Source ID, and video/PDF kind directly because the stored output is
+intentionally public. Their exact route shapes are defined alongside the other
+canonical delivery routes rather than deferred to a later protocol version.
+
+A non-canonical public width or quality receives a `308 Permanent Redirect` to
+the normalized URL, allowing the ordinary CDN to cache only canonical image
+responses. The private Worker normalizes before deriving its internal cache key
+and serves the response without a redirect. Missing parameters normalize to the
+Space defaults. Invalid values and unknown query parameters fail with an
+uncacheable `400` response rather than entering a cache key.
+
+The initial image surface is deliberately narrow: width and quality. Width is
+normalized to the Space's canonical responsive ladder, quality is normalized to
+the Space's permitted values, and output is WebP. Height is not a transform
+parameter. The surface excludes caller-selected source URLs, crop modes,
 filters, watermarks, and arbitrary output formats.
+
+imgproxy's v1 global ceilings are 128 MiB source size, 50 megapixels, one
+animation frame, a 30-second download timeout, and two source redirects. These
+security limits cannot be overridden by processing options. Loopback,
+link-local, and private source addresses are disabled; allowed HTTPS origins are
+explicit. The imgproxy deployment is not browser-addressable and requires both
+an internal bearer credential and a signed processing URL from Shutter.
 
 The canonical width ladder is also passed explicitly to Unpic in each consuming
 frontend. Shutter does not independently copy Unpic's package defaults: Unpic's
 `constrained` layout adds the component width and twice that width to its default
 resolutions, and package upgrades can change defaults. One shared integration
 contract must therefore supply both Unpic breakpoints and Shutter normalization.
+
+Unpic `width` and `height` props still describe browser layout and intrinsic
+aspect ratio, but each local Shutter transformer sends only the generated width
+and configured quality to Shutter. CSS `object-fit` remains responsible for
+covering or containing that preserved-composition image in its layout box. This
+keeps `srcset` width descriptors accurate and prevents arbitrary heights from
+forming a second cache-key dimension.
+
+The v1 canonical widths are `320, 640, 750, 828, 960, 1080, 1280, 1668, 1920,
+2048, 2560, 3200, 3840`; Unpic's 24px background placeholder is a separate
+low-resolution request. Ernesta permits qualities `30, 50, 75` and Pane View
+permits `30, 75, 80`, both defaulting to `75`. Master Preview encoding remains
+fixed at quality `90`. Width normalizes upward and imgproxy never enlarges a
+smaller source.
 
 ## Materialized work
 
@@ -179,16 +315,31 @@ completes at most one job per invocation; it
 records a terminal outcome before returning. A recovery sweep re-wakes jobs
 whose initial dispatch was missed.
 
+Postgres stores the submitted Source Capability as its original opaque,
+authenticated-encryption blob, never as a plaintext Source Locator. When the
+matching Executor claims a job, Control decrypts and revalidates the capability,
+including Space, Source ID, purpose, rendition kind, expiry, and origin policy.
+The authenticated private claim response contains only the locator needed for
+that attempt, deterministic output key, and processing token. The Executor holds
+the locator in process memory for the attempt and never receives a capability
+key. Video credentials cannot claim PDF jobs and PDF credentials cannot claim
+video jobs.
+
 The v1 Master Preview contract is fixed: video captures the frame at one second
 with a first-decodable-frame fallback, PDF renders the first page, and the result
 is a composition-preserving quality-90 WebP within 1920 pixels. Callers cannot
 select timestamps, pages, crop modes, or output formats.
 
+Video sources are limited to 512 MiB and PDF sources to 128 MiB. Exceeding the
+type-specific ceiling is a terminal job failure.
+
 The submitting application supplies a job-scoped Source Capability whose
-lifetime covers the bounded retry window. Shutter does not call applications to
-renew access and does not stage a copy of the original. If access expires before
-completion, the job terminates as `source_expired`; the application may resubmit
-the same idempotency key with a fresh capability.
+lifetime is 24 hours. The underlying presigned Source Locator remains valid for
+at least 24 hours and five minutes, while Shutter stops retrying at 23 hours.
+Shutter does not call applications to renew access and does not stage a copy of
+the original. If access expires before completion, the job terminates as
+`source_expired`; the application may resubmit its canonical job URL with a
+fresh capability.
 
 Job completion is polling-based in v1. Idempotent submission returns an existing
 ready Master Preview or a Rendition Job reference. Applications poll that
@@ -196,6 +347,22 @@ resource with bounded backoff through `pending`, `processing`, `ready`, or a
 terminal failure; a ready response includes the Master Preview reference and
 dimensions. Webhook completion may be added later without changing job
 semantics.
+
+One logical job exists for each `(space_id, source_id, kind)` tuple, where kind
+is `video` or `pdf`. Its canonical resource is submitted with `PUT
+/v1/spaces/{spaceId}/sources/{sourceId}/previews/{kind}`; no caller-generated job
+ID or idempotency key is required. Repeating the same request returns the
+current job and never creates a second Master Preview identity. A fresh Source
+Capability submitted to a `source_expired` job reactivates that record with a
+new retry window. Other terminal outcomes remain unchanged unless the Source
+Object is purged and submitted under a new Source ID.
+
+Each job receives at most five attempts with retry delays of one minute, five
+minutes, thirty minutes, and two hours. An attempt has a ten-minute hard timeout,
+a fifteen-minute processing lease, and a one-minute heartbeat. A five-minute
+recovery sweep requeues expired leases and work whose initial wake was missed.
+Missing, unsupported, oversized, corrupt, or password-protected input is
+terminal; network, Railway, R2, and executor-process failures are retryable.
 
 Video and PDF have separate Executors from the beginning. imgproxy is also a
 separate deployment because it is a standalone on-demand renderer.
@@ -207,10 +374,5 @@ credentials. Its internal source URLs must be encrypted and signed.
 
 ## Open choices
 
-- The exact shared Unpic width ladder and permitted quality values.
-- Private delivery-capability lifetime and cache policy.
-- Rendition Job retry deadline and Source Capability lifetime.
-- Source Capability lifetime and private cache enforcement.
-- Image-cache idle periods and per-Space storage budgets.
-- The exact Cloudflare purge implementation.
-- The final pnpm package names and import boundaries.
+- The exact public located-source and public Master Preview route shapes.
+- The final internal pnpm package names and import boundaries.

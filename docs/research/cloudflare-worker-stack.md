@@ -14,6 +14,7 @@ Evaluated 2026-07-10 for the Shutter private capability gateway.
 | Runtime bindings | Generated with `wrangler types` |
 | Capability cryptography | Native Web Crypto AES-GCM |
 | Private edge caching | Workers Cache API with synthetic canonical Request keys |
+| Durable Rendition reads | Native R2 binding |
 | Secrets | Required Worker secret bindings, never plaintext `vars` |
 | Tests | Vitest with `@cloudflare/vitest-pool-workers` |
 
@@ -69,7 +70,9 @@ Source: [Cloudflare Workers testing](https://developers.cloudflare.com/workers/t
 
 ## Deliberately excluded from v1
 
-- D1, KV, Durable Objects, Queues, and R2.
+- D1, KV, Durable Objects, and Queues.
 - Node compatibility and Node-only middleware.
 - Framework-managed Worker configuration in place of `wrangler.jsonc`.
 - Cloudflare Images transformations; imgproxy remains the renderer.
+- Publishing Shutter consumer packages to npm; consumers use local adapters and
+  versioned conformance fixtures.

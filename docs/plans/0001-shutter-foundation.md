@@ -21,8 +21,8 @@ media lifecycle behavior.
 - Source Objects are immutable; replacement creates a new Shutter Asset.
 - Applications retain end-user authorization; Shutter receives only application
   identity and issues Delivery Capabilities.
-- Image Optimization is on-demand: requested width, optional height, and quality
-  produce WebP while preserving composition.
+- Image Optimization is on-demand: requested width and quality produce WebP
+  while preserving composition.
 - Video and PDF Renditions are materialized Derivatives.
 - Control, imgproxy, video, and PDF deploy separately and may sleep when idle.
 - Each Executor invocation completes at most one job before returning.
@@ -61,8 +61,8 @@ media lifecycle behavior.
 - Deploy imgproxy separately behind an edge cache.
 - Implement signed Source Object access and Delivery Capability handling for
   public and private Spaces.
-- Generate signed image URLs that expose only width, optional height, and
-  quality, with WebP as the output format and no crop mode.
+- Generate signed image URLs that expose only width and quality, with WebP as
+  the output format and no crop mode.
 - Characterize output parity against Ernesta's existing Bunny URLs using a
   representative image set.
 
@@ -95,8 +95,8 @@ media lifecycle behavior.
   authorizing its user.
 - Shutter cannot read a Source Object without a fresh Source Grant and never
   persists an application's Bucket credential.
-- Image URLs accept only width, optional height, and quality, and always produce
-  an uncropped WebP Rendition.
+- Image URLs accept only width and quality and always produce an uncropped WebP
+  Rendition.
 - An interrupted Executor job is retried safely and never causes an application
   to lose its Source Object.
 - An idle Executor can wake from a Shutter dispatch and persist a terminal job
