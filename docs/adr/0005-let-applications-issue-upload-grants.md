@@ -1,8 +1,7 @@
-# Let applications issue upload grants
+# Keep uploads outside Shutter
 
-Each consuming application authorizes its own user and issues the presigned
-direct-upload grant for its own storage location. After a successful upload, it
-performs Source Registration with Shutter. This keeps user authorization and
-application-specific upload rules local while Shutter begins work only with an
-already completed immutable Source Object.
-
+Shutter does not expose an upload API, issue direct-upload grants, or coordinate
+upload completion. Each consuming application owns its upload flow and presents
+Shutter only with an already completed Source Object when requesting a
+Rendition. This keeps Shutter focused on image optimization and stored video or
+PDF thumbnails without coupling it to application-specific upload rules.

@@ -2,25 +2,26 @@
 
 ## Purpose
 
-Shutter centralizes media lifecycle concerns that would otherwise be duplicated
-across applications: a media catalog, durable rendition jobs, controlled
-delivery capabilities, and specialised execution. Consuming applications retain
-their users, business records, storage provisioning, retention rules, and
-end-user authorization.
+Shutter centralizes rendition concerns that would otherwise be duplicated across
+applications: on-demand image optimization, durable video and PDF thumbnail
+jobs, controlled delivery, and specialised execution. Consuming applications
+retain their uploads, media catalog, users, business records, storage
+provisioning, retention rules, and end-user authorization.
 
 ## Topology
 
 ```mermaid
 flowchart LR
   app["Consuming application"] --> control["Shutter Control"]
-  app -->|"application-issued direct upload"| source["Application-owned S3 storage"]
-  app -->|"Source Registration"| control
-  control --> catalog[("Shutter catalog + jobs")]
-  catalog --> video["Shutter Video"]
-  catalog --> pdf["Shutter PDF"]
-  video --> derived["Stored Derivatives"]
+  app --> source["Application-owned S3 storage"]
+  app -->|"Rendition Job"| control
+  control --> jobs[("Rendition Jobs")]
+  jobs --> video["Shutter Video"]
+  jobs --> pdf["Shutter PDF"]
+  video --> derived["Shutter Rendition Store"]
   pdf --> derived
-  browser["Browser"] --> cache["Edge cache"] --> image["imgproxy"] --> source
+  browser["Browser"] --> gateway["Shutter authorization gateway"]
+  gateway --> cache["Rendition cache"] --> image["imgproxy"] --> source
   control -->|"Delivery Capability after app authorization"| browser
 ```
 
@@ -30,75 +31,100 @@ flowchart LR
 | --- | --- |
 | End-user identity and authorization | Consuming application |
 | Business metadata, such as listing order or archive entry | Consuming application |
-| Bucket/prefix provisioning and retention | Consuming application |
+| Source bucket/prefix provisioning and retention | Consuming application |
 | Direct-upload authorization and grant | Consuming application |
 | Source Object bytes | Consuming application |
-| Space configuration, Assets, Renditions, jobs, retries | Shutter |
+| Media identity and source-to-rendition relationships | Consuming application |
+| Space configuration, Rendition Jobs, attempts, retries | Shutter |
 | Image Optimization | imgproxy, configured by Shutter |
+| Generated and cached Rendition bytes | Shutter Rendition Store |
 | Video and PDF materialization | Their Shutter Executors |
 
 ## Storage
 
-A Shutter Space adopts one application-provided storage location at first:
-provider, bucket, and optional prefix. A separate bucket per Space is the
-preferred Railway isolation choice. Shutter's storage interface also permits a
-distinct prefix in a shared bucket for small apps, but Railway does not document
-prefix-scoped or read-only Bucket credentials; that arrangement is logical
-organization rather than an access boundary.
+Source Objects remain in application-owned storage. Shutter does not proxy or
+coordinate uploads, store source Bucket credentials, or copy originals into its
+own storage. A Rendition Job may retain the source reference and output metadata
+needed for execution, but those operational records do not form a media catalog.
 
-Shutter stores references to Source Objects; it does not proxy uploads or become
-the storage owner. Executors write Derivatives to the application-owned location
-under Shutter-managed prefixes. The application issues direct-upload grants and,
-after upload, performs Source Registration.
+Shutter owns a separate Rendition Store containing only generated or cached
+bytes. Object keys are deterministic from the Shutter Space, immutable source
+identity, rendition kind, and normalized parameters. Applications retain the
+meaningful relationship between their media records and returned Rendition
+references. Private reads pass through the Shutter authorization gateway.
 
-Railway Buckets are an S3-compatible storage choice, not a Shutter requirement.
-They are private and belong to a Railway project and environment. Shutter never
-stores an adopted Bucket's credentials. When it needs source bytes, it requests
-a fresh Source Grant from the owning application. Railway variable references
-and private service networking work only within one project and environment, so
-cross-project Source Grant calls use a public custom domain with application
-authentication.
+Optimized image bytes are disposable cache entries and may be evicted after a
+Space-configured idle period or when the Space exceeds its storage budget. Video
+posters and PDF covers are durable Derivatives retained until the consuming
+application requests a Source Purge. A Source Purge removes every cached image
+variant, stored Derivative, and operational Rendition Job for that immutable
+source identity; revoking or allowing a Source Capability to expire removes
+access but does not itself delete bytes.
 
 ## Image delivery
 
 Image Optimization is request-driven:
 
-1. A consuming application authorizes its user and obtains a Delivery Capability
-   from Shutter when the Space is private.
-2. Shutter obtains a fresh Source Grant and encrypts it inside a signed imgproxy
-   source URL.
-3. The browser requests that URL through an edge cache; imgproxy reads the
-   permitted Source Object through the Source Grant.
-4. The response resizes within the requested width and height, preserves
+1. A consuming application authorizes its user and issues a signed,
+   time-limited Source Capability for one immutable Source Object.
+2. The frontend combines that capability with permitted rendition parameters in
+   a stateless Rendition URL; it does not call Shutter to mint the URL.
+3. Shutter validates the capability and parameters, then sends a signed source
+   request to imgproxy.
+4. For a private Space, Shutter performs that validation before every cache
+   lookup, including cache hits. Public Spaces may use ordinary CDN caching.
+5. imgproxy reads only the permitted Source Object on a cache miss and returns
+   the optimized response through the configured cache.
+6. The response resizes within the requested width and height, preserves
    composition, and WebP-encodes at requested quality.
 
+Cache policy is trusted Space configuration, not a caller-controlled query
+parameter. Private cache objects use a stable key derived from immutable source
+identity and normalized rendition parameters, so a refreshed Source Capability
+can reuse existing bytes without extending the previous capability's access.
+
 The initial image surface is deliberately narrow: width, optional height, and
-quality. It excludes caller-selected source URLs, crop modes, filters,
-watermarks, and arbitrary output formats.
+quality. Width is normalized to the Space's canonical responsive ladder, height
+is an optional bounding box, quality is normalized to the Space's permitted
+values, and output is WebP. It excludes caller-selected source URLs, crop modes,
+filters, watermarks, and arbitrary output formats.
+
+The canonical width ladder is also passed explicitly to Unpic in each consuming
+frontend. Shutter does not independently copy Unpic's package defaults: Unpic's
+`constrained` layout adds the component width and twice that width to its default
+resolutions, and package upgrades can change defaults. One shared integration
+contract must therefore supply both Unpic breakpoints and Shutter normalization.
 
 ## Materialized work
 
 Video posters and PDF covers are durable jobs. Shutter Control persists each job,
 wakes the matching Executor over private networking, and records completion or
-retry state. Each serverless Executor claims and completes at most one job per
-invocation; it records a terminal outcome before returning. A recovery sweep
-re-wakes jobs whose initial dispatch was missed.
+retry state. The Executor writes the result to the Rendition Store. Each
+serverless Executor claims and completes at most one job per invocation; it
+records a terminal outcome before returning. A recovery sweep re-wakes jobs
+whose initial dispatch was missed.
+
+The submitting application supplies a job-scoped Source Capability whose
+lifetime covers the bounded retry window. Shutter does not call applications to
+renew access and does not stage a copy of the original. If access expires before
+completion, the job terminates as `source_expired`; the application may resubmit
+the same idempotency key with a fresh capability.
 
 Video and PDF have separate Executors from the beginning. imgproxy is also a
 separate deployment because it is a standalone on-demand renderer.
 
-Because imgproxy reads HTTPS Source Grants rather than `s3://` URLs, one central
+Because imgproxy reads HTTPS sources authorized by Source Capabilities rather
+than `s3://` URLs, one central
 imgproxy deployment can serve several Spaces without holding their Bucket
-credentials. Its source URLs must be encrypted and signed. A spike must still
-measure how Source Grant expiry affects cache reuse before this becomes the
-default delivery path.
+credentials. Its internal source URLs must be encrypted and signed.
 
 ## Open choices
 
 - The exact service-to-service authentication mechanism.
-- Quality defaults and permitted values for Image Optimization.
+- The exact shared Unpic width ladder and permitted quality values.
 - Private delivery-capability lifetime and cache policy.
-- Source Grant lifetime, renewal, and cache-reuse behavior for imgproxy.
-- Source-object deletion and derivative garbage-collection timing.
+- Rendition Job retry deadline and Source Capability lifetime.
+- Source Capability lifetime and private cache enforcement.
+- Image-cache idle periods and per-Space storage budgets.
 - The implementation language and package layout for Shutter Control and the
   two Executors.
