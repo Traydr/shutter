@@ -5,12 +5,15 @@ const ernesta = Object.freeze({
   routeClass: "public",
   qualities: Object.freeze([30, 50, 75]),
   defaultQuality: 75,
-  allowedSourceOrigins: Object.freeze([]),
+  allowedSourceOrigins: Object.freeze([
+    Object.freeze({ origin: "https://8w0z32yftd.ufs.sh", pathPrefix: "/f" }),
+    Object.freeze({ origin: "https://rrsku8h9ue.ufs.sh", pathPrefix: "/f" }),
+  ]),
   resolvers: Object.freeze([
     Object.freeze({
       id: "uploadthing",
       type: "uploadthing",
-      allowedProjectIds: Object.freeze([]),
+      allowedProjectIds: Object.freeze(["8w0z32yftd", "rrsku8h9ue"]),
     }),
   ]),
 }) satisfies SpacePolicy;
@@ -20,7 +23,10 @@ const paneView = Object.freeze({
   routeClass: "private",
   qualities: Object.freeze([30, 75, 80]),
   defaultQuality: 75,
-  allowedSourceOrigins: Object.freeze([]),
+  allowedSourceOrigins: Object.freeze([
+    Object.freeze({ origin: "https://t3.storageapi.dev" }),
+    Object.freeze({ origin: "https://pane-view.traydr.dev" }),
+  ]),
   resolvers: Object.freeze([] as const),
 }) satisfies SpacePolicy;
 

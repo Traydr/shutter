@@ -17,7 +17,8 @@ export default defineRailway(() => {
     healthcheckTimeout: 30,
     networking: { privateNetworkEndpoint: "shutter-imgproxy" },
     env: {
-      IMGPROXY_ALLOWED_SOURCES: "https://invalid.shutter.invalid/",
+      IMGPROXY_ALLOWED_SOURCES:
+        "https://8w0z32yftd.ufs.sh/f/,https://rrsku8h9ue.ufs.sh/f/,https://t3.storageapi.dev/,https://pane-view.traydr.dev/",
       IMGPROXY_ALLOW_LINK_LOCAL_SOURCE_ADDRESSES: "false",
       IMGPROXY_ALLOW_LOOPBACK_SOURCE_ADDRESSES: "false",
       IMGPROXY_ALLOW_PRIVATE_SOURCE_ADDRESSES: "false",

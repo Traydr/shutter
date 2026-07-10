@@ -32,6 +32,13 @@ const railway = await readFile(new URL("../.railway/railway.ts", import.meta.url
 if (!railway.includes("ghcr.io/imgproxy/imgproxy:v4.0.3")) {
   throw new Error("Railway must pin the reviewed imgproxy image version");
 }
-if (!railway.includes('IMGPROXY_ALLOWED_SOURCES: "https://invalid.shutter.invalid/"')) {
-  throw new Error("imgproxy must retain a fail-closed source allowlist until reviewed");
+for (const source of [
+  "https://8w0z32yftd.ufs.sh/f/",
+  "https://rrsku8h9ue.ufs.sh/f/",
+  "https://t3.storageapi.dev/",
+  "https://pane-view.traydr.dev/",
+]) {
+  if (!railway.includes(source)) {
+    throw new Error(`imgproxy must retain reviewed source prefix ${source}`);
+  }
 }

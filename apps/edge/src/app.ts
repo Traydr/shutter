@@ -123,9 +123,18 @@ async function readR2Response(bucket: R2Bucket, key: string): Promise<Response |
   return new Response(object.body, { headers });
 }
 
-async function fetchOrigin(bindings: CloudflareBindings, key: string): Promise<Response> {
+async function fetchOrigin(
+  bindings: CloudflareBindings,
+  key: string,
+  sourceUrl: string,
+  width: number,
+  quality: number,
+): Promise<Response> {
   const originUrl = new URL("/internal/v1/spike/rendition", bindings.ORIGIN_BASE_URL);
   originUrl.searchParams.set("key", key);
+  originUrl.searchParams.set("source", sourceUrl);
+  originUrl.searchParams.set("w", String(width));
+  originUrl.searchParams.set("q", String(quality));
   const response = await fetch(originUrl, {
     headers: { authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}` },
     redirect: "error",
@@ -140,9 +149,10 @@ async function populateCaches(
   bindings: CloudflareBindings,
   identity: RenditionCacheIdentity,
   cacheTag: string,
+  sourceUrl: string,
 ): Promise<Response> {
   const key = await buildR2CacheKey(identity);
-  const origin = await fetchOrigin(bindings, key);
+  const origin = await fetchOrigin(bindings, key, sourceUrl, identity.width, identity.quality);
   const bytes = await origin.arrayBuffer();
   const contentType = origin.headers.get("content-type") ?? "application/octet-stream";
   await bindings.RENDITION_STORE.put(key, bytes, {
@@ -164,7 +174,8 @@ async function privateRendition(
   const key = await buildR2CacheKey(identity);
   const stored = await readR2Response(bindings.RENDITION_STORE, key);
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
-  const response = stored ?? (await populateCaches(bindings, identity, cacheTag));
+  if (stored === undefined) throw new Error("master rendition is absent from R2");
+  const response = stored;
   const internalHeaders = new Headers(response.headers);
   internalHeaders.set("cache-control", `public, max-age=${PRIVATE_EDGE_TTL_SECONDS}`);
   internalHeaders.set("cache-tag", cacheTag);
@@ -204,7 +215,7 @@ async function publicLocatedRendition(
     allowedSourceOrigins: policy.allowedSourceOrigins,
   });
   const response = publicBrowserResponse(
-    await populateCaches(bindings, identity, cacheTag),
+    await populateCaches(bindings, identity, cacheTag, claims.locator),
     "origin",
     cacheTag,
   );

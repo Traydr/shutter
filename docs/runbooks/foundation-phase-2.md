@@ -26,8 +26,9 @@ provider evidence required to close Phase 2.
 
 ## Railway
 
-1. Replace imgproxy's unreachable source prefix only after the matching Space
-   origin or UploadThing project allowlist has been reviewed.
+1. Confirm the reviewed imgproxy and Space allowlists remain limited to Ernesta
+   UploadThing projects `8w0z32yftd` and `rrsku8h9ue`, plus Pane View origins
+   `https://t3.storageapi.dev` and `https://pane-view.traydr.dev`.
 2. Preview `.railway/railway.ts` with `railway config plan`. Review every
    resource and variable change.
 3. Apply only through the ordinary reviewed Railway workflow. Generate strong,
@@ -62,3 +63,23 @@ provider evidence required to close Phase 2.
 
 Record account IDs, deployment URLs, secret values, and Source Locators only in
 the provider secret stores or the private operational record—not in this repo.
+
+## Recorded non-sensitive evidence
+
+### 2026-07-11
+
+- The active zone rate-limit rule matches URI paths beginning `/v1/`, uses the
+  client IP characteristic, allows 300 requests per 10 seconds, and blocks for
+  10 seconds. A same-location burst returned 300 Worker responses followed by
+  one `429`; ten immediate follow-up requests also returned `429`.
+- A synthetic public located-source object returned `r2-hit`, then `edge-hit`
+  under a different capability string. Both responses had identical bytes,
+  `Cache-Control: public, max-age=86400, s-maxage=2592000`, and the same hashed
+  source cache tag. The edge hit also reported Cloudflare `HIT`.
+- Purging that cache tag forced the next request back to `r2-hit`.
+- Deleting the synthetic R2 object before purging its tag prevented
+  repopulation; the next invalid-capability request returned `403` with
+  `Cache-Control: private, no-store` and no rendition bytes.
+- Pending: valid private capability renewal/key-rotation evidence, a live
+  Control-to-imgproxy source render, unsigned imgproxy rejection, and focused
+  AES-GCM/private-cache-hit CPU measurements.

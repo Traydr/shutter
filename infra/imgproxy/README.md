@@ -16,10 +16,15 @@ The two-stage setup works around Railway IaC's current inability to apply
 `preserve()` prevents subsequent configuration plans from deleting or replacing
 the Railway-managed values.
 
-The checked-in source allowlist is the deliberately unreachable
-`https://invalid.shutter.invalid/`. Replace it only with reviewed HTTPS prefixes
-that correspond to the deployed Space policies. A blank value is forbidden
-because imgproxy interprets it as allowing every source URL.
+The checked-in allowlist contains only the reviewed Ernesta UploadThing delivery
+prefixes and Pane View HTTPS origins. Every hostname includes a trailing slash,
+as required by imgproxy's prefix matching. A blank allowlist is forbidden because
+imgproxy interprets blank as allowing every source URL.
+
+The reviewed sources are UploadThing projects `8w0z32yftd` and `rrsku8h9ue`,
+the Pane View Railway object-store origin `https://t3.storageapi.dev`, and
+`https://pane-view.traydr.dev`. The bucket name and object keys are not global
+allowlist entries; the Source Capability carries the exact short-lived locator.
 
 The remaining environment values lock the v1 source ceilings: 128 MiB, 50
 megapixels, first animation frame only, two redirects, 30-second download, and
