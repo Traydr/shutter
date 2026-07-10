@@ -137,7 +137,7 @@ async function fetchOrigin(
   originUrl.searchParams.set("q", String(quality));
   const response = await fetch(originUrl, {
     headers: { authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}` },
-    redirect: "error",
+    redirect: "manual",
   });
   if (!response.ok) {
     throw new Error(`origin returned ${response.status}`);
@@ -206,7 +206,7 @@ async function publicLocatedRendition(
   const policy = getSpacePolicy(identity.spaceId);
   if (policy === undefined || policy.routeClass !== "public") return notFound();
   const keys = parseKeyRegistry(bindings.CAPABILITY_KEYS).get(identity.spaceId) ?? new Map();
-  await verifySourceCapability(capability, {
+  const claims = await verifySourceCapability(capability, {
     spaceId: identity.spaceId,
     expectedPurpose: "image_source",
     expectedSourceId: identity.sourceId,
@@ -223,9 +223,110 @@ async function publicLocatedRendition(
   return response;
 }
 
+function resolveUploadThingSource(
+  sourceRef: string,
+  allowedProjectIds: readonly string[],
+): { sourceId: string; sourceUrl: string } | undefined {
+  const separator = sourceRef.indexOf("/");
+  if (
+    separator <= 0 ||
+    separator !== sourceRef.lastIndexOf("/") ||
+    separator === sourceRef.length - 1
+  ) {
+    return undefined;
+  }
+  const projectId = sourceRef.slice(0, separator);
+  const fileKey = sourceRef.slice(separator + 1);
+  if (
+    !allowedProjectIds.includes(projectId) ||
+    !/^[A-Za-z0-9_-]{1,64}$/u.test(projectId) ||
+    !/^[A-Za-z0-9_-]{1,512}$/u.test(fileKey)
+  ) {
+    return undefined;
+  }
+  return {
+    sourceId: sourceRef,
+    sourceUrl: `https://${projectId}.ufs.sh/f/${encodeURIComponent(fileKey)}`,
+  };
+}
+
+async function publicResolverRendition(
+  bindings: CloudflareBindings,
+  identity: RenditionCacheIdentity,
+  sourceUrl: string,
+): Promise<Response> {
+  const canonicalUrl = await buildCanonicalCacheUrl(identity);
+  const cacheKey = new Request(canonicalUrl);
+  const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
+  const cached = await caches.default.match(cacheKey);
+  if (cached !== undefined) return publicBrowserResponse(cached, "edge-hit", cacheTag);
+
+  const key = await buildR2CacheKey(identity);
+  const stored = await readR2Response(bindings.RENDITION_STORE, key);
+  if (stored !== undefined) {
+    const response = publicBrowserResponse(stored, "r2-hit", cacheTag);
+    await caches.default.put(cacheKey, response.clone());
+    return response;
+  }
+
+  const response = publicBrowserResponse(
+    await populateCaches(bindings, identity, cacheTag, sourceUrl),
+    "origin",
+    cacheTag,
+  );
+  await caches.default.put(cacheKey, response.clone());
+  return response;
+}
+
 export const app = new Hono<{ Bindings: CloudflareBindings }>();
 
 app.get("/healthz", (context) => context.json({ ok: true, service: "edge" }));
+
+app.get("/v1/public/:spaceId/resolver/:resolverId/*", async (context) => {
+  try {
+    const spaceId = context.req.param("spaceId");
+    const policy = getSpacePolicy(spaceId);
+    if (policy === undefined || policy.routeClass !== "public") return notFound();
+    const resolverId = context.req.param("resolverId");
+    const resolver = policy.resolvers.find((candidate) => candidate.id === resolverId);
+    if (resolver === undefined || resolver.type !== "uploadthing") return notFound();
+
+    const pathname = new URL(context.req.url).pathname;
+    const marker = `/resolver/${encodeURIComponent(resolverId)}/`;
+    const markerIndex = pathname.indexOf(marker);
+    if (markerIndex < 0) return notFound();
+    const sourceRef = decodeURIComponent(pathname.slice(markerIndex + marker.length));
+    const source = resolveUploadThingSource(sourceRef, resolver.allowedProjectIds);
+    if (source === undefined) return notFound();
+    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    if (!query.isCanonical) {
+      const canonical = new URL(context.req.url);
+      canonical.search = `?w=${query.width}&q=${query.quality}`;
+      return new Response(null, {
+        status: 308,
+        headers: {
+          "cache-control": "private, no-store",
+          location: canonical.toString(),
+        },
+      });
+    }
+
+    return await publicResolverRendition(
+      context.env,
+      {
+        routeClass: "public",
+        spaceId,
+        sourceId: source.sourceId,
+        input: { type: "source" },
+        width: query.width,
+        quality: query.quality,
+      },
+      source.sourceUrl,
+    );
+  } catch (error) {
+    return protocolFailure(error);
+  }
+});
 
 app.get("/v1/private/:spaceId/master/:capability", async (context) => {
   try {

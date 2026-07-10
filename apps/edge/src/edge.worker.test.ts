@@ -116,6 +116,45 @@ describe("edge app", () => {
     expect(response.status).toBe(403);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
+
+  it("serves an allowlisted UploadThing resolver reference from canonical public cache identity", async () => {
+    const sourceId = "8w0z32yftd/file_key-1";
+    const identity = {
+      routeClass: "public" as const,
+      spaceId: "ernesta",
+      sourceId,
+      input: { type: "source" as const },
+      width: 640,
+      quality: 75,
+    };
+    await env.RENDITION_STORE.put(await buildR2CacheKey(identity), "ernesta-rendition", {
+      httpMetadata: { contentType: "image/webp" },
+    });
+
+    const response = await SELF.fetch(
+      "https://edge.shutter.test/v1/public/ernesta/resolver/uploadthing/8w0z32yftd%2Ffile_key-1?w=640&q=75",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-shutter-cache")).toBe("r2-hit");
+    expect(new TextDecoder().decode(await response.arrayBuffer())).toBe("ernesta-rendition");
+  });
+
+  it("normalizes public resolver parameters and rejects unallowlisted projects", async () => {
+    const normalized = await SELF.fetch(
+      "https://edge.shutter.test/v1/public/ernesta/resolver/uploadthing/8w0z32yftd%2Ffile_key-1?w=639",
+      { redirect: "manual" },
+    );
+    expect(normalized.status).toBe(308);
+    expect(normalized.headers.get("location")).toBe(
+      "https://edge.shutter.test/v1/public/ernesta/resolver/uploadthing/8w0z32yftd%2Ffile_key-1?w=640&q=75",
+    );
+
+    const rejected = await SELF.fetch(
+      "https://edge.shutter.test/v1/public/ernesta/resolver/uploadthing/notallowed%2Ffile_key-1?w=640&q=75",
+    );
+    expect(rejected.status).toBe(404);
+  });
 });
 
 describe("workerd protocol conformance", () => {
