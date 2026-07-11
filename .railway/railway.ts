@@ -17,13 +17,16 @@ const imgproxyPort = 8080;
 const repository = github("Traydr/shutter");
 const workspaceWatchPatterns = ["/package.json", "/pnpm-lock.yaml", "/pnpm-workspace.yaml"];
 
-export default defineRailway((context) => {
+export default defineRailway(() => {
+  // Railway IaC 3.5.2 cannot apply ctx.shared references: the CLI emits a
+  // shared-variable shape rejected by the current patch schema. These links
+  // already exist remotely, so preserve them without materializing secrets.
   const s3Env = {
-    S3_ACCESS_KEY_ID: context.shared.S3_ACCESS_KEY_ID,
-    S3_BUCKET: context.shared.S3_BUCKET,
-    S3_ENDPOINT: context.shared.S3_ENDPOINT,
-    S3_REGION: context.shared.S3_REGION,
-    S3_SECRET_ACCESS_KEY: context.shared.S3_SECRET_ACCESS_KEY,
+    S3_ACCESS_KEY_ID: preserve(),
+    S3_BUCKET: preserve(),
+    S3_ENDPOINT: preserve(),
+    S3_REGION: preserve(),
+    S3_SECRET_ACCESS_KEY: preserve(),
   };
 
   const Imgproxy = service("Shutter-Imgproxy", {
