@@ -1,11 +1,15 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
+import { Pool } from "pg";
 import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
+import { createJobApi, type JobApiRuntime } from "./job-api.js";
+import { PostgresJobStore } from "./job-store.js";
 
 export interface ControlRuntimeConfig {
   originAuthToken(): string | undefined;
   imgproxyConfig(): ImgproxyConfig | undefined;
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+  jobApiRuntime?: JobApiRuntime;
 }
 
 function credentialDigest(value: string): Uint8Array {
@@ -42,6 +46,7 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
   const control = new Hono();
 
   control.get("/healthz", (context) => context.json({ ok: true, service: "control" }));
+  if (runtime.jobApiRuntime !== undefined) control.route("/", createJobApi(runtime.jobApiRuntime));
 
   control.get("/internal/v1/spike/rendition", async (context) => {
     if (!authorized(context.req.header("authorization"), runtime.originAuthToken())) {
@@ -99,7 +104,10 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
       });
       return new Response(response.body, { status: 200, headers });
     } catch (error) {
-      console.error({ error: error instanceof Error ? error.message : "unknown" }, "imgproxy request failed");
+      console.error(
+        { error: error instanceof Error ? error.message : "unknown" },
+        "imgproxy request failed",
+      );
       return context.json({ error: { code: "rendition_failed" } }, 502, {
         "cache-control": "private, no-store",
       });
@@ -108,6 +116,42 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
 
   return control;
 }
+
+function decodeBase64Url(value: string): Uint8Array {
+  return Uint8Array.from(Buffer.from(value, "base64url"));
+}
+
+function parseStringRegistry(value: string | undefined): Map<string, readonly string[]> {
+  if (value === undefined) return new Map();
+  const parsed = JSON.parse(value) as Record<string, unknown>;
+  return new Map(
+    Object.entries(parsed).map(([spaceId, entry]) => [
+      spaceId,
+      Array.isArray(entry)
+        ? entry.filter((candidate): candidate is string => typeof candidate === "string")
+        : typeof entry === "string"
+          ? [entry]
+          : [],
+    ]),
+  );
+}
+
+function parseCapabilityKeys(
+  value: string | undefined,
+): Map<string, ReadonlyMap<string, Uint8Array>> {
+  if (value === undefined) return new Map();
+  const parsed = JSON.parse(value) as Record<string, Record<string, string>>;
+  return new Map(
+    Object.entries(parsed).map(([spaceId, keys]) => [
+      spaceId,
+      new Map(Object.entries(keys).map(([kid, key]) => [kid, decodeBase64Url(key)])),
+    ]),
+  );
+}
+
+const databaseUrl = process.env.DATABASE_URL;
+const jobPool = databaseUrl === undefined ? undefined : new Pool({ connectionString: databaseUrl });
+const jobStore = jobPool === undefined ? undefined : new PostgresJobStore(jobPool);
 
 export const app = createControlApp({
   originAuthToken: () => process.env.ORIGIN_AUTH_TOKEN,
@@ -119,4 +163,16 @@ export const app = createControlApp({
     return baseUrl && key && salt && secret ? { baseUrl, key, salt, secret } : undefined;
   },
   fetch: globalThis.fetch,
+  ...(jobStore === undefined
+    ? {}
+    : {
+        jobApiRuntime: {
+          store: jobStore,
+          now: () => new Date(),
+          spaceApiTokens: () => parseStringRegistry(process.env.SPACE_API_TOKENS),
+          capabilityKeys: () => parseCapabilityKeys(process.env.CAPABILITY_KEYS),
+          executorToken: (kind) =>
+            kind === "video" ? process.env.VIDEO_EXECUTOR_TOKEN : process.env.PDF_EXECUTOR_TOKEN,
+        },
+      }),
 });

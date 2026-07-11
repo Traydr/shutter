@@ -1,5 +1,14 @@
 /** biome-ignore-all lint/suspicious/noTemplateCurlyInString: Railway resolves service references at deploy time. */
-import { defineRailway, github, group, image, preserve, project, service } from "railway/iac";
+import {
+  defineRailway,
+  github,
+  group,
+  image,
+  postgres,
+  preserve,
+  project,
+  service,
+} from "railway/iac";
 
 const region = "europe-west4-drams3a";
 const nodePort = 8080;
@@ -42,6 +51,8 @@ export default defineRailway(() => {
     },
   });
 
+  const Jobs = postgres("Shutter-Jobs", { region });
+
   const Control = service("Shutter-Control", {
     source: repository,
     build: {
@@ -51,22 +62,84 @@ export default defineRailway(() => {
       watchPatterns: ["/apps/control/**", ...workspaceWatchPatterns],
     },
     start: "pnpm --filter @shutter/control start",
+    preDeploy: "pnpm --filter @shutter/control db:migrate",
     replicas: { [region]: 1 },
     healthcheck: "/healthz",
     healthcheckTimeout: 30,
     networking: { privateNetworkEndpoint: "shutter-control" },
     domains: [{ domain: "shutter-control.traydr.dev", port: nodePort }],
     env: {
+      CAPABILITY_KEYS: preserve(),
+      DATABASE_URL: Jobs.env.DATABASE_URL,
       IMGPROXY_BASE_URL: `http://\${{Shutter-Imgproxy.RAILWAY_PRIVATE_DOMAIN}}:${imgproxyPort}`,
       IMGPROXY_KEY: preserve(),
       IMGPROXY_SALT: preserve(),
       IMGPROXY_SECRET: preserve(),
       NODE_ENV: "production",
       ORIGIN_AUTH_TOKEN: preserve(),
+      PDF_EXECUTOR_TOKEN: preserve(),
       PORT: String(nodePort),
+      SPACE_API_TOKENS: preserve(),
+      VIDEO_EXECUTOR_TOKEN: preserve(),
     },
   });
 
-  const Delivery = group("Delivery", [Control, Imgproxy]);
-  return project("shutter", { resources: [Delivery] });
+  const VideoExecutor = service("Shutter-Executor-Video", {
+    source: repository,
+    build: {
+      builder: "RAILPACK",
+      buildEnvironment: "V3",
+      buildCommand: "pnpm --filter @shutter/executor-video... build",
+      watchPatterns: ["/apps/executor-video/**", ...workspaceWatchPatterns],
+    },
+    start: "pnpm --filter @shutter/executor-video start",
+    replicas: { [region]: 1 },
+    healthcheck: "/healthz",
+    healthcheckTimeout: 30,
+    networking: { privateNetworkEndpoint: "shutter-executor-video" },
+    env: {
+      CONTROL_BASE_URL: `http://\${{Shutter-Control.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
+      EXECUTOR_ROLE_TOKEN: Control.env.VIDEO_EXECUTOR_TOKEN,
+      EXECUTOR_TRIGGER_TOKEN: preserve(),
+      NODE_ENV: "production",
+      POLL_INTERVAL_MS: "5000",
+      PORT: String(nodePort),
+      R2_ACCESS_KEY_ID: preserve(),
+      R2_BUCKET: preserve(),
+      R2_ENDPOINT: preserve(),
+      R2_SECRET_ACCESS_KEY: preserve(),
+      RAILPACK_DEPLOY_APT_PACKAGES: "ffmpeg",
+    },
+  });
+
+  const PdfExecutor = service("Shutter-Executor-PDF", {
+    source: repository,
+    build: {
+      builder: "RAILPACK",
+      buildEnvironment: "V3",
+      buildCommand: "pnpm --filter @shutter/executor-pdf... build",
+      watchPatterns: ["/apps/executor-pdf/**", ...workspaceWatchPatterns],
+    },
+    start: "pnpm --filter @shutter/executor-pdf start",
+    replicas: { [region]: 1 },
+    healthcheck: "/healthz",
+    healthcheckTimeout: 30,
+    networking: { privateNetworkEndpoint: "shutter-executor-pdf" },
+    env: {
+      CONTROL_BASE_URL: `http://\${{Shutter-Control.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
+      EXECUTOR_ROLE_TOKEN: Control.env.PDF_EXECUTOR_TOKEN,
+      EXECUTOR_TRIGGER_TOKEN: preserve(),
+      NODE_ENV: "production",
+      POLL_INTERVAL_MS: "5000",
+      PORT: String(nodePort),
+      R2_ACCESS_KEY_ID: preserve(),
+      R2_BUCKET: preserve(),
+      R2_ENDPOINT: preserve(),
+      R2_SECRET_ACCESS_KEY: preserve(),
+      RAILPACK_DEPLOY_APT_PACKAGES: "ffmpeg poppler-utils",
+    },
+  });
+
+  const Delivery = group("Delivery", [Control, Imgproxy, VideoExecutor, PdfExecutor]);
+  return project("shutter", { resources: [Delivery, Jobs] });
 });

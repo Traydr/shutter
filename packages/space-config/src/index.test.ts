@@ -13,10 +13,7 @@ describe("Space policies", () => {
         { origin: "https://rrsku8h9ue.ufs.sh", pathPrefix: "/f" },
       ],
     });
-    expect(SPACES.ernesta.resolvers[0]?.allowedProjectIds).toEqual([
-      "8w0z32yftd",
-      "rrsku8h9ue",
-    ]);
+    expect(SPACES.ernesta.resolvers[0]?.allowedProjectIds).toEqual(["8w0z32yftd", "rrsku8h9ue"]);
   });
 
   it("locks Pane View to its reviewed private source origins", () => {

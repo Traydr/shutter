@@ -3,6 +3,14 @@
   "name": "shutter-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-10",
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true
+    }
+  },
   "routes": [
     {
       "pattern": "shutter-edge.traydr.dev",

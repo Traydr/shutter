@@ -50,10 +50,11 @@ describe("control app", () => {
   });
 
   it("serves only a valid cache probe to the Worker credential", async () => {
-    const fetch = vi.fn(async () =>
-      new Response(Uint8Array.from([82, 73, 70, 70]), {
-        headers: { "content-type": "image/webp" },
-      }),
+    const fetch = vi.fn(
+      async () =>
+        new Response(Uint8Array.from([82, 73, 70, 70]), {
+          headers: { "content-type": "image/webp" },
+        }),
     );
     const control = createControlApp({
       originAuthToken: () => TOKEN,

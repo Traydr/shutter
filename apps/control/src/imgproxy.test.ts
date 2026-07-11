@@ -18,7 +18,7 @@ describe("imgproxy request signing", () => {
     );
 
     expect(request.url).toBe(
-      "http://shutter-imgproxy.railway.internal:8080/h0Td1NhnLtg5r-jYNw8ZmPKIO9QJCyWwHcJ9TrG7ZAE/rs:fit:640:0:0/q:75/aHR0cHM6Ly90My5zdG9yYWdlYXBpLmRldi9iYWxhbmNlZC13cmFwLW9jeWl3d2V4aGFvL3Rlc3QgaW1hZ2UuanBnP3Rva2VuPW9uZQ.webp",
+      "http://shutter-imgproxy.railway.internal:8080/EfOk8WqaN520nOwdb8C-aaCdIF-AgvkhBFXvTCToe20/rs:fit:640:0:0/q:75/aHR0cHM6Ly90My5zdG9yYWdlYXBpLmRldi9iYWxhbmNlZC13cmFwLW9jeWl3d2V4aGFvL3Rlc3QgaW1hZ2UuanBnP3Rva2VuPW9uZQ.webp",
     );
     expect(request.headers.get("authorization")).toBe(`Bearer ${"s".repeat(32)}`);
   });
