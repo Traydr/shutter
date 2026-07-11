@@ -165,6 +165,7 @@ async function populateCaches(
 async function privateRendition(
   bindings: CloudflareBindings,
   identity: RenditionCacheIdentity,
+  sourceUrl?: string,
 ): Promise<Response> {
   const canonicalUrl = await buildCanonicalCacheUrl(identity);
   const cacheKey = new Request(canonicalUrl);
@@ -174,8 +175,11 @@ async function privateRendition(
   const key = await buildR2CacheKey(identity);
   const stored = await readR2Response(bindings.RENDITION_STORE, key);
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
-  if (stored === undefined) throw new Error("master rendition is absent from R2");
-  const response = stored;
+  let response = stored;
+  if (response === undefined) {
+    if (sourceUrl === undefined) throw new Error("master rendition is absent from R2");
+    response = await populateCaches(bindings, identity, cacheTag, sourceUrl);
+  }
   const internalHeaders = new Headers(response.headers);
   internalHeaders.set("cache-control", `public, max-age=${PRIVATE_EDGE_TTL_SECONDS}`);
   internalHeaders.set("cache-tag", cacheTag);
@@ -349,6 +353,37 @@ app.get("/v1/private/:spaceId/master/:capability", async (context) => {
       width: query.width,
       quality: query.quality,
     });
+  } catch (error) {
+    return protocolFailure(error);
+  }
+});
+
+app.get("/v1/private/:spaceId/source/:capability", async (context) => {
+  try {
+    const spaceId = context.req.param("spaceId");
+    const policy = getSpacePolicy(spaceId);
+    if (policy === undefined || policy.routeClass !== "private") return notFound();
+    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const keys = parseKeyRegistry(context.env.CAPABILITY_KEYS).get(spaceId) ?? new Map();
+    const claims = await verifySourceCapability(context.req.param("capability"), {
+      spaceId,
+      expectedPurpose: "image_source",
+      keys,
+      now: Math.floor(Date.now() / 1000),
+      allowedSourceOrigins: policy.allowedSourceOrigins,
+    });
+    return await privateRendition(
+      context.env,
+      {
+        routeClass: "private",
+        spaceId,
+        sourceId: claims.source_id,
+        input: { type: "source" },
+        width: query.width,
+        quality: query.quality,
+      },
+      claims.locator,
+    );
   } catch (error) {
     return protocolFailure(error);
   }

@@ -74,7 +74,9 @@ export interface JobStore {
     failure: { retryable: boolean; code?: JobFailureCode },
     now: Date,
   ): Promise<boolean>;
+  expirePendingJobs(now: Date): Promise<number>;
   recoverExpiredLeases(now: Date): Promise<number>;
+  runnableJobKinds(now: Date, limit: number): Promise<readonly RenditionKind[]>;
   deleteSource(spaceId: string, sourceId: string): Promise<void>;
 }
 
@@ -358,6 +360,35 @@ export class InMemoryJobStore implements JobStore {
     return recovered;
   }
 
+  async expirePendingJobs(now: Date): Promise<number> {
+    let expired = 0;
+    for (const [key, record] of this.#jobs) {
+      if (record.status !== "pending" || record.retryDeadlineAt > now) continue;
+      expired += 1;
+      this.#jobs.set(key, {
+        ...record,
+        status: "failed",
+        sourceCapability: undefined,
+        nextAttemptAt: undefined,
+        failureCode: "source_expired",
+      });
+    }
+    return expired;
+  }
+
+  async runnableJobKinds(now: Date, limit: number): Promise<readonly RenditionKind[]> {
+    return [...this.#jobs.values()]
+      .filter(
+        (record) =>
+          record.status === "pending" &&
+          record.retryDeadlineAt > now &&
+          (record.nextAttemptAt === undefined || record.nextAttemptAt <= now),
+      )
+      .sort((left, right) => left.retryDeadlineAt.getTime() - right.retryDeadlineAt.getTime())
+      .slice(0, limit)
+      .map((record) => record.kind);
+  }
+
   async deleteSource(spaceId: string, sourceId: string): Promise<void> {
     for (const [key, record] of this.#jobs) {
       if (record.spaceId === spaceId && record.sourceId === sourceId) this.#jobs.delete(key);
@@ -550,6 +581,28 @@ export class PostgresJobStore implements JobStore {
       [now, MAX_ATTEMPTS],
     );
     return result.rowCount ?? 0;
+  }
+
+  async expirePendingJobs(now: Date): Promise<number> {
+    const result = await this.#pool.query(
+      `update rendition_jobs set status = 'failed', source_capability = null,
+        next_attempt_at = null, failure_code = 'source_expired', updated_at = $1
+       where status = 'pending' and retry_deadline_at <= $1`,
+      [now],
+    );
+    return result.rowCount ?? 0;
+  }
+
+  async runnableJobKinds(now: Date, limit: number): Promise<readonly RenditionKind[]> {
+    const result = await this.#pool.query<Pick<JobRow, "kind">>(
+      `select kind from rendition_jobs
+       where status = 'pending' and retry_deadline_at > $1
+         and (next_attempt_at is null or next_attempt_at <= $1)
+       order by retry_deadline_at, created_at
+       limit $2`,
+      [now, limit],
+    );
+    return result.rows.map((row) => row.kind);
   }
 
   async deleteSource(spaceId: string, sourceId: string): Promise<void> {

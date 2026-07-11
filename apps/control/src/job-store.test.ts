@@ -82,4 +82,25 @@ describe("rendition job store", () => {
     expect(await store.heartbeat(identity, claim?.processingToken ?? "", afterLease)).toBe(false);
     expect((await store.get(identity))?.status).toBe("pending");
   });
+
+  it("finds due work and expires pending jobs after their retry window", async () => {
+    const store = new InMemoryJobStore();
+    await store.submit(
+      {
+        ...identity,
+        sourceCapability: "opaque-capability",
+        capabilityExpiresAt: new Date(start.getTime() + 60_000),
+      },
+      start,
+    );
+
+    expect(await store.runnableJobKinds(start, 100)).toEqual(["video"]);
+    const expiredAt = new Date(start.getTime() + 61_000);
+    expect(await store.expirePendingJobs(expiredAt)).toBe(1);
+    expect(await store.runnableJobKinds(expiredAt, 100)).toEqual([]);
+    expect(await store.get(identity)).toMatchObject({
+      status: "failed",
+      failureCode: "source_expired",
+    });
+  });
 });

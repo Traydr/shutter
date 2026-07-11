@@ -21,6 +21,7 @@ export interface JobApiRuntime {
   spaceApiTokens(): ReadonlyMap<string, readonly string[]>;
   capabilityKeys(): KeyRegistry;
   executorToken(kind: RenditionKind): string | undefined;
+  dispatch(kind: RenditionKind): Promise<void>;
 }
 
 function digest(value: string): Uint8Array {
@@ -123,6 +124,17 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         },
         now,
       );
+      if (record.status === "pending") {
+        void runtime.dispatch(record.kind).catch((error: unknown) => {
+          console.error(
+            {
+              kind: record.kind,
+              error: error instanceof Error ? error.message : "unknown",
+            },
+            "executor dispatch failed",
+          );
+        });
+      }
       return activeResponse(jobRepresentation(record), new URL(context.req.url).pathname);
     } catch (error) {
       if (error instanceof ProtocolError) return requestFailure(400, error.code);

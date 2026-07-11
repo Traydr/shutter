@@ -1,5 +1,5 @@
 import { issueSourceCapability } from "@shutter/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createJobApi } from "./job-api.js";
 import { InMemoryJobStore } from "./job-store.js";
 
@@ -25,20 +25,22 @@ async function capability(): Promise<string> {
   );
 }
 
-function runtime(store: InMemoryJobStore) {
+function runtime(store: InMemoryJobStore, dispatch = vi.fn(async () => {})) {
   return {
     store,
     now: () => NOW,
     spaceApiTokens: () => new Map([["pane-view", [SPACE_TOKEN]]]),
     capabilityKeys: () => new Map([["pane-view", new Map([[KID, KEY]])]]),
     executorToken: (kind: "video" | "pdf") => (kind === "video" ? VIDEO_TOKEN : undefined),
+    dispatch,
   };
 }
 
 describe("job API", () => {
   it("submits, polls, claims, and completes one canonical video job", async () => {
     const store = new InMemoryJobStore();
-    const app = createJobApi(runtime(store));
+    const dispatch = vi.fn(async () => {});
+    const app = createJobApi(runtime(store, dispatch));
     const resource = "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video";
     const submitted = await app.request(resource, {
       method: "PUT",
@@ -47,6 +49,8 @@ describe("job API", () => {
     });
     expect(submitted.status).toBe(202);
     expect(submitted.headers.get("retry-after")).toBe("5");
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(dispatch).toHaveBeenCalledWith("video");
 
     const claim = await app.request("http://shutter.test/internal/v1/executors/video/claim", {
       method: "POST",
@@ -107,5 +111,29 @@ describe("job API", () => {
       },
     );
     expect(malformed.status).toBe(400);
+  });
+
+  it("keeps a durable submission accepted when its initial dispatch fails", async () => {
+    const store = new InMemoryJobStore();
+    const dispatch = vi.fn(async () => {
+      throw new Error("executor unavailable");
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = createJobApi(runtime(store, dispatch));
+    const response = await app.request(
+      "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video",
+      {
+        method: "PUT",
+        headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ sourceCapability: await capability() }),
+      },
+    );
+
+    expect(response.status).toBe(202);
+    await vi.waitFor(() => expect(log).toHaveBeenCalledOnce());
+    expect(
+      await store.get({ spaceId: "pane-view", sourceId: "source-1", kind: "video" }),
+    ).toMatchObject({ status: "pending" });
+    log.mockRestore();
   });
 });

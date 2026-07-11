@@ -5,6 +5,8 @@ import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
 import { PostgresJobStore } from "./job-store.js";
 
+const EXECUTOR_WAKE_TIMEOUT_MS = 11 * 60 * 1_000;
+
 export interface ControlRuntimeConfig {
   originAuthToken(): string | undefined;
   imgproxyConfig(): ImgproxyConfig | undefined;
@@ -149,9 +151,38 @@ function parseCapabilityKeys(
   );
 }
 
+async function dispatchExecutor(kind: "video" | "pdf"): Promise<void> {
+  const baseUrl =
+    kind === "video" ? process.env.VIDEO_EXECUTOR_BASE_URL : process.env.PDF_EXECUTOR_BASE_URL;
+  const token =
+    kind === "video" ? process.env.VIDEO_EXECUTOR_TOKEN : process.env.PDF_EXECUTOR_TOKEN;
+  if (baseUrl === undefined || token === undefined) {
+    throw new Error(`${kind} executor dispatch is not configured`);
+  }
+  const response = await globalThis.fetch(new URL("/internal/v1/run-once", baseUrl), {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(EXECUTOR_WAKE_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`${kind} executor wake failed with ${response.status}`);
+}
+
 const databaseUrl = process.env.DATABASE_URL;
 const jobPool = databaseUrl === undefined ? undefined : new Pool({ connectionString: databaseUrl });
 const jobStore = jobPool === undefined ? undefined : new PostgresJobStore(jobPool);
+
+export const jobApiRuntime: JobApiRuntime | undefined =
+  jobStore === undefined
+    ? undefined
+    : {
+        store: jobStore,
+        now: () => new Date(),
+        spaceApiTokens: () => parseStringRegistry(process.env.SPACE_API_TOKENS),
+        capabilityKeys: () => parseCapabilityKeys(process.env.CAPABILITY_KEYS),
+        executorToken: (kind) =>
+          kind === "video" ? process.env.VIDEO_EXECUTOR_TOKEN : process.env.PDF_EXECUTOR_TOKEN,
+        dispatch: dispatchExecutor,
+      };
 
 export const app = createControlApp({
   originAuthToken: () => process.env.ORIGIN_AUTH_TOKEN,
@@ -163,16 +194,5 @@ export const app = createControlApp({
     return baseUrl && key && salt && secret ? { baseUrl, key, salt, secret } : undefined;
   },
   fetch: globalThis.fetch,
-  ...(jobStore === undefined
-    ? {}
-    : {
-        jobApiRuntime: {
-          store: jobStore,
-          now: () => new Date(),
-          spaceApiTokens: () => parseStringRegistry(process.env.SPACE_API_TOKENS),
-          capabilityKeys: () => parseCapabilityKeys(process.env.CAPABILITY_KEYS),
-          executorToken: (kind) =>
-            kind === "video" ? process.env.VIDEO_EXECUTOR_TOKEN : process.env.PDF_EXECUTOR_TOKEN,
-        },
-      }),
+  ...(jobApiRuntime === undefined ? {} : { jobApiRuntime }),
 });
