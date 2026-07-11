@@ -6,18 +6,19 @@ import { type PdfExecutorConfig, runPdfOnce } from "./run-once.js";
 const required = [
   "CONTROL_BASE_URL",
   "EXECUTOR_ROLE_TOKEN",
-  "EXECUTOR_TRIGGER_TOKEN",
   "R2_ENDPOINT",
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
   "R2_BUCKET",
 ] as const;
 const configured = required.every((name) => process.env[name] !== undefined);
-const executorConfig: (PdfExecutorConfig & { triggerToken: string }) | undefined = configured
+const executorConfig: (PdfExecutorConfig & { triggerToken?: string }) | undefined = configured
   ? {
       controlBaseUrl: process.env.CONTROL_BASE_URL as string,
       roleToken: process.env.EXECUTOR_ROLE_TOKEN as string,
-      triggerToken: process.env.EXECUTOR_TRIGGER_TOKEN as string,
+      ...(process.env.EXECUTOR_TRIGGER_TOKEN === undefined
+        ? {}
+        : { triggerToken: process.env.EXECUTOR_TRIGGER_TOKEN }),
       bucket: process.env.R2_BUCKET as string,
       fetch: globalThis.fetch,
       s3: new S3Client({

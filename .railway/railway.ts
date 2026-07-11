@@ -8,6 +8,7 @@ import {
   preserve,
   project,
   service,
+  volume,
 } from "railway/iac";
 
 const region = "europe-west4-drams3a";
@@ -52,6 +53,15 @@ export default defineRailway(() => {
   });
 
   const Jobs = postgres("Shutter-Jobs", { region });
+  // Railway IaC 3.5.2 creates this volume implicitly for postgres(), but does not
+  // retain it in the next desired graph. Declare the live volume so later plans
+  // cannot propose deleting the database's attached storage.
+  const JobsVolume = volume("shutter-jobs-volume-dilc", {
+    allowOnlineResize: true,
+    region,
+    sizeMB: 50_000,
+    alerts: { usage: { "80": {}, "95": {}, "100": {} } },
+  });
 
   const Control = service("Shutter-Control", {
     source: repository,
@@ -100,14 +110,11 @@ export default defineRailway(() => {
     env: {
       CONTROL_BASE_URL: `http://\${{Shutter-Control.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
       EXECUTOR_ROLE_TOKEN: Control.env.VIDEO_EXECUTOR_TOKEN,
-      EXECUTOR_TRIGGER_TOKEN: preserve(),
       NODE_ENV: "production",
       POLL_INTERVAL_MS: "5000",
       PORT: String(nodePort),
-      R2_ACCESS_KEY_ID: preserve(),
-      R2_BUCKET: preserve(),
-      R2_ENDPOINT: preserve(),
-      R2_SECRET_ACCESS_KEY: preserve(),
+      R2_BUCKET: "shutter-renditions",
+      R2_ENDPOINT: "https://d786e753d574eb02fb154ecf8015eb86.r2.cloudflarestorage.com",
       RAILPACK_DEPLOY_APT_PACKAGES: "ffmpeg",
     },
   });
@@ -128,18 +135,15 @@ export default defineRailway(() => {
     env: {
       CONTROL_BASE_URL: `http://\${{Shutter-Control.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
       EXECUTOR_ROLE_TOKEN: Control.env.PDF_EXECUTOR_TOKEN,
-      EXECUTOR_TRIGGER_TOKEN: preserve(),
       NODE_ENV: "production",
       POLL_INTERVAL_MS: "5000",
       PORT: String(nodePort),
-      R2_ACCESS_KEY_ID: preserve(),
-      R2_BUCKET: preserve(),
-      R2_ENDPOINT: preserve(),
-      R2_SECRET_ACCESS_KEY: preserve(),
+      R2_BUCKET: "shutter-renditions",
+      R2_ENDPOINT: "https://d786e753d574eb02fb154ecf8015eb86.r2.cloudflarestorage.com",
       RAILPACK_DEPLOY_APT_PACKAGES: "ffmpeg poppler-utils",
     },
   });
 
   const Delivery = group("Delivery", [Control, Imgproxy, VideoExecutor, PdfExecutor]);
-  return project("shutter", { resources: [Delivery, Jobs] });
+  return project("shutter", { resources: [Delivery, Jobs, JobsVolume] });
 });
