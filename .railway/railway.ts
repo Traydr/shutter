@@ -17,7 +17,15 @@ const imgproxyPort = 8080;
 const repository = github("Traydr/shutter");
 const workspaceWatchPatterns = ["/package.json", "/pnpm-lock.yaml", "/pnpm-workspace.yaml"];
 
-export default defineRailway(() => {
+export default defineRailway((context) => {
+  const s3Env = {
+    S3_ACCESS_KEY_ID: context.shared.S3_ACCESS_KEY_ID,
+    S3_BUCKET: context.shared.S3_BUCKET,
+    S3_ENDPOINT: context.shared.S3_ENDPOINT,
+    S3_REGION: context.shared.S3_REGION,
+    S3_SECRET_ACCESS_KEY: context.shared.S3_SECRET_ACCESS_KEY,
+  };
+
   const Imgproxy = service("Shutter-Imgproxy", {
     source: image("ghcr.io/imgproxy/imgproxy:v4.0.3", {
       autoUpdates: { type: "disabled" },
@@ -49,6 +57,7 @@ export default defineRailway(() => {
       IMGPROXY_SVG_UNLIMITED: "false",
       IMGPROXY_TIMEOUT: "45",
       IMGPROXY_TTL: "0",
+      ...s3Env,
     },
   });
 
@@ -91,6 +100,7 @@ export default defineRailway(() => {
       PORT: String(nodePort),
       SPACE_API_TOKENS: preserve(),
       VIDEO_EXECUTOR_TOKEN: preserve(),
+      ...s3Env,
     },
   });
 
@@ -106,6 +116,7 @@ export default defineRailway(() => {
     replicas: { [region]: 1 },
     healthcheck: "/healthz",
     healthcheckTimeout: 30,
+    deploy: { sleepApplication: true },
     networking: { privateNetworkEndpoint: "shutter-executor-video" },
     env: {
       CONTROL_BASE_URL: `http://\${{Shutter-Control.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
@@ -113,9 +124,8 @@ export default defineRailway(() => {
       NODE_ENV: "production",
       POLL_INTERVAL_MS: "5000",
       PORT: String(nodePort),
-      R2_BUCKET: "shutter-renditions",
-      R2_ENDPOINT: "https://d786e753d574eb02fb154ecf8015eb86.r2.cloudflarestorage.com",
       RAILPACK_DEPLOY_APT_PACKAGES: "ffmpeg",
+      ...s3Env,
     },
   });
 
@@ -131,6 +141,7 @@ export default defineRailway(() => {
     replicas: { [region]: 1 },
     healthcheck: "/healthz",
     healthcheckTimeout: 30,
+    deploy: { sleepApplication: true },
     networking: { privateNetworkEndpoint: "shutter-executor-pdf" },
     env: {
       CONTROL_BASE_URL: `http://\${{Shutter-Control.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
@@ -138,9 +149,8 @@ export default defineRailway(() => {
       NODE_ENV: "production",
       POLL_INTERVAL_MS: "5000",
       PORT: String(nodePort),
-      R2_BUCKET: "shutter-renditions",
-      R2_ENDPOINT: "https://d786e753d574eb02fb154ecf8015eb86.r2.cloudflarestorage.com",
       RAILPACK_DEPLOY_APT_PACKAGES: "ffmpeg poppler-utils",
+      ...s3Env,
     },
   });
 

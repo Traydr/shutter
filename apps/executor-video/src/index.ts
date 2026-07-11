@@ -6,10 +6,10 @@ import { runVideoOnce, type VideoExecutorConfig } from "./run-once.js";
 const required = [
   "CONTROL_BASE_URL",
   "EXECUTOR_ROLE_TOKEN",
-  "R2_ENDPOINT",
-  "R2_ACCESS_KEY_ID",
-  "R2_SECRET_ACCESS_KEY",
-  "R2_BUCKET",
+  "S3_ENDPOINT",
+  "S3_ACCESS_KEY_ID",
+  "S3_SECRET_ACCESS_KEY",
+  "S3_BUCKET",
 ] as const;
 const configured = required.every((name) => process.env[name] !== undefined);
 const executorConfig: (VideoExecutorConfig & { triggerToken?: string }) | undefined = configured
@@ -19,15 +19,15 @@ const executorConfig: (VideoExecutorConfig & { triggerToken?: string }) | undefi
       ...(process.env.EXECUTOR_TRIGGER_TOKEN === undefined
         ? {}
         : { triggerToken: process.env.EXECUTOR_TRIGGER_TOKEN }),
-      bucket: process.env.R2_BUCKET as string,
+      bucket: process.env.S3_BUCKET as string,
       fetch: globalThis.fetch,
       s3: new S3Client({
-        region: "auto",
-        endpoint: process.env.R2_ENDPOINT as string,
+        region: process.env.S3_REGION ?? "auto",
+        endpoint: process.env.S3_ENDPOINT as string,
         forcePathStyle: true,
         credentials: {
-          accessKeyId: process.env.R2_ACCESS_KEY_ID as string,
-          secretAccessKey: process.env.R2_SECRET_ACCESS_KEY as string,
+          accessKeyId: process.env.S3_ACCESS_KEY_ID as string,
+          secretAccessKey: process.env.S3_SECRET_ACCESS_KEY as string,
         },
       }),
     }
