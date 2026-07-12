@@ -18,9 +18,9 @@ const repository = github("Traydr/shutter");
 const workspaceWatchPatterns = ["/package.json", "/pnpm-lock.yaml", "/pnpm-workspace.yaml"];
 
 export default defineRailway(() => {
-  // Railway IaC 3.5.2 cannot apply ctx.shared references: the CLI emits a
-  // shared-variable shape rejected by the current patch schema. These links
-  // already exist remotely, so preserve them without materializing secrets.
+  // These preserved values are the S3-compatible credentials for the same
+  // Cloudflare R2 `shutter-renditions` bucket bound natively to Edge. Keep the
+  // values identical across Control, imgproxy, and both Executors.
   const s3Env = {
     S3_ACCESS_KEY_ID: preserve(),
     S3_BUCKET: preserve(),

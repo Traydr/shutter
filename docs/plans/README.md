@@ -1,12 +1,9 @@
 # Shutter plans
 
-This directory is the implementation history and execution queue. The next
-agent should start with plan 0003 and must not skip its storage-topology
-checkpoint: Shutter's contracts and ADRs declare Cloudflare R2 as the single
-Rendition Store, while the current Railway services receive generic preserved
-`S3_*` variables. The Edge Worker still reads the `shutter-renditions` R2 bucket
-through a native binding. Public Master Preview delivery and Source Purge cannot
-be implemented safely until those are confirmed to identify the same store.
+This directory is the implementation history and execution queue. Plans
+0003–0005 are complete. Cloudflare R2 bucket `shutter-renditions` is confirmed
+as the single Rendition Store: Railway services use its S3-compatible
+credentials and Edge reads the same bucket through its native binding.
 
 The authoritative domain vocabulary is in `CONTEXT.md`. Plan 0001 is the
 foundation roadmap and plan 0002 records current v1 progress.
@@ -34,6 +31,11 @@ Status values for executable plans: `TODO`, `IN PROGRESS`, `DONE`,
   video posters, and PDF previews as phases 7–9 of plan 0001. Consumer
   repositories are outside this workspace; obtain their paths and explicit
   write authorization before changing them.
+
+Production configuration was re-audited on 2026-07-12. Control has the Space
+capability/API registries and the least-privilege Cloudflare purge credential;
+the Worker has its three required secrets and native R2 binding. Applying
+Railway IaC remains an operator-reviewed action.
 
 ## Already implemented
 

@@ -39,6 +39,18 @@ Purge additionally requires `SHUTTER_CONTROL_BASE_URL`, `SHUTTER_SPACE_ID`,
 `SHUTTER_DISPOSABLE_SOURCE_ID`. Gallery requires `SHUTTER_VERIFY_GALLERY_URL`
 and deliberately sends 301 requests.
 
+## Verified configuration inventory (2026-07-12)
+
+- Control contains structurally valid `CAPABILITY_KEYS` and `SPACE_API_TOKENS`
+  entries for `ernesta` and `pane-view`, plus the zone ID and purge token.
+- Control and both Executors address the same R2 endpoint and bucket; Executor
+  role-token references match Control.
+- Control and imgproxy share the signing key, salt, and bearer secret.
+- Edge declares and has `CAPABILITY_KEYS`, `ORIGIN_AUTH_TOKEN`, and
+  `ORIGIN_BASE_URL`, and binds `RENDITION_STORE` to `shutter-renditions`.
+- The live imgproxy allowlist still needs the reviewed Railway IaC update that
+  adds the exact R2 hostname before first-request Master Preview rendering.
+
 ## Signals and thresholds
 
 - Warn at 70,000 Worker requests per UTC day; treat 90,000 or a trend toward the
