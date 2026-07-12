@@ -9,9 +9,9 @@ import { Hono } from "hono";
 import { Pool } from "pg";
 import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
-import { PostgresJobStore } from "./job-store.js";
 import { createMasterStore, type MasterStore } from "./master-store.js";
-import { createSourcePurger } from "./source-purge.js";
+import { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
+import { createSourcePurge } from "./source-purge.js";
 
 const EXECUTOR_WAKE_TIMEOUT_MS = 11 * 60 * 1_000;
 
@@ -278,7 +278,8 @@ async function dispatchExecutor(kind: "video" | "pdf"): Promise<void> {
 
 const databaseUrl = process.env.DATABASE_URL;
 const jobPool = databaseUrl === undefined ? undefined : new Pool({ connectionString: databaseUrl });
-const jobStore = jobPool === undefined ? undefined : new PostgresJobStore(jobPool);
+const renditionJobLifecycle =
+  jobPool === undefined ? undefined : new PostgresRenditionJobLifecycle(jobPool);
 const masterStore =
   process.env.S3_ENDPOINT &&
   process.env.S3_BUCKET &&
@@ -304,12 +305,14 @@ const renditionS3 =
         },
       })
     : undefined;
-const sourcePurger =
+const sourcePurge =
   renditionS3 &&
+  renditionJobLifecycle &&
   process.env.S3_BUCKET &&
   process.env.CLOUDFLARE_ZONE_ID &&
   process.env.CLOUDFLARE_CACHE_PURGE_TOKEN
-    ? createSourcePurger({
+    ? createSourcePurge({
+        lifecycle: renditionJobLifecycle,
         s3: renditionS3,
         bucket: process.env.S3_BUCKET,
         cloudflareZoneId: process.env.CLOUDFLARE_ZONE_ID,
@@ -319,17 +322,17 @@ const sourcePurger =
     : undefined;
 
 export const jobApiRuntime: JobApiRuntime | undefined =
-  jobStore === undefined
+  renditionJobLifecycle === undefined
     ? undefined
     : {
-        store: jobStore,
+        lifecycle: renditionJobLifecycle,
         now: () => new Date(),
         spaceApiTokens: () => parseStringRegistry(process.env.SPACE_API_TOKENS),
         capabilityKeys: () => parseCapabilityKeys(process.env.CAPABILITY_KEYS),
         executorToken: (kind) =>
           kind === "video" ? process.env.VIDEO_EXECUTOR_TOKEN : process.env.PDF_EXECUTOR_TOKEN,
         dispatch: dispatchExecutor,
-        ...(sourcePurger === undefined ? {} : { sourcePurger }),
+        ...(sourcePurge === undefined ? {} : { sourcePurge }),
       };
 
 export const app = createControlApp({

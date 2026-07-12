@@ -35,9 +35,8 @@ job state outlive an application's deletion indefinitely.
 - `packages/protocol/src/cache-identity.ts` exports
   `buildR2CachePurgePrefix`, `buildMasterPurgePrefix`, and
   `buildSourceCacheTag`.
-- `apps/control/src/job-store.ts:608-613` has `deleteSource`, but current
-  submission/completion/purge serialization must be reviewed and strengthened;
-  a bare delete racing completion is insufficient.
+- `apps/control/src/rendition-job-lifecycle.ts` owns submission, completion,
+  committed Source Purge invalidation, and source-scoped serialization.
 - Edge objects carry the hashed source tag. No purge endpoint exists.
 - Space API bearer authentication in `apps/control/src/job-api.ts` uses
   constant-time digest comparison; reuse it rather than adding another token
@@ -67,7 +66,7 @@ Read first:
 
 **In scope**:
 
-- `apps/control/src/job-api.ts`, job-store/purge modules, and tests
+- `apps/control/src/job-api.ts`, Rendition Job lifecycle/purge modules, and tests
 - `apps/edge/src/app.ts`, bindings/config, and workerd tests if Edge owns R2/tag purge
 - `packages/protocol` only for missing strict purge request/response helpers
 - `.railway/railway.ts` only for non-secret purge configuration
@@ -92,8 +91,9 @@ Read first:
 
 Ensure submission, completion, and purge cannot recreate job state or a Master
 Preview after purge wins. Use a Postgres transaction/advisory lock or equivalent
-source-scoped serialization compatible with the existing natural key. The
-in-memory store must model the same observable behavior for tests.
+source-scoped serialization compatible with the existing natural key. Verify
+the production implementation against a real disposable Postgres instance;
+do not recreate lifecycle semantics in an in-memory adapter.
 
 **Verify**: concurrency tests prove purge versus submission and purge versus
 stale completion converge without a job or master output.
@@ -138,7 +138,8 @@ deletes its output, and that retrying a partial purge is safe. Update milestone
 
 ## Test plan
 
-- Add store-level concurrency tests beside `apps/control/src/job-store.test.ts`.
+- Add lifecycle concurrency tests beside
+  `apps/control/src/rendition-job-lifecycle.test.ts`.
 - Add API tests beside `apps/control/src/job-api.test.ts`.
 - Inject R2 and Cloudflare purge clients; tests must not call live services.
 - Cover pagination, repeated purge, every partial-failure boundary, stale

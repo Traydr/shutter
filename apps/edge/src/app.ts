@@ -209,34 +209,55 @@ async function populateCaches(
   return new Response(bytes, { headers: { "content-type": contentType } });
 }
 
+type OriginSource = string | (() => Promise<string>) | undefined;
+
+async function deliverRendition(
+  bindings: CloudflareBindings,
+  identity: RenditionCacheIdentity,
+  originSource?: OriginSource,
+): Promise<Response> {
+  const canonicalUrl = await buildCanonicalCacheUrl(identity);
+  const cacheKey = new Request(canonicalUrl);
+  const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
+  const cached = await caches.default.match(cacheKey);
+  if (cached !== undefined) {
+    await emitRenditionEvent(identity, "edge-hit");
+    return identity.routeClass === "private"
+      ? privateBrowserResponse(cached, "edge-hit")
+      : publicBrowserResponse(cached, "edge-hit", cacheTag);
+  }
+
+  const key = await buildR2CacheKey(identity);
+  const stored = await readR2Response(bindings.RENDITION_STORE, key);
+  let response = stored;
+  if (response === undefined) {
+    const sourceUrl = typeof originSource === "function" ? await originSource() : originSource;
+    response = await populateCaches(bindings, identity, cacheTag, sourceUrl);
+  }
+  const outcome = stored === undefined ? "origin" : "r2-hit";
+
+  if (identity.routeClass === "private") {
+    const internalHeaders = new Headers(response.headers);
+    internalHeaders.set("cache-control", `public, max-age=${PRIVATE_EDGE_TTL_SECONDS}`);
+    internalHeaders.set("cache-tag", cacheTag);
+    const internal = new Response(await response.arrayBuffer(), { headers: internalHeaders });
+    await caches.default.put(cacheKey, internal.clone());
+    await emitRenditionEvent(identity, outcome);
+    return privateBrowserResponse(internal, outcome);
+  }
+
+  const browser = publicBrowserResponse(response, outcome, cacheTag);
+  await caches.default.put(cacheKey, browser.clone());
+  await emitRenditionEvent(identity, outcome);
+  return browser;
+}
+
 async function privateRendition(
   bindings: CloudflareBindings,
   identity: RenditionCacheIdentity,
   sourceUrl?: string,
 ): Promise<Response> {
-  const canonicalUrl = await buildCanonicalCacheUrl(identity);
-  const cacheKey = new Request(canonicalUrl);
-  const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) {
-    await emitRenditionEvent(identity, "edge-hit");
-    return privateBrowserResponse(cached, "edge-hit");
-  }
-
-  const key = await buildR2CacheKey(identity);
-  const stored = await readR2Response(bindings.RENDITION_STORE, key);
-  const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
-  let response = stored;
-  if (response === undefined) {
-    response = await populateCaches(bindings, identity, cacheTag, sourceUrl);
-  }
-  const internalHeaders = new Headers(response.headers);
-  internalHeaders.set("cache-control", `public, max-age=${PRIVATE_EDGE_TTL_SECONDS}`);
-  internalHeaders.set("cache-tag", cacheTag);
-  const internalResponse = new Response(await response.arrayBuffer(), { headers: internalHeaders });
-  await caches.default.put(cacheKey, internalResponse.clone());
-  const outcome = stored === undefined ? "origin" : "r2-hit";
-  await emitRenditionEvent(identity, outcome);
-  return privateBrowserResponse(internalResponse, outcome);
+  return deliverRendition(bindings, identity, sourceUrl);
 }
 
 async function publicLocatedRendition(
@@ -244,43 +265,21 @@ async function publicLocatedRendition(
   identity: RenditionCacheIdentity,
   capability: string,
 ): Promise<Response> {
-  const canonicalUrl = await buildCanonicalCacheUrl(identity);
-  const cacheKey = new Request(canonicalUrl);
-  const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
-  const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) {
-    await emitRenditionEvent(identity, "edge-hit");
-    return publicBrowserResponse(cached, "edge-hit", cacheTag);
-  }
-
-  const key = await buildR2CacheKey(identity);
-  const stored = await readR2Response(bindings.RENDITION_STORE, key);
-  if (stored !== undefined) {
-    const response = publicBrowserResponse(stored, "r2-hit", cacheTag);
-    await caches.default.put(cacheKey, response.clone());
-    await emitRenditionEvent(identity, "r2-hit");
-    return response;
-  }
-
-  const policy = getSpacePolicy(identity.spaceId);
-  if (policy === undefined || policy.routeClass !== "public") return notFound();
-  const keys = parseKeyRegistry(bindings.CAPABILITY_KEYS).get(identity.spaceId) ?? new Map();
-  const claims = await verifySourceCapability(capability, {
-    spaceId: identity.spaceId,
-    expectedPurpose: "image_source",
-    expectedSourceId: identity.sourceId,
-    keys,
-    now: Math.floor(Date.now() / 1000),
-    allowedSourceOrigins: policy.allowedSourceOrigins,
+  return deliverRendition(bindings, identity, async () => {
+    const policy = getSpacePolicy(identity.spaceId);
+    if (policy === undefined || policy.routeClass !== "public")
+      throw new ProtocolError("space_mismatch", "Shutter Space is not public");
+    const keys = parseKeyRegistry(bindings.CAPABILITY_KEYS).get(identity.spaceId) ?? new Map();
+    const claims = await verifySourceCapability(capability, {
+      spaceId: identity.spaceId,
+      expectedPurpose: "image_source",
+      expectedSourceId: identity.sourceId,
+      keys,
+      now: Math.floor(Date.now() / 1000),
+      allowedSourceOrigins: policy.allowedSourceOrigins,
+    });
+    return claims.locator;
   });
-  const response = publicBrowserResponse(
-    await populateCaches(bindings, identity, cacheTag, claims.locator),
-    "origin",
-    cacheTag,
-  );
-  await caches.default.put(cacheKey, response.clone());
-  await emitRenditionEvent(identity, "origin");
-  return response;
 }
 
 function resolveUploadThingSource(
@@ -315,55 +314,14 @@ async function publicResolverRendition(
   identity: RenditionCacheIdentity,
   sourceUrl: string,
 ): Promise<Response> {
-  const canonicalUrl = await buildCanonicalCacheUrl(identity);
-  const cacheKey = new Request(canonicalUrl);
-  const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
-  const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) {
-    await emitRenditionEvent(identity, "edge-hit");
-    return publicBrowserResponse(cached, "edge-hit", cacheTag);
-  }
-
-  const key = await buildR2CacheKey(identity);
-  const stored = await readR2Response(bindings.RENDITION_STORE, key);
-  if (stored !== undefined) {
-    const response = publicBrowserResponse(stored, "r2-hit", cacheTag);
-    await caches.default.put(cacheKey, response.clone());
-    await emitRenditionEvent(identity, "r2-hit");
-    return response;
-  }
-
-  const response = publicBrowserResponse(
-    await populateCaches(bindings, identity, cacheTag, sourceUrl),
-    "origin",
-    cacheTag,
-  );
-  await caches.default.put(cacheKey, response.clone());
-  await emitRenditionEvent(identity, "origin");
-  return response;
+  return deliverRendition(bindings, identity, sourceUrl);
 }
 
 async function publicMasterRendition(
   bindings: CloudflareBindings,
   identity: RenditionCacheIdentity,
 ): Promise<Response> {
-  const canonicalUrl = await buildCanonicalCacheUrl(identity);
-  const cacheKey = new Request(canonicalUrl);
-  const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
-  const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) {
-    await emitRenditionEvent(identity, "edge-hit");
-    return publicBrowserResponse(cached, "edge-hit", cacheTag);
-  }
-  const stored = await readR2Response(bindings.RENDITION_STORE, await buildR2CacheKey(identity));
-  const response = publicBrowserResponse(
-    stored ?? (await populateCaches(bindings, identity, cacheTag)),
-    stored === undefined ? "origin" : "r2-hit",
-    cacheTag,
-  );
-  await caches.default.put(cacheKey, response.clone());
-  await emitRenditionEvent(identity, stored === undefined ? "origin" : "r2-hit");
-  return response;
+  return deliverRendition(bindings, identity);
 }
 
 export const app = new Hono<{ Bindings: CloudflareBindings }>();

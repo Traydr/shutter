@@ -100,3 +100,9 @@ _Avoid_: Public CDN cache, browser-private cache
 A Shutter deployment that claims and completes one class of durable rendition
 work, such as video posters or PDF covers.
 _Avoid_: Application worker, generic background process
+
+**Executor Work Cycle**:
+The shared one-job control sequence used inside each Executor: claim, heartbeat,
+media-processing invocation, Master Preview upload, completion or failure, and
+cleanup. Video and PDF processing remain separate implementations.
+_Avoid_: Generic worker loop, merged Executor

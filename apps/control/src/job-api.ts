@@ -7,25 +7,29 @@ import {
   operationalEvent,
   ProtocolError,
   parsePreviewJobSubmission,
+  type RenditionJobRepresentation,
   type RenditionKind,
   verifySourceCapability,
 } from "@shutter/protocol";
 import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
-import type { JobIdentity, JobStore, MasterCompletion } from "./job-store.js";
-import { jobRepresentation } from "./job-store.js";
-import type { SourcePurger } from "./source-purge.js";
+import type {
+  JobIdentity,
+  MasterCompletion,
+  RenditionJobLifecycle,
+} from "./rendition-job-lifecycle.js";
+import type { SourcePurge } from "./source-purge.js";
 
 type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
 
 export interface JobApiRuntime {
-  store: JobStore;
+  lifecycle: RenditionJobLifecycle;
   now(): Date;
   spaceApiTokens(): ReadonlyMap<string, readonly string[]>;
   capabilityKeys(): KeyRegistry;
   executorToken(kind: RenditionKind): string | undefined;
   dispatch(kind: RenditionKind): Promise<void>;
-  sourcePurger?: SourcePurger;
+  sourcePurge?: SourcePurge;
 }
 
 function digest(value: string): Uint8Array {
@@ -74,7 +78,7 @@ function authorizedSpace(
   return tokenMatches(bearer(authorization), runtime.spaceApiTokens().get(spaceId) ?? []);
 }
 
-function activeResponse(body: ReturnType<typeof jobRepresentation>, location: string): Response {
+function activeResponse(body: RenditionJobRepresentation, location: string): Response {
   const active = body.status === "pending" || body.status === "processing";
   return Response.json(body, {
     status: active ? 202 : 200,
@@ -107,30 +111,12 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     if (!authorizedSpace(runtime, spaceId, context.req.header("authorization"))) {
       return requestFailure(401, "unauthorized");
     }
-    const purger = runtime.sourcePurger;
-    if (purger === undefined) return requestFailure(503, "service_unavailable");
+    const sourcePurge = runtime.sourcePurge;
+    if (sourcePurge === undefined) return requestFailure(503, "service_unavailable");
     try {
-      await runtime.store.purgeSource(spaceId, sourceId, () => purger.purge(spaceId, sourceId));
-      emitOperationalEvent(
-        "info",
-        await operationalEvent({
-          event: "control.purge.completed",
-          spaceId,
-          sourceId,
-          fields: { outcome: "ready" },
-        }),
-      );
+      await sourcePurge.purge({ spaceId, sourceId });
       return new Response(null, { status: 204 });
     } catch {
-      emitOperationalEvent(
-        "error",
-        await operationalEvent({
-          event: "control.purge.failed",
-          spaceId,
-          sourceId,
-          fields: { outcome: "failed", failureCode: "service_unavailable" },
-        }),
-      );
       return requestFailure(503, "service_unavailable");
     }
   });
@@ -155,7 +141,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         now: Math.floor(now.getTime() / 1_000),
         allowedSourceOrigins: policy.allowedSourceOrigins,
       });
-      const record = await runtime.store.submit(
+      const submissionResult = await runtime.lifecycle.submit(
         {
           ...identity,
           sourceCapability: submission.sourceCapability,
@@ -163,6 +149,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         },
         now,
       );
+      const record = submissionResult.job;
       emitOperationalEvent(
         "info",
         await operationalEvent({
@@ -187,7 +174,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
           }).then((event) => emitOperationalEvent("error", event));
         });
       }
-      return activeResponse(jobRepresentation(record), new URL(context.req.url).pathname);
+      return activeResponse(record.representation, new URL(context.req.url).pathname);
     } catch (error) {
       if (error instanceof ProtocolError) return requestFailure(400, error.code);
       const event = {
@@ -208,9 +195,9 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     if (!authorizedSpace(runtime, identity.spaceId, context.req.header("authorization"))) {
       return requestFailure(401, "unauthorized");
     }
-    const record = await runtime.store.get(identity);
+    const record = await runtime.lifecycle.read(identity);
     if (record === undefined) return requestFailure(404, "not_found");
-    return activeResponse(jobRepresentation(record), new URL(context.req.url).pathname);
+    return activeResponse(record.representation, new URL(context.req.url).pathname);
   });
 
   api.post("/internal/v1/executors/:kind/claim", async (context) => {
@@ -224,11 +211,11 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       return requestFailure(401, "unauthorized");
     }
     const now = runtime.now();
-    const claim = await runtime.store.claim(parsedKind, now);
+    const claim = await runtime.lifecycle.claim(parsedKind, now);
     if (claim === undefined) return new Response(null, { status: 204 });
     const policy = getSpacePolicy(claim.spaceId);
     if (policy === undefined) {
-      await runtime.store.fail(
+      await runtime.lifecycle.fail(
         claim,
         claim.processingToken,
         { retryable: false, code: "configuration_error" },
@@ -261,7 +248,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         error instanceof ProtocolError && error.code === "capability_expired"
           ? "source_expired"
           : "internal_invariant";
-      await runtime.store.fail(claim, claim.processingToken, { retryable: false, code }, now);
+      await runtime.lifecycle.fail(claim, claim.processingToken, { retryable: false, code }, now);
       return requestFailure(409, code);
     }
   });
@@ -284,8 +271,10 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       return requestFailure(400, "request_invalid");
     }
     if (typeof body.processingToken !== "string") return requestFailure(400, "request_invalid");
-    const updated = await runtime.store.heartbeat(identity, body.processingToken, runtime.now());
-    return updated ? new Response(null, { status: 204 }) : requestFailure(409, "stale_attempt");
+    const result = await runtime.lifecycle.heartbeat(identity, body.processingToken, runtime.now());
+    return result.outcome === "accepted"
+      ? new Response(null, { status: 204 })
+      : requestFailure(409, "stale_attempt");
   });
 
   api.post(`${transition}/complete`, async (context) => {
@@ -329,27 +318,30 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       format: "webp",
       objectEtag: body.objectEtag,
     };
-    const updated = await runtime.store.complete(
+    const result = await runtime.lifecycle.complete(
       identity,
       body.processingToken,
       completion,
       runtime.now(),
     );
     emitOperationalEvent(
-      updated ? "info" : "error",
+      result.outcome === "accepted" ? "info" : "error",
       await operationalEvent({
-        event: updated ? "control.job.completed" : "executor.stale_completion",
+        event:
+          result.outcome === "accepted" ? "control.job.completed" : "executor.stale_completion",
         spaceId: identity.spaceId,
         sourceId: identity.sourceId,
         processingToken: body.processingToken,
         fields: {
           kind: identity.kind,
-          outcome: updated ? "ready" : "failed",
-          ...(updated ? {} : { failureCode: "stale_attempt" }),
+          outcome: result.outcome === "accepted" ? "ready" : "failed",
+          ...(result.outcome === "accepted" ? {} : { failureCode: "stale_attempt" }),
         },
       }),
     );
-    return updated ? new Response(null, { status: 204 }) : requestFailure(409, "stale_attempt");
+    return result.outcome === "accepted"
+      ? new Response(null, { status: 204 })
+      : requestFailure(409, "stale_attempt");
   });
 
   api.post(`${transition}/fail`, async (context) => {
@@ -376,14 +368,14 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     ) {
       return requestFailure(400, "request_invalid");
     }
-    const updated = await runtime.store.fail(
+    const result = await runtime.lifecycle.fail(
       identity,
       body.processingToken,
       { retryable: body.retryable, ...(code === undefined ? {} : { code }) },
       runtime.now(),
     );
     emitOperationalEvent(
-      updated ? "info" : "error",
+      result.outcome === "stale_attempt" ? "error" : "info",
       await operationalEvent({
         event: "control.job.failed",
         spaceId: identity.spaceId,
@@ -396,7 +388,9 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         },
       }),
     );
-    return updated ? new Response(null, { status: 204 }) : requestFailure(409, "stale_attempt");
+    return result.outcome === "stale_attempt"
+      ? requestFailure(409, "stale_attempt")
+      : new Response(null, { status: 204 });
   });
 
   return api;

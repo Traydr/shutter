@@ -3,13 +3,17 @@ import {
   buildMasterPurgePrefix,
   buildR2CachePurgePrefix,
   buildSourceCacheTag,
+  emitOperationalEvent,
+  operationalEvent,
 } from "@shutter/protocol";
+import type { RenditionJobLifecycle, SourceIdentity } from "./rendition-job-lifecycle.js";
 
-export interface SourcePurger {
-  purge(spaceId: string, sourceId: string): Promise<void>;
+export interface SourcePurge {
+  purge(source: SourceIdentity): Promise<void>;
 }
 
-export interface SourcePurgerConfig {
+export interface SourcePurgeConfig {
+  lifecycle: RenditionJobLifecycle;
   s3: S3Client;
   bucket: string;
   cloudflareZoneId: string;
@@ -42,42 +46,66 @@ async function deletePrefix(s3: S3Client, bucket: string, prefix: string): Promi
   } while (continuationToken !== undefined);
 }
 
-export function createSourcePurger(config: SourcePurgerConfig): SourcePurger {
+export function createSourcePurge(config: SourcePurgeConfig): SourcePurge {
   return {
-    async purge(spaceId, sourceId) {
-      const prefixes = await Promise.all([
-        buildR2CachePurgePrefix("public", spaceId, sourceId),
-        buildR2CachePurgePrefix("private", spaceId, sourceId),
-        buildMasterPurgePrefix(spaceId, sourceId),
-      ]);
-      for (const prefix of prefixes) await deletePrefix(config.s3, config.bucket, prefix);
-
-      const tag = await buildSourceCacheTag(spaceId, sourceId);
-      const response = await config.fetch(
-        `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(config.cloudflareZoneId)}/purge_cache`,
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${config.cloudflareApiToken}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ tags: [tag] }),
-        },
-      );
-      if (!response.ok) throw new Error("cache tag purge failed");
-      let result: unknown;
+    async purge(source) {
       try {
-        result = await response.json();
-      } catch {
-        throw new Error("cache tag purge failed");
-      }
-      if (
-        typeof result !== "object" ||
-        result === null ||
-        !("success" in result) ||
-        result.success !== true
-      ) {
-        throw new Error("cache tag purge failed");
+        await config.lifecycle.withInvalidatedSource(source, async () => {
+          const prefixes = await Promise.all([
+            buildR2CachePurgePrefix("public", source.spaceId, source.sourceId),
+            buildR2CachePurgePrefix("private", source.spaceId, source.sourceId),
+            buildMasterPurgePrefix(source.spaceId, source.sourceId),
+          ]);
+          for (const prefix of prefixes) await deletePrefix(config.s3, config.bucket, prefix);
+
+          const tag = await buildSourceCacheTag(source.spaceId, source.sourceId);
+          const response = await config.fetch(
+            `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(config.cloudflareZoneId)}/purge_cache`,
+            {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${config.cloudflareApiToken}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ tags: [tag] }),
+            },
+          );
+          if (!response.ok) throw new Error("cache tag purge failed");
+          let result: unknown;
+          try {
+            result = await response.json();
+          } catch {
+            throw new Error("cache tag purge failed");
+          }
+          if (
+            typeof result !== "object" ||
+            result === null ||
+            !("success" in result) ||
+            result.success !== true
+          ) {
+            throw new Error("cache tag purge failed");
+          }
+        });
+        emitOperationalEvent(
+          "info",
+          await operationalEvent({
+            event: "control.purge.completed",
+            spaceId: source.spaceId,
+            sourceId: source.sourceId,
+            fields: { outcome: "ready" },
+          }),
+        );
+      } catch (error) {
+        emitOperationalEvent(
+          "error",
+          await operationalEvent({
+            event: "control.purge.failed",
+            spaceId: source.spaceId,
+            sourceId: source.sourceId,
+            fields: { outcome: "failed", failureCode: "service_unavailable" },
+          }),
+        );
+        throw error;
       }
     },
   };
