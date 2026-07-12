@@ -17,11 +17,18 @@ import {
   TEST_CAPABILITY_KEY,
   TEST_CAPABILITY_KID,
 } from "@shutter/testkit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(async () => {
+  vi.unstubAllGlobals();
   await reset();
 });
+
+function tamper(value: string): string {
+  const index = Math.floor(value.length / 2);
+  const replacement = value[index] === "A" ? "B" : "A";
+  return `${value.slice(0, index)}${replacement}${value.slice(index + 1)}`;
+}
 
 describe("edge app", () => {
   it("reports health from workerd", async () => {
@@ -66,7 +73,7 @@ describe("edge app", () => {
     });
 
     const tampered = await SELF.fetch(
-      `https://edge.shutter.test/v1/private/pane-view/source/${token.slice(0, -1)}x?w=640&q=75`,
+      `https://edge.shutter.test/v1/private/pane-view/source/${tamper(token)}?w=640&q=75`,
     );
     expect(tampered.status).toBe(403);
     expect(await tampered.text()).not.toContain("private-source-rendition");
@@ -113,7 +120,7 @@ describe("edge app", () => {
     });
 
     const tampered = await SELF.fetch(
-      `https://edge.shutter.test/v1/private/pane-view/master/${token.slice(0, -1)}x?w=640&q=75`,
+      `https://edge.shutter.test/v1/private/pane-view/master/${tamper(token)}?w=640&q=75`,
     );
     expect(tampered.status).toBe(403);
     expect(await tampered.text()).not.toContain("private-rendition");
@@ -131,6 +138,108 @@ describe("edge app", () => {
     );
     expect(second.headers.get("x-shutter-cache")).toBe("edge-hit");
     expect(new TextDecoder().decode(await second.arrayBuffer())).toBe("private-rendition");
+  });
+
+  it("renders a private master miss through the authenticated master bridge", async () => {
+    const origin = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("rendered-private-master", {
+          headers: { "content-type": "image/webp" },
+        }),
+    );
+    vi.stubGlobal("fetch", origin);
+    const now = Math.floor(Date.now() / 1000);
+    const token = await issueSourceCapabilityWithIv(
+      {
+        space_id: "pane-view",
+        source_id: "private-master-miss",
+        purpose: "master_preview",
+        kind: "pdf",
+        iat: now - 60,
+        exp: now + 3_600,
+      },
+      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+      Uint8Array.from([1, 3, 5, 7, 9, 11, 2, 4, 6, 8, 10, 12]),
+    );
+    const response = await SELF.fetch(
+      `https://edge.shutter.test/v1/private/pane-view/master/${token}?w=640&q=75`,
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("x-shutter-cache")).toBe("origin");
+    expect(await response.text()).toBe("rendered-private-master");
+    expect(origin).toHaveBeenCalledOnce();
+    expect(origin.mock.calls[0]?.[0].toString()).toBe(
+      "https://origin.shutter.test/internal/v1/master-rendition",
+    );
+  });
+
+  it("serves public video and PDF masters with canonical public cache identities", async () => {
+    for (const kind of ["video", "pdf"] as const) {
+      const identity = {
+        routeClass: "public" as const,
+        spaceId: "ernesta",
+        sourceId: `public/${kind}`,
+        input: { type: "master" as const, kind },
+        width: 640,
+        quality: 75,
+      };
+      await env.RENDITION_STORE.put(await buildR2CacheKey(identity), `${kind}-master`, {
+        httpMetadata: { contentType: "image/webp" },
+      });
+      const first = await SELF.fetch(
+        `https://edge.shutter.test/v1/public/ernesta/master/${kind}/public%2F${kind}?w=640&q=75`,
+      );
+      expect(first.status).toBe(200);
+      expect(first.headers.get("x-shutter-cache")).toBe("r2-hit");
+      expect(await first.text()).toBe(`${kind}-master`);
+      const second = await SELF.fetch(
+        `https://edge.shutter.test/v1/public/ernesta/master/${kind}/public%2F${kind}?w=640&q=75`,
+      );
+      expect(second.headers.get("x-shutter-cache")).toBe("edge-hit");
+    }
+  });
+
+  it("normalizes public master requests and rejects route and kind confusion", async () => {
+    const normalized = await SELF.fetch(
+      "https://edge.shutter.test/v1/public/ernesta/master/video/source?w=639",
+      { redirect: "manual" },
+    );
+    expect(normalized.status).toBe(308);
+    expect(normalized.headers.get("location")).toBe(
+      "https://edge.shutter.test/v1/public/ernesta/master/video/source?w=640&q=75",
+    );
+    expect(
+      (
+        await SELF.fetch(
+          "https://edge.shutter.test/v1/public/ernesta/master/image/source?w=640&q=75",
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await SELF.fetch(
+          "https://edge.shutter.test/v1/public/pane-view/master/video/source?w=640&q=75",
+        )
+      ).status,
+    ).toBe(404);
+  });
+
+  it("renders a public master miss through Control and stores it in R2", async () => {
+    const origin = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("rendered-public-master", {
+          headers: { "content-type": "image/webp" },
+        }),
+    );
+    vi.stubGlobal("fetch", origin);
+    const response = await SELF.fetch(
+      "https://edge.shutter.test/v1/public/ernesta/master/video/public-miss?w=640&q=75",
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-shutter-cache")).toBe("origin");
+    expect(await response.text()).toBe("rendered-public-master");
+    expect(origin).toHaveBeenCalledOnce();
   });
 
   it("excludes a public located-source capability from canonical cached identity", async () => {
@@ -163,6 +272,57 @@ describe("edge app", () => {
     );
     expect(response.status).toBe(403);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
+  });
+
+  it("renders source-route misses through the authenticated origin", async () => {
+    const origin = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      return new Response("rendered-source", { headers: { "content-type": "image/webp" } });
+    });
+    vi.stubGlobal("fetch", origin);
+    const now = Math.floor(Date.now() / 1000);
+    const privateToken = await issueSourceCapabilityWithIv(
+      {
+        space_id: "pane-view",
+        source_id: "private-source-miss",
+        purpose: "image_source",
+        locator: "https://pane-view.traydr.dev/private-source-miss.webp",
+        iat: now - 60,
+        exp: now + 3_600,
+      },
+      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+      Uint8Array.from([2, 4, 6, 8, 10, 12, 1, 3, 5, 7, 9, 11]),
+    );
+    const locatedToken = await issueSourceCapabilityWithIv(
+      {
+        space_id: "ernesta",
+        source_id: "public-located-miss",
+        purpose: "image_source",
+        locator: "https://8w0z32yftd.ufs.sh/f/public-located-miss",
+        iat: now - 60,
+        exp: now + 3_600,
+      },
+      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+      Uint8Array.from([3, 6, 9, 12, 2, 5, 8, 11, 1, 4, 7, 10]),
+    );
+
+    const responses = await Promise.all([
+      SELF.fetch(
+        `https://edge.shutter.test/v1/private/pane-view/source/${privateToken}?w=640&q=75`,
+      ),
+      SELF.fetch(
+        `https://edge.shutter.test/v1/public/ernesta/located/public-located-miss/${locatedToken}?w=640&q=75`,
+      ),
+      SELF.fetch(
+        "https://edge.shutter.test/v1/public/ernesta/resolver/uploadthing/8w0z32yftd%2Fresolver-miss?w=640&q=75",
+      ),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+    expect(responses.map((response) => response.headers.get("x-shutter-cache"))).toEqual([
+      "origin",
+      "origin",
+      "origin",
+    ]);
+    expect(origin).toHaveBeenCalledTimes(3);
   });
 
   it("serves an allowlisted UploadThing resolver reference from canonical public cache identity", async () => {

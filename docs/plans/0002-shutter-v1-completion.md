@@ -50,8 +50,11 @@ Exit criteria:
 
 ## Milestone 2: complete rendition delivery
 
-Status: in progress. Private source delivery is implemented; public master
-delivery remains.
+Confirmed topology: Cloudflare R2 bucket `shutter-renditions` is the single
+authoritative Rendition Store. Executors access that same bucket through its
+S3-compatible API and Edge reads it through the `RENDITION_STORE` binding.
+
+Status: implemented.
 
 Implement public master and private source delivery with the same capability,
 normalization, cache-identity, R2, imgproxy, and response-header invariants as
