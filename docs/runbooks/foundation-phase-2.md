@@ -27,8 +27,9 @@ provider evidence required to close Phase 2.
 ## Railway
 
 1. Confirm the reviewed imgproxy and Space allowlists remain limited to Ernesta
-   UploadThing projects `8w0z32yftd` and `rrsku8h9ue`, plus Pane View origins
-   `https://t3.storageapi.dev` and `https://pane-view.traydr.dev`.
+   UploadThing projects `8w0z32yftd` and `rrsku8h9ue`, Pane View origins
+   `https://t3.storageapi.dev` and `https://pane-view.traydr.dev`, and the exact
+   R2 S3 endpoint used for short-lived Master Preview reads.
 2. Preview `.railway/railway.ts` with `railway config plan`. Review every
    resource and variable change.
 3. Apply only through the ordinary reviewed Railway workflow. Generate strong,
@@ -39,6 +40,9 @@ provider evidence required to close Phase 2.
    The imgproxy key and salt are hex encoded.
 4. Give Control a public HTTPS origin and put that exact URL in the Worker's
    `ORIGIN_BASE_URL`. Keep imgproxy private-only.
+5. Configure Control's `CAPABILITY_KEYS` and `SPACE_API_TOKENS` registries for
+   every enabled Space. Configure `CLOUDFLARE_ZONE_ID` and a token restricted to
+   Cache Purge on that specific zone as `CLOUDFLARE_CACHE_PURGE_TOKEN`.
 
 ## Live evidence
 

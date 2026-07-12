@@ -19,7 +19,9 @@
     "test": "pnpm test:node && pnpm test:worker",
     "test:node": "pnpm build:packages && vitest run --config vitest.node.config.ts",
     "test:worker": "pnpm build:packages && pnpm --filter @shutter/edge test",
-    "typecheck": "pnpm build:packages && pnpm -r --sort --if-present typecheck"
+    "typecheck": "pnpm build:packages && pnpm -r --sort --if-present typecheck",
+    "verify:v1": "node scripts/verify-v1.mjs --mode offline",
+    "verify:v1:live": "node scripts/verify-v1.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",

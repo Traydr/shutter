@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DeleteObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
+import { emitOperationalEvent, operationalEvent } from "@shutter/protocol";
 import { ProcessingFailure, processPdfPreview, runCommand } from "./processor.js";
 
 interface Claim {
@@ -11,6 +12,8 @@ interface Claim {
   locator: string;
   outputKey: string;
   processingToken: string;
+  executionCycle: number;
+  attemptNumber: number;
 }
 export interface PdfExecutorConfig {
   controlBaseUrl: string;
@@ -35,6 +38,22 @@ export async function runPdfOnce(config: PdfExecutorConfig): Promise<"idle" | "p
   if (claimed.status === 204) return "idle";
   if (!claimed.ok) throw new Error(`Control claim failed with ${claimed.status}`);
   const claim = (await claimed.json()) as Claim;
+  const startedAt = Date.now();
+  emitOperationalEvent(
+    "info",
+    await operationalEvent({
+      event: "executor.claimed",
+      spaceId: claim.spaceId,
+      sourceId: claim.sourceId,
+      processingToken: claim.processingToken,
+      fields: {
+        kind: claim.kind,
+        executionCycle: claim.executionCycle,
+        attemptNumber: claim.attemptNumber,
+        outcome: "accepted",
+      },
+    }),
+  );
   const directory = await mkdtemp(join(tmpdir(), "shutter-pdf-"));
   let uploaded = false;
   const transition = `/internal/v1/executors/pdf/jobs/${encodeURIComponent(claim.spaceId)}/${encodeURIComponent(claim.sourceId)}`;
@@ -81,6 +100,40 @@ export async function runPdfOnce(config: PdfExecutorConfig): Promise<"idle" | "p
       uploaded = false;
       if (completed.status !== 409)
         throw new Error(`Control completion failed with ${completed.status}`);
+      emitOperationalEvent(
+        "error",
+        await operationalEvent({
+          event: "executor.stale_completion",
+          spaceId: claim.spaceId,
+          sourceId: claim.sourceId,
+          processingToken: claim.processingToken,
+          fields: {
+            kind: claim.kind,
+            executionCycle: claim.executionCycle,
+            attemptNumber: claim.attemptNumber,
+            durationMs: Date.now() - startedAt,
+            outcome: "failed",
+            failureCode: "stale_attempt",
+          },
+        }),
+      );
+    } else {
+      emitOperationalEvent(
+        "info",
+        await operationalEvent({
+          event: "executor.completed",
+          spaceId: claim.spaceId,
+          sourceId: claim.sourceId,
+          processingToken: claim.processingToken,
+          fields: {
+            kind: claim.kind,
+            executionCycle: claim.executionCycle,
+            attemptNumber: claim.attemptNumber,
+            durationMs: Date.now() - startedAt,
+            outcome: "ready",
+          },
+        }),
+      );
     }
     return "processed";
   } catch (error) {
@@ -92,6 +145,23 @@ export async function runPdfOnce(config: PdfExecutorConfig): Promise<"idle" | "p
       error instanceof ProcessingFailure
         ? { retryable: error.retryable, code: error.code }
         : { retryable: true };
+    emitOperationalEvent(
+      "error",
+      await operationalEvent({
+        event: "executor.failed",
+        spaceId: claim.spaceId,
+        sourceId: claim.sourceId,
+        processingToken: claim.processingToken,
+        fields: {
+          kind: claim.kind,
+          executionCycle: claim.executionCycle,
+          attemptNumber: claim.attemptNumber,
+          durationMs: Date.now() - startedAt,
+          outcome: "failed",
+          ...(error instanceof ProcessingFailure ? { failureCode: error.code } : {}),
+        },
+      }),
+    );
     await control(config, `${transition}/fail`, {
       method: "POST",
       headers: { "content-type": "application/json" },

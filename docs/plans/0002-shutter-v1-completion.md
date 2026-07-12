@@ -50,8 +50,11 @@ Exit criteria:
 
 ## Milestone 2: complete rendition delivery
 
-Status: in progress. Private source delivery is implemented; public master
-delivery remains.
+Confirmed topology: Cloudflare R2 bucket `shutter-renditions` is the single
+authoritative Rendition Store. Executors access that same bucket through its
+S3-compatible API and Edge reads it through the `RENDITION_STORE` binding.
+
+Status: implemented.
 
 Implement public master and private source delivery with the same capability,
 normalization, cache-identity, R2, imgproxy, and response-header invariants as
@@ -62,6 +65,10 @@ capability, cache isolation, normalization, and fail-closed tests.
 
 ## Milestone 3: Source Purge
 
+Status: implemented. Production activation requires the non-secret
+`CLOUDFLARE_ZONE_ID` and a least-privilege `CLOUDFLARE_CACHE_PURGE_TOKEN` in
+Control's Railway environment; the route fails closed while either is absent.
+
 Implement the authenticated, retry-safe purge sequence for both rendition kinds
 and every route class. Delete job state, deterministic R2 prefixes, and tagged
 Cloudflare cache entries without exposing Source Locators.
@@ -70,6 +77,10 @@ Exit criteria: complete, repeated, and partially failed purges converge to the
 same empty state.
 
 ## Milestone 4: recovery and hardening
+
+Status: implemented. Stable structured events use hashed Source ID and
+processing-token correlation, and the offline/live verification commands and
+operator launch/rollback runbook are available without changing v1 responses.
 
 Add the recovery runtime, structured redacted logs, gallery-shaped traffic
 tests, crash and stale-token coverage, and production end-to-end checks for

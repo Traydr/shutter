@@ -1,8 +1,10 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
   buildMasterPreviewKey,
+  emitOperationalEvent,
   FAILURE_ACTIONS,
   type JobFailureCode,
+  operationalEvent,
   ProtocolError,
   parsePreviewJobSubmission,
   type RenditionKind,
@@ -12,6 +14,7 @@ import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 import type { JobIdentity, JobStore, MasterCompletion } from "./job-store.js";
 import { jobRepresentation } from "./job-store.js";
+import type { SourcePurger } from "./source-purge.js";
 
 type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
 
@@ -22,6 +25,7 @@ export interface JobApiRuntime {
   capabilityKeys(): KeyRegistry;
   executorToken(kind: RenditionKind): string | undefined;
   dispatch(kind: RenditionKind): Promise<void>;
+  sourcePurger?: SourcePurger;
 }
 
 function digest(value: string): Uint8Array {
@@ -96,6 +100,41 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
   const api = new Hono();
   const resource = "/v1/spaces/:spaceId/sources/:sourceId/previews/:kind";
 
+  api.post("/v1/spaces/:spaceId/sources/:sourceId/purge", async (context) => {
+    const spaceId = context.req.param("spaceId");
+    const sourceId = context.req.param("sourceId");
+    if (getSpacePolicy(spaceId) === undefined) return requestFailure(404, "not_found");
+    if (!authorizedSpace(runtime, spaceId, context.req.header("authorization"))) {
+      return requestFailure(401, "unauthorized");
+    }
+    const purger = runtime.sourcePurger;
+    if (purger === undefined) return requestFailure(503, "service_unavailable");
+    try {
+      await runtime.store.purgeSource(spaceId, sourceId, () => purger.purge(spaceId, sourceId));
+      emitOperationalEvent(
+        "info",
+        await operationalEvent({
+          event: "control.purge.completed",
+          spaceId,
+          sourceId,
+          fields: { outcome: "ready" },
+        }),
+      );
+      return new Response(null, { status: 204 });
+    } catch {
+      emitOperationalEvent(
+        "error",
+        await operationalEvent({
+          event: "control.purge.failed",
+          spaceId,
+          sourceId,
+          fields: { outcome: "failed", failureCode: "service_unavailable" },
+        }),
+      );
+      return requestFailure(503, "service_unavailable");
+    }
+  });
+
   api.put(resource, async (context) => {
     const identity = identityFromRoute(context);
     if (identity === undefined) return requestFailure(404, "not_found");
@@ -124,24 +163,38 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         },
         now,
       );
+      emitOperationalEvent(
+        "info",
+        await operationalEvent({
+          event: "control.job.submitted",
+          spaceId: record.spaceId,
+          sourceId: record.sourceId,
+          fields: {
+            kind: record.kind,
+            executionCycle: record.executionCycle,
+            attemptNumber: record.attemptNumber,
+            outcome: "accepted",
+          },
+        }),
+      );
       if (record.status === "pending") {
-        void runtime.dispatch(record.kind).catch((error: unknown) => {
-          console.error(
-            {
-              kind: record.kind,
-              error: error instanceof Error ? error.message : "unknown",
-            },
-            "executor dispatch failed",
-          );
+        void runtime.dispatch(record.kind).catch(() => {
+          void operationalEvent({
+            event: "control.dispatch.failed",
+            spaceId: record.spaceId,
+            sourceId: record.sourceId,
+            fields: { kind: record.kind, outcome: "failed", failureCode: "service_unavailable" },
+          }).then((event) => emitOperationalEvent("error", event));
         });
       }
       return activeResponse(jobRepresentation(record), new URL(context.req.url).pathname);
     } catch (error) {
       if (error instanceof ProtocolError) return requestFailure(400, error.code);
-      console.error(
-        { error: error instanceof Error ? error.message : "unknown" },
-        "job submit failed",
-      );
+      emitOperationalEvent("error", {
+        event: "control.service.failed",
+        outcome: "failed",
+        failureCode: "service_unavailable",
+      });
       return requestFailure(503, "service_unavailable");
     }
   });
@@ -279,6 +332,20 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       completion,
       runtime.now(),
     );
+    emitOperationalEvent(
+      updated ? "info" : "error",
+      await operationalEvent({
+        event: updated ? "control.job.completed" : "executor.stale_completion",
+        spaceId: identity.spaceId,
+        sourceId: identity.sourceId,
+        processingToken: body.processingToken,
+        fields: {
+          kind: identity.kind,
+          outcome: updated ? "ready" : "failed",
+          ...(updated ? {} : { failureCode: "stale_attempt" }),
+        },
+      }),
+    );
     return updated ? new Response(null, { status: 204 }) : requestFailure(409, "stale_attempt");
   });
 
@@ -311,6 +378,20 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       body.processingToken,
       { retryable: body.retryable, ...(code === undefined ? {} : { code }) },
       runtime.now(),
+    );
+    emitOperationalEvent(
+      updated ? "info" : "error",
+      await operationalEvent({
+        event: "control.job.failed",
+        spaceId: identity.spaceId,
+        sourceId: identity.sourceId,
+        processingToken: body.processingToken,
+        fields: {
+          kind: identity.kind,
+          outcome: "failed",
+          ...(code === undefined ? {} : { failureCode: code }),
+        },
+      }),
     );
     return updated ? new Response(null, { status: 204 }) : requestFailure(409, "stale_attempt");
   });

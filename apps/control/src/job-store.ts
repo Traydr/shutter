@@ -77,7 +77,7 @@ export interface JobStore {
   expirePendingJobs(now: Date): Promise<number>;
   recoverExpiredLeases(now: Date): Promise<number>;
   runnableJobKinds(now: Date, limit: number): Promise<readonly RenditionKind[]>;
-  deleteSource(spaceId: string, sourceId: string): Promise<void>;
+  purgeSource(spaceId: string, sourceId: string, cleanup: () => Promise<void>): Promise<void>;
 }
 
 export function jobRepresentation(record: JobRecord): RenditionJobRepresentation {
@@ -177,38 +177,60 @@ function identityKey(identity: JobIdentity): string {
 
 export class InMemoryJobStore implements JobStore {
   readonly #jobs = new Map<string, JobRecord>();
+  readonly #sourceLocks = new Map<string, Promise<void>>();
+
+  async #withSourceLock<T>(spaceId: string, sourceId: string, work: () => Promise<T>): Promise<T> {
+    const key = `${spaceId}\u0000${sourceId}`;
+    const previous = this.#sourceLocks.get(key) ?? Promise.resolve();
+    let release = () => {};
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.then(() => current);
+    this.#sourceLocks.set(key, queued);
+    await previous;
+    try {
+      return await work();
+    } finally {
+      release();
+      if (this.#sourceLocks.get(key) === queued) this.#sourceLocks.delete(key);
+    }
+  }
 
   async submit(input: SubmitJobInput, now: Date): Promise<JobRecord> {
-    const key = identityKey(input);
-    const existing = this.#jobs.get(key);
-    if (existing !== undefined) {
-      if (
-        existing.status === "failed" &&
-        (existing.failureCode === "source_expired" || existing.failureCode === "attempts_exhausted")
-      ) {
-        const reactivated: JobRecord = {
-          ...input,
-          status: "pending",
-          executionCycle: existing.executionCycle + 1,
-          attemptNumber: 0,
-          retryDeadlineAt: retryDeadline(input, now),
-          nextAttemptAt: now,
-        };
-        this.#jobs.set(key, reactivated);
-        return { ...reactivated };
+    return this.#withSourceLock(input.spaceId, input.sourceId, async () => {
+      const key = identityKey(input);
+      const existing = this.#jobs.get(key);
+      if (existing !== undefined) {
+        if (
+          existing.status === "failed" &&
+          (existing.failureCode === "source_expired" ||
+            existing.failureCode === "attempts_exhausted")
+        ) {
+          const reactivated: JobRecord = {
+            ...input,
+            status: "pending",
+            executionCycle: existing.executionCycle + 1,
+            attemptNumber: 0,
+            retryDeadlineAt: retryDeadline(input, now),
+            nextAttemptAt: now,
+          };
+          this.#jobs.set(key, reactivated);
+          return { ...reactivated };
+        }
+        return { ...existing };
       }
-      return { ...existing };
-    }
-    const created: JobRecord = {
-      ...input,
-      status: "pending",
-      executionCycle: 0,
-      attemptNumber: 0,
-      retryDeadlineAt: retryDeadline(input, now),
-      nextAttemptAt: now,
-    };
-    this.#jobs.set(key, created);
-    return { ...created };
+      const created: JobRecord = {
+        ...input,
+        status: "pending",
+        executionCycle: 0,
+        attemptNumber: 0,
+        retryDeadlineAt: retryDeadline(input, now),
+        nextAttemptAt: now,
+      };
+      this.#jobs.set(key, created);
+      return { ...created };
+    });
   }
 
   async get(identity: JobIdentity): Promise<JobRecord | undefined> {
@@ -277,23 +299,26 @@ export class InMemoryJobStore implements JobStore {
     completion: MasterCompletion,
     _now: Date,
   ): Promise<boolean> {
-    const record = this.#jobs.get(identityKey(identity));
-    if (record?.status !== "processing" || record.processingToken !== processingToken) return false;
-    this.#jobs.set(identityKey(identity), {
-      ...record,
-      status: "ready",
-      sourceCapability: undefined,
-      processingToken: undefined,
-      leaseExpiresAt: undefined,
-      heartbeatAt: undefined,
-      masterKey: completion.masterKey,
-      masterWidth: completion.width,
-      masterHeight: completion.height,
-      masterFormat: completion.format,
-      objectEtag: completion.objectEtag,
-      failureCode: undefined,
+    return this.#withSourceLock(identity.spaceId, identity.sourceId, async () => {
+      const record = this.#jobs.get(identityKey(identity));
+      if (record?.status !== "processing" || record.processingToken !== processingToken)
+        return false;
+      this.#jobs.set(identityKey(identity), {
+        ...record,
+        status: "ready",
+        sourceCapability: undefined,
+        processingToken: undefined,
+        leaseExpiresAt: undefined,
+        heartbeatAt: undefined,
+        masterKey: completion.masterKey,
+        masterWidth: completion.width,
+        masterHeight: completion.height,
+        masterFormat: completion.format,
+        objectEtag: completion.objectEtag,
+        failureCode: undefined,
+      });
+      return true;
     });
-    return true;
   }
 
   async fail(
@@ -389,11 +414,24 @@ export class InMemoryJobStore implements JobStore {
       .map((record) => record.kind);
   }
 
-  async deleteSource(spaceId: string, sourceId: string): Promise<void> {
-    for (const [key, record] of this.#jobs) {
-      if (record.spaceId === spaceId && record.sourceId === sourceId) this.#jobs.delete(key);
-    }
+  async purgeSource(
+    spaceId: string,
+    sourceId: string,
+    cleanup: () => Promise<void>,
+  ): Promise<void> {
+    await this.#withSourceLock(spaceId, sourceId, async () => {
+      for (const [key, record] of this.#jobs) {
+        if (record.spaceId === spaceId && record.sourceId === sourceId) this.#jobs.delete(key);
+      }
+      await cleanup();
+    });
   }
+}
+
+async function lockSource(client: PoolClient, spaceId: string, sourceId: string): Promise<void> {
+  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+    `${spaceId}\u0000${sourceId}`,
+  ]);
 }
 
 export class PostgresJobStore implements JobStore {
@@ -405,6 +443,7 @@ export class PostgresJobStore implements JobStore {
 
   async submit(input: SubmitJobInput, now: Date): Promise<JobRecord> {
     return transaction(this.#pool, async (client) => {
+      await lockSource(client, input.spaceId, input.sourceId);
       const deadline = retryDeadline(input, now);
       const inserted = await client.query<JobRow>(
         `insert into rendition_jobs
@@ -505,27 +544,30 @@ export class PostgresJobStore implements JobStore {
     completion: MasterCompletion,
     now: Date,
   ): Promise<boolean> {
-    const result = await this.#pool.query(
-      `update rendition_jobs set status = 'ready', source_capability = null,
+    return transaction(this.#pool, async (client) => {
+      await lockSource(client, identity.spaceId, identity.sourceId);
+      const result = await client.query(
+        `update rendition_jobs set status = 'ready', source_capability = null,
         processing_token = null, lease_expires_at = null, heartbeat_at = null,
         master_key = $5, master_width = $6, master_height = $7, master_format = $8,
         object_etag = $9, failure_code = null, updated_at = $10
        where space_id = $1 and source_id = $2 and kind = $3
          and status = 'processing' and processing_token = $4`,
-      [
-        identity.spaceId,
-        identity.sourceId,
-        identity.kind,
-        processingToken,
-        completion.masterKey,
-        completion.width,
-        completion.height,
-        completion.format,
-        completion.objectEtag,
-        now,
-      ],
-    );
-    return result.rowCount === 1;
+        [
+          identity.spaceId,
+          identity.sourceId,
+          identity.kind,
+          processingToken,
+          completion.masterKey,
+          completion.width,
+          completion.height,
+          completion.format,
+          completion.objectEtag,
+          now,
+        ],
+      );
+      return result.rowCount === 1;
+    });
   }
 
   async fail(
@@ -605,10 +647,18 @@ export class PostgresJobStore implements JobStore {
     return result.rows.map((row) => row.kind);
   }
 
-  async deleteSource(spaceId: string, sourceId: string): Promise<void> {
-    await this.#pool.query(`delete from rendition_jobs where space_id = $1 and source_id = $2`, [
-      spaceId,
-      sourceId,
-    ]);
+  async purgeSource(
+    spaceId: string,
+    sourceId: string,
+    cleanup: () => Promise<void>,
+  ): Promise<void> {
+    await transaction(this.#pool, async (client) => {
+      await lockSource(client, spaceId, sourceId);
+      await client.query(`delete from rendition_jobs where space_id = $1 and source_id = $2`, [
+        spaceId,
+        sourceId,
+      ]);
+      await cleanup();
+    });
   }
 }

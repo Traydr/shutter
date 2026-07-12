@@ -103,4 +103,38 @@ describe("rendition job store", () => {
       failureCode: "source_expired",
     });
   });
+
+  it("serializes racing submission and completion before purge cleanup", async () => {
+    const store = new InMemoryJobStore();
+    const input = {
+      ...identity,
+      sourceCapability: "opaque-capability",
+      capabilityExpiresAt: new Date(start.getTime() + 86_400_000),
+    };
+    await Promise.all([
+      store.submit(input, start),
+      store.purgeSource(identity.spaceId, identity.sourceId, async () => {}),
+    ]);
+    expect(await store.get(identity)).toBeUndefined();
+
+    await store.submit(input, start);
+    const claim = await store.claim("video", start);
+    if (claim === undefined) throw new Error("expected claim");
+    await Promise.all([
+      store.complete(
+        identity,
+        claim.processingToken,
+        {
+          masterKey: "masters/v1/test.webp",
+          width: 1920,
+          height: 1080,
+          format: "webp",
+          objectEtag: "etag",
+        },
+        start,
+      ),
+      store.purgeSource(identity.spaceId, identity.sourceId, async () => {}),
+    ]);
+    expect(await store.get(identity)).toBeUndefined();
+  });
 });

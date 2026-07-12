@@ -18,9 +18,9 @@ const repository = github("Traydr/shutter");
 const workspaceWatchPatterns = ["/package.json", "/pnpm-lock.yaml", "/pnpm-workspace.yaml"];
 
 export default defineRailway(() => {
-  // Railway IaC 3.5.2 cannot apply ctx.shared references: the CLI emits a
-  // shared-variable shape rejected by the current patch schema. These links
-  // already exist remotely, so preserve them without materializing secrets.
+  // These preserved values are the S3-compatible credentials for the same
+  // Cloudflare R2 `shutter-renditions` bucket bound natively to Edge. Keep the
+  // values identical across Control, imgproxy, and both Executors.
   const s3Env = {
     S3_ACCESS_KEY_ID: preserve(),
     S3_BUCKET: preserve(),
@@ -39,7 +39,7 @@ export default defineRailway(() => {
     networking: { privateNetworkEndpoint: "shutter-imgproxy" },
     env: {
       IMGPROXY_ALLOWED_SOURCES:
-        "https://8w0z32yftd.ufs.sh/f/,https://rrsku8h9ue.ufs.sh/f/,https://t3.storageapi.dev/,https://pane-view.traydr.dev/",
+        "https://8w0z32yftd.ufs.sh/f/,https://rrsku8h9ue.ufs.sh/f/,https://t3.storageapi.dev/,https://pane-view.traydr.dev/,https://d786e753d574eb02fb154ecf8015eb86.r2.cloudflarestorage.com/",
       IMGPROXY_ALLOW_LINK_LOCAL_SOURCE_ADDRESSES: "false",
       IMGPROXY_ALLOW_LOOPBACK_SOURCE_ADDRESSES: "false",
       IMGPROXY_ALLOW_PRIVATE_SOURCE_ADDRESSES: "false",
@@ -92,6 +92,8 @@ export default defineRailway(() => {
     domains: [{ domain: "shutter-control.traydr.dev", port: nodePort }],
     env: {
       CAPABILITY_KEYS: preserve(),
+      CLOUDFLARE_CACHE_PURGE_TOKEN: preserve(),
+      CLOUDFLARE_ZONE_ID: preserve(),
       DATABASE_URL: Jobs.env.DATABASE_URL,
       IMGPROXY_BASE_URL: `http://\${{Shutter-Imgproxy.RAILWAY_PRIVATE_DOMAIN}}:${imgproxyPort}`,
       IMGPROXY_KEY: preserve(),

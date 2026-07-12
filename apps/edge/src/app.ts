@@ -2,7 +2,9 @@ import {
   buildCanonicalCacheUrl,
   buildR2CacheKey,
   buildSourceCacheTag,
+  emitOperationalEvent,
   normalizeRenditionQuery,
+  operationalEvent,
   ProtocolError,
   type RenditionCacheIdentity,
   verifySourceCapability,
@@ -16,6 +18,25 @@ const PUBLIC_EDGE_TTL_SECONDS = 2_592_000;
 
 type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
 let keyRegistryCache: { raw: string; registry: KeyRegistry } | undefined;
+
+async function emitRenditionEvent(
+  identity: RenditionCacheIdentity,
+  cacheOutcome: "edge-hit" | "r2-hit" | "origin",
+): Promise<void> {
+  emitOperationalEvent(
+    "info",
+    await operationalEvent({
+      event: "edge.rendition",
+      spaceId: identity.spaceId,
+      sourceId: identity.sourceId,
+      fields: {
+        routeClass: identity.routeClass,
+        cacheOutcome,
+        ...(identity.input.type === "master" ? { kind: identity.input.kind } : {}),
+      },
+    }),
+  );
+}
 
 function decodeBase64Url(value: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) {
@@ -77,7 +98,11 @@ function protocolFailure(error: unknown): Response {
       { status, headers: { "cache-control": "private, no-store" } },
     );
   }
-  console.error({ error: error instanceof Error ? error.message : "unknown" }, "edge failure");
+  emitOperationalEvent("error", {
+    event: "edge.failure",
+    outcome: "failed",
+    failureCode: "service_unavailable",
+  });
   return Response.json(
     { error: { code: "service_unavailable" } },
     { status: 503, headers: { "cache-control": "private, no-store" } },
@@ -89,6 +114,15 @@ function notFound(): Response {
     { error: { code: "not_found" } },
     { status: 404, headers: { "cache-control": "private, no-store" } },
   );
+}
+
+function canonicalRedirect(requestUrl: string, width: number, quality: number): Response {
+  const canonical = new URL(requestUrl);
+  canonical.search = `?w=${width}&q=${quality}`;
+  return new Response(null, {
+    status: 308,
+    headers: { "cache-control": "private, no-store", location: canonical.toString() },
+  });
 }
 
 function privateBrowserResponse(response: Response, cacheStatus: string): Response {
@@ -145,14 +179,41 @@ async function fetchOrigin(
   return response;
 }
 
+async function fetchMasterOrigin(
+  bindings: CloudflareBindings,
+  identity: RenditionCacheIdentity,
+): Promise<Response> {
+  if (identity.input.type !== "master") throw new Error("master input required");
+  const response = await fetch(new URL("/internal/v1/master-rendition", bindings.ORIGIN_BASE_URL), {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      spaceId: identity.spaceId,
+      sourceId: identity.sourceId,
+      kind: identity.input.kind,
+      w: identity.width,
+      q: identity.quality,
+    }),
+    redirect: "manual",
+  });
+  if (!response.ok) throw new Error(`origin returned ${response.status}`);
+  return response;
+}
+
 async function populateCaches(
   bindings: CloudflareBindings,
   identity: RenditionCacheIdentity,
   cacheTag: string,
-  sourceUrl: string,
+  sourceUrl?: string,
 ): Promise<Response> {
   const key = await buildR2CacheKey(identity);
-  const origin = await fetchOrigin(bindings, key, sourceUrl, identity.width, identity.quality);
+  const origin =
+    sourceUrl === undefined
+      ? await fetchMasterOrigin(bindings, identity)
+      : await fetchOrigin(bindings, key, sourceUrl, identity.width, identity.quality);
   const bytes = await origin.arrayBuffer();
   const contentType = origin.headers.get("content-type") ?? "application/octet-stream";
   await bindings.RENDITION_STORE.put(key, bytes, {
@@ -170,14 +231,16 @@ async function privateRendition(
   const canonicalUrl = await buildCanonicalCacheUrl(identity);
   const cacheKey = new Request(canonicalUrl);
   const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) return privateBrowserResponse(cached, "edge-hit");
+  if (cached !== undefined) {
+    await emitRenditionEvent(identity, "edge-hit");
+    return privateBrowserResponse(cached, "edge-hit");
+  }
 
   const key = await buildR2CacheKey(identity);
   const stored = await readR2Response(bindings.RENDITION_STORE, key);
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
   let response = stored;
   if (response === undefined) {
-    if (sourceUrl === undefined) throw new Error("master rendition is absent from R2");
     response = await populateCaches(bindings, identity, cacheTag, sourceUrl);
   }
   const internalHeaders = new Headers(response.headers);
@@ -185,7 +248,9 @@ async function privateRendition(
   internalHeaders.set("cache-tag", cacheTag);
   const internalResponse = new Response(await response.arrayBuffer(), { headers: internalHeaders });
   await caches.default.put(cacheKey, internalResponse.clone());
-  return privateBrowserResponse(internalResponse, stored === undefined ? "origin" : "r2-hit");
+  const outcome = stored === undefined ? "origin" : "r2-hit";
+  await emitRenditionEvent(identity, outcome);
+  return privateBrowserResponse(internalResponse, outcome);
 }
 
 async function publicLocatedRendition(
@@ -197,13 +262,17 @@ async function publicLocatedRendition(
   const cacheKey = new Request(canonicalUrl);
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
   const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  if (cached !== undefined) {
+    await emitRenditionEvent(identity, "edge-hit");
+    return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  }
 
   const key = await buildR2CacheKey(identity);
   const stored = await readR2Response(bindings.RENDITION_STORE, key);
   if (stored !== undefined) {
     const response = publicBrowserResponse(stored, "r2-hit", cacheTag);
     await caches.default.put(cacheKey, response.clone());
+    await emitRenditionEvent(identity, "r2-hit");
     return response;
   }
 
@@ -224,6 +293,7 @@ async function publicLocatedRendition(
     cacheTag,
   );
   await caches.default.put(cacheKey, response.clone());
+  await emitRenditionEvent(identity, "origin");
   return response;
 }
 
@@ -263,13 +333,17 @@ async function publicResolverRendition(
   const cacheKey = new Request(canonicalUrl);
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
   const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  if (cached !== undefined) {
+    await emitRenditionEvent(identity, "edge-hit");
+    return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  }
 
   const key = await buildR2CacheKey(identity);
   const stored = await readR2Response(bindings.RENDITION_STORE, key);
   if (stored !== undefined) {
     const response = publicBrowserResponse(stored, "r2-hit", cacheTag);
     await caches.default.put(cacheKey, response.clone());
+    await emitRenditionEvent(identity, "r2-hit");
     return response;
   }
 
@@ -279,6 +353,30 @@ async function publicResolverRendition(
     cacheTag,
   );
   await caches.default.put(cacheKey, response.clone());
+  await emitRenditionEvent(identity, "origin");
+  return response;
+}
+
+async function publicMasterRendition(
+  bindings: CloudflareBindings,
+  identity: RenditionCacheIdentity,
+): Promise<Response> {
+  const canonicalUrl = await buildCanonicalCacheUrl(identity);
+  const cacheKey = new Request(canonicalUrl);
+  const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
+  const cached = await caches.default.match(cacheKey);
+  if (cached !== undefined) {
+    await emitRenditionEvent(identity, "edge-hit");
+    return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  }
+  const stored = await readR2Response(bindings.RENDITION_STORE, await buildR2CacheKey(identity));
+  const response = publicBrowserResponse(
+    stored ?? (await populateCaches(bindings, identity, cacheTag)),
+    stored === undefined ? "origin" : "r2-hit",
+    cacheTag,
+  );
+  await caches.default.put(cacheKey, response.clone());
+  await emitRenditionEvent(identity, stored === undefined ? "origin" : "r2-hit");
   return response;
 }
 
@@ -345,11 +443,36 @@ app.get("/v1/private/:spaceId/master/:capability", async (context) => {
       keys,
       now: Math.floor(Date.now() / 1000),
     });
+    if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
     return await privateRendition(context.env, {
       routeClass: "private",
       spaceId,
       sourceId: claims.source_id,
       input: { type: "master", kind: claims.kind },
+      width: query.width,
+      quality: query.quality,
+    });
+  } catch (error) {
+    return protocolFailure(error);
+  }
+});
+
+app.get("/v1/public/:spaceId/master/:kind/:sourceId", async (context) => {
+  try {
+    const spaceId = context.req.param("spaceId");
+    const policy = getSpacePolicy(spaceId);
+    if (policy === undefined || policy.routeClass !== "public") return notFound();
+    const kind = context.req.param("kind");
+    if (kind !== "video" && kind !== "pdf") return notFound();
+    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    if (!query.isCanonical) {
+      return canonicalRedirect(context.req.url, query.width, query.quality);
+    }
+    return await publicMasterRendition(context.env, {
+      routeClass: "public",
+      spaceId,
+      sourceId: context.req.param("sourceId"),
+      input: { type: "master", kind },
       width: query.width,
       quality: query.quality,
     });
@@ -372,6 +495,7 @@ app.get("/v1/private/:spaceId/source/:capability", async (context) => {
       now: Math.floor(Date.now() / 1000),
       allowedSourceOrigins: policy.allowedSourceOrigins,
     });
+    if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
     return await privateRendition(
       context.env,
       {
@@ -395,6 +519,7 @@ app.get("/v1/public/:spaceId/located/:sourceId/:capability", async (context) => 
     const policy = getSpacePolicy(spaceId);
     if (policy === undefined || policy.routeClass !== "public") return notFound();
     const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
     return await publicLocatedRendition(
       context.env,
       {

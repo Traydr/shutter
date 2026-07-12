@@ -1,3 +1,4 @@
+import { emitOperationalEvent } from "@shutter/protocol";
 import { Hono } from "hono";
 import type { PdfExecutorConfig } from "./run-once.js";
 import { runPdfOnce } from "./run-once.js";
@@ -22,11 +23,13 @@ export function createPdfExecutorApp(
     running = true;
     try {
       return context.json({ result: await run(config) });
-    } catch (error) {
-      console.error(
-        { error: error instanceof Error ? error.message : "unknown" },
-        "PDF executor invocation failed",
-      );
+    } catch {
+      emitOperationalEvent("error", {
+        event: "executor.failed",
+        kind: "pdf",
+        outcome: "failed",
+        failureCode: "service_unavailable",
+      });
       return context.json({ error: { code: "execution_failed" } }, 500);
     } finally {
       running = false;

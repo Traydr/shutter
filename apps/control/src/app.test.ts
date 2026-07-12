@@ -1,3 +1,4 @@
+import { buildMasterPreviewKey } from "@shutter/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { app, createControlApp } from "./app.js";
 
@@ -91,5 +92,65 @@ describe("control app", () => {
 
     expect(missingSource.status).toBe(400);
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("authenticates and strictly validates master rendition requests", async () => {
+    const presignGet = vi.fn(async () => "https://r2.example.test/signed-master?signature=secret");
+    const fetch = vi.fn(async () => new Response("master", { status: 200 }));
+    const control = createControlApp({
+      originAuthToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch,
+      masterStore: { presignGet },
+    });
+    const url = "http://shutter.test/internal/v1/master-rendition";
+    const body = JSON.stringify({
+      spaceId: "pane-view",
+      sourceId: "source/one",
+      kind: "video",
+      w: 640,
+      q: 75,
+    });
+
+    expect((await control.request(url, { method: "POST" })).status).toBe(401);
+    expect(
+      (
+        await control.request(url, {
+          method: "POST",
+          headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+          body: JSON.stringify({ ...JSON.parse(body), key: "masters/caller-selected" }),
+        })
+      ).status,
+    ).toBe(400);
+
+    const response = await control.request(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body,
+    });
+    expect(response.status).toBe(200);
+    expect(presignGet).toHaveBeenCalledWith(
+      await buildMasterPreviewKey("pane-view", "source/one", "video"),
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it("does not expose a presigned master URL when imgproxy fails", async () => {
+    const signed = "https://r2.example.test/master?X-Amz-Signature=do-not-log";
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const control = createControlApp({
+      originAuthToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch: vi.fn(async () => new Response(null, { status: 502 })),
+      masterStore: { presignGet: async () => signed },
+    });
+    const response = await control.request("http://shutter.test/internal/v1/master-rendition", {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ spaceId: "pane-view", sourceId: "one", kind: "pdf", w: 640, q: 75 }),
+    });
+    expect(response.status).toBe(502);
+    expect(JSON.stringify(error.mock.calls)).not.toContain(signed);
+    error.mockRestore();
   });
 });
