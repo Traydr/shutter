@@ -1,6 +1,10 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { S3Client } from "@aws-sdk/client-s3";
-import { buildMasterPreviewKey, decodeCapabilityKey, emitOperationalEvent } from "@shutter/protocol";
+import {
+  buildMasterPreviewKey,
+  decodeCapabilityKey,
+  emitOperationalEvent,
+} from "@shutter/protocol";
 import { Hono } from "hono";
 import { Pool } from "pg";
 import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
