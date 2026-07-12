@@ -38,9 +38,12 @@ async function emitRenditionEvent(
   );
 }
 
-function decodeBase64Url(value: string): Uint8Array {
+function decodeCapabilityKey(value: string): Uint8Array {
+  if (/^[0-9a-fA-F]{64}$/u.test(value)) {
+    return Uint8Array.from(value.match(/.{2}/gu) ?? [], (byte) => Number.parseInt(byte, 16));
+  }
   if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) {
-    throw new Error("capability key must be canonical unpadded base64url");
+    throw new Error("capability key must be 64-character hex or canonical unpadded base64url");
   }
   const padded = value
     .replace(/-/gu, "+")
@@ -72,7 +75,7 @@ function parseKeyRegistry(value: string): KeyRegistry {
       if (typeof rawKey !== "string") {
         throw new Error(`CAPABILITY_KEYS.${spaceId}.${kid} must be a string`);
       }
-      const key = decodeBase64Url(rawKey);
+      const key = decodeCapabilityKey(rawKey);
       if (key.byteLength !== 32) {
         throw new Error(`CAPABILITY_KEYS.${spaceId}.${kid} must decode to 32 bytes`);
       }
