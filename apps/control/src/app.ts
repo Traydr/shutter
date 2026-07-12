@@ -1,6 +1,10 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { S3Client } from "@aws-sdk/client-s3";
-import { buildMasterPreviewKey, emitOperationalEvent } from "@shutter/protocol";
+import {
+  buildMasterPreviewKey,
+  decodeCapabilityKey,
+  emitOperationalEvent,
+} from "@shutter/protocol";
 import { Hono } from "hono";
 import { Pool } from "pg";
 import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
@@ -94,6 +98,10 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
 
     try {
       const request = buildImgproxyRequest({ sourceUrl: source, width, quality }, imgproxy);
+      emitOperationalEvent("info", {
+        event: "control.rendition.delegated",
+        outcome: "accepted",
+      });
       const response = await runtime.fetch(request.url, {
         headers: request.headers,
         redirect: "error",
@@ -108,6 +116,10 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
           "cache-control": "private, no-store",
         });
       }
+      emitOperationalEvent("info", {
+        event: "control.rendition.delegated",
+        outcome: "ready",
+      });
       const headers = new Headers({
         "cache-control": "private, no-store",
         "content-type": response.headers.get("content-type") ?? "image/webp",
@@ -173,11 +185,21 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
       const imgproxy = runtime.imgproxyConfig();
       if (imgproxy === undefined) throw new Error("imgproxy unavailable");
       const request = buildImgproxyRequest({ sourceUrl, width, quality }, imgproxy);
+      emitOperationalEvent("info", {
+        event: "control.rendition.delegated",
+        kind: value.kind,
+        outcome: "accepted",
+      });
       const response = await runtime.fetch(request.url, {
         headers: request.headers,
         redirect: "error",
       });
       if (!response.ok || response.body === null) throw new Error("rendition failed");
+      emitOperationalEvent("info", {
+        event: "control.rendition.delegated",
+        kind: value.kind,
+        outcome: "ready",
+      });
       return new Response(response.body, {
         headers: {
           "cache-control": "private, no-store",
@@ -198,10 +220,6 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
   });
 
   return control;
-}
-
-function decodeBase64Url(value: string): Uint8Array {
-  return Uint8Array.from(Buffer.from(value, "base64url"));
 }
 
 function parseStringRegistry(value: string | undefined): Map<string, readonly string[]> {
@@ -227,7 +245,7 @@ function parseCapabilityKeys(
   return new Map(
     Object.entries(parsed).map(([spaceId, keys]) => [
       spaceId,
-      new Map(Object.entries(keys).map(([kid, key]) => [kid, decodeBase64Url(key)])),
+      new Map(Object.entries(keys).map(([kid, key]) => [kid, decodeCapabilityKey(key)])),
     ]),
   );
 }
@@ -240,12 +258,22 @@ async function dispatchExecutor(kind: "video" | "pdf"): Promise<void> {
   if (baseUrl === undefined || token === undefined) {
     throw new Error(`${kind} executor dispatch is not configured`);
   }
+  emitOperationalEvent("info", {
+    event: "control.executor.delegated",
+    kind,
+    outcome: "accepted",
+  });
   const response = await globalThis.fetch(new URL("/internal/v1/run-once", baseUrl), {
     method: "POST",
     headers: { authorization: `Bearer ${token}` },
     signal: AbortSignal.timeout(EXECUTOR_WAKE_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`${kind} executor wake failed with ${response.status}`);
+  emitOperationalEvent("info", {
+    event: "control.executor.delegated",
+    kind,
+    outcome: "ready",
+  });
 }
 
 const databaseUrl = process.env.DATABASE_URL;
