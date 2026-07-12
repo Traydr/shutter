@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { S3Client } from "@aws-sdk/client-s3";
-import { buildMasterPreviewKey } from "@shutter/protocol";
+import { buildMasterPreviewKey, emitOperationalEvent } from "@shutter/protocol";
 import { Hono } from "hono";
 import { Pool } from "pg";
 import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
@@ -99,7 +99,11 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
         redirect: "error",
       });
       if (!response.ok || response.body === null) {
-        console.error({ status: response.status }, "imgproxy rendition failed");
+        emitOperationalEvent("error", {
+          event: "control.rendition.failed",
+          outcome: "failed",
+          failureCode: "service_unavailable",
+        });
         return context.json({ error: { code: "rendition_failed" } }, 502, {
           "cache-control": "private, no-store",
         });
@@ -110,11 +114,12 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
         "x-shutter-rendition-key": key,
       });
       return new Response(response.body, { status: 200, headers });
-    } catch (error) {
-      console.error(
-        { error: error instanceof Error ? error.message : "unknown" },
-        "imgproxy request failed",
-      );
+    } catch {
+      emitOperationalEvent("error", {
+        event: "control.rendition.failed",
+        outcome: "failed",
+        failureCode: "service_unavailable",
+      });
       return context.json({ error: { code: "rendition_failed" } }, 502, {
         "cache-control": "private, no-store",
       });
@@ -180,7 +185,12 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
         },
       });
     } catch {
-      console.error({ kind: value.kind }, "master rendition failed");
+      emitOperationalEvent("error", {
+        event: "control.rendition.failed",
+        kind: value.kind as "video" | "pdf",
+        outcome: "failed",
+        failureCode: "service_unavailable",
+      });
       return context.json({ error: { code: "rendition_failed" } }, 502, {
         "cache-control": "private, no-store",
       });

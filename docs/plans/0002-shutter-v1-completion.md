@@ -78,6 +78,10 @@ same empty state.
 
 ## Milestone 4: recovery and hardening
 
+Status: implemented. Stable structured events use hashed Source ID and
+processing-token correlation, and the offline/live verification commands and
+operator launch/rollback runbook are available without changing v1 responses.
+
 Add the recovery runtime, structured redacted logs, gallery-shaped traffic
 tests, crash and stale-token coverage, and production end-to-end checks for
 Worker, Control, imgproxy, Postgres, R2, and both Executors.

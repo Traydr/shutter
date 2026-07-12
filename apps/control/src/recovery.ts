@@ -1,4 +1,4 @@
-import type { RenditionKind } from "@shutter/protocol";
+import { emitOperationalEvent, operationalEvent, type RenditionKind } from "@shutter/protocol";
 import type { JobStore } from "./job-store.js";
 
 export const RECOVERY_INTERVAL_MS = 5 * 60 * 1_000;
@@ -27,11 +27,13 @@ async function dispatchKind(
     try {
       await dispatch(kind);
       dispatched += 1;
-    } catch (error) {
-      console.error(
-        { kind, error: error instanceof Error ? error.message : "unknown" },
-        "executor recovery dispatch failed",
-      );
+    } catch {
+      emitOperationalEvent("error", {
+        event: "control.dispatch.failed",
+        kind,
+        outcome: "failed",
+        failureCode: "service_unavailable",
+      });
       return { dispatched, failed: 1 };
     }
   }
@@ -62,7 +64,15 @@ export async function runRecoverySweep(runtime: RecoveryRuntime): Promise<Recove
     result.dispatchedJobs > 0 ||
     result.dispatchFailures > 0
   ) {
-    console.info(result, "job recovery sweep completed");
+    emitOperationalEvent(
+      "info",
+      await operationalEvent({
+        event: "control.recovery.completed",
+        fields: {
+          count: result.dispatchedJobs + result.recoveredLeases + result.expiredPendingJobs,
+        },
+      }),
+    );
   }
   return result;
 }
@@ -82,11 +92,12 @@ export function startRecoverySweep(
   const sweep = async () => {
     try {
       await runRecoverySweep(runtime);
-    } catch (error) {
-      console.error(
-        { error: error instanceof Error ? error.message : "unknown" },
-        "job recovery sweep failed",
-      );
+    } catch {
+      emitOperationalEvent("error", {
+        event: "control.recovery.failed",
+        outcome: "failed",
+        failureCode: "service_unavailable",
+      });
     } finally {
       schedule();
     }

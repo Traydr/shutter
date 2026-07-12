@@ -2,7 +2,9 @@ import {
   buildCanonicalCacheUrl,
   buildR2CacheKey,
   buildSourceCacheTag,
+  emitOperationalEvent,
   normalizeRenditionQuery,
+  operationalEvent,
   ProtocolError,
   type RenditionCacheIdentity,
   verifySourceCapability,
@@ -16,6 +18,25 @@ const PUBLIC_EDGE_TTL_SECONDS = 2_592_000;
 
 type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
 let keyRegistryCache: { raw: string; registry: KeyRegistry } | undefined;
+
+async function emitRenditionEvent(
+  identity: RenditionCacheIdentity,
+  cacheOutcome: "edge-hit" | "r2-hit" | "origin",
+): Promise<void> {
+  emitOperationalEvent(
+    "info",
+    await operationalEvent({
+      event: "edge.rendition",
+      spaceId: identity.spaceId,
+      sourceId: identity.sourceId,
+      fields: {
+        routeClass: identity.routeClass,
+        cacheOutcome,
+        ...(identity.input.type === "master" ? { kind: identity.input.kind } : {}),
+      },
+    }),
+  );
+}
 
 function decodeBase64Url(value: string): Uint8Array {
   if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) {
@@ -77,7 +98,11 @@ function protocolFailure(error: unknown): Response {
       { status, headers: { "cache-control": "private, no-store" } },
     );
   }
-  console.error({ error: error instanceof Error ? error.message : "unknown" }, "edge failure");
+  emitOperationalEvent("error", {
+    event: "edge.failure",
+    outcome: "failed",
+    failureCode: "service_unavailable",
+  });
   return Response.json(
     { error: { code: "service_unavailable" } },
     { status: 503, headers: { "cache-control": "private, no-store" } },
@@ -206,7 +231,10 @@ async function privateRendition(
   const canonicalUrl = await buildCanonicalCacheUrl(identity);
   const cacheKey = new Request(canonicalUrl);
   const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) return privateBrowserResponse(cached, "edge-hit");
+  if (cached !== undefined) {
+    await emitRenditionEvent(identity, "edge-hit");
+    return privateBrowserResponse(cached, "edge-hit");
+  }
 
   const key = await buildR2CacheKey(identity);
   const stored = await readR2Response(bindings.RENDITION_STORE, key);
@@ -220,7 +248,9 @@ async function privateRendition(
   internalHeaders.set("cache-tag", cacheTag);
   const internalResponse = new Response(await response.arrayBuffer(), { headers: internalHeaders });
   await caches.default.put(cacheKey, internalResponse.clone());
-  return privateBrowserResponse(internalResponse, stored === undefined ? "origin" : "r2-hit");
+  const outcome = stored === undefined ? "origin" : "r2-hit";
+  await emitRenditionEvent(identity, outcome);
+  return privateBrowserResponse(internalResponse, outcome);
 }
 
 async function publicLocatedRendition(
@@ -232,13 +262,17 @@ async function publicLocatedRendition(
   const cacheKey = new Request(canonicalUrl);
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
   const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  if (cached !== undefined) {
+    await emitRenditionEvent(identity, "edge-hit");
+    return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  }
 
   const key = await buildR2CacheKey(identity);
   const stored = await readR2Response(bindings.RENDITION_STORE, key);
   if (stored !== undefined) {
     const response = publicBrowserResponse(stored, "r2-hit", cacheTag);
     await caches.default.put(cacheKey, response.clone());
+    await emitRenditionEvent(identity, "r2-hit");
     return response;
   }
 
@@ -259,6 +293,7 @@ async function publicLocatedRendition(
     cacheTag,
   );
   await caches.default.put(cacheKey, response.clone());
+  await emitRenditionEvent(identity, "origin");
   return response;
 }
 
@@ -298,13 +333,17 @@ async function publicResolverRendition(
   const cacheKey = new Request(canonicalUrl);
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
   const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  if (cached !== undefined) {
+    await emitRenditionEvent(identity, "edge-hit");
+    return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  }
 
   const key = await buildR2CacheKey(identity);
   const stored = await readR2Response(bindings.RENDITION_STORE, key);
   if (stored !== undefined) {
     const response = publicBrowserResponse(stored, "r2-hit", cacheTag);
     await caches.default.put(cacheKey, response.clone());
+    await emitRenditionEvent(identity, "r2-hit");
     return response;
   }
 
@@ -314,6 +353,7 @@ async function publicResolverRendition(
     cacheTag,
   );
   await caches.default.put(cacheKey, response.clone());
+  await emitRenditionEvent(identity, "origin");
   return response;
 }
 
@@ -325,7 +365,10 @@ async function publicMasterRendition(
   const cacheKey = new Request(canonicalUrl);
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
   const cached = await caches.default.match(cacheKey);
-  if (cached !== undefined) return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  if (cached !== undefined) {
+    await emitRenditionEvent(identity, "edge-hit");
+    return publicBrowserResponse(cached, "edge-hit", cacheTag);
+  }
   const stored = await readR2Response(bindings.RENDITION_STORE, await buildR2CacheKey(identity));
   const response = publicBrowserResponse(
     stored ?? (await populateCaches(bindings, identity, cacheTag)),
@@ -333,6 +376,7 @@ async function publicMasterRendition(
     cacheTag,
   );
   await caches.default.put(cacheKey, response.clone());
+  await emitRenditionEvent(identity, stored === undefined ? "origin" : "r2-hit");
   return response;
 }
 

@@ -137,12 +137,12 @@ State that the operator owns cutover timing.
 
 ## Done criteria
 
-- [ ] Every critical path emits a stable redacted event.
-- [ ] Tests prove forbidden sensitive fields are absent.
-- [ ] Offline end-to-end verification is repeatable.
-- [ ] Operator runbook covers launch signals and rollback checks.
-- [ ] No vendor-specific telemetry dependency was added.
-- [ ] `pnpm check` exits 0.
+- [x] Every critical path emits a stable redacted event.
+- [x] Tests prove forbidden sensitive fields are absent.
+- [x] Offline end-to-end verification is repeatable.
+- [x] Operator runbook covers launch signals and rollback checks.
+- [x] No vendor-specific telemetry dependency was added.
+- [x] `pnpm check` exits 0.
 
 ## STOP conditions
 

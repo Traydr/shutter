@@ -266,6 +266,35 @@ describe("edge app", () => {
     expect(new TextDecoder().decode(await response.arrayBuffer())).toBe("public-rendition");
   });
 
+  it("emits a redacted cache-outcome event from workerd", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const identity = {
+      routeClass: "public" as const,
+      spaceId: "ernesta",
+      sourceId: "raw-observability-source",
+      input: { type: "master" as const, kind: "video" as const },
+      width: 640,
+      quality: 75,
+    };
+    await env.RENDITION_STORE.put(await buildR2CacheKey(identity), "observed", {
+      httpMetadata: { contentType: "image/webp" },
+    });
+    const response = await SELF.fetch(
+      "https://edge.shutter.test/v1/public/ernesta/master/video/raw-observability-source?w=640&q=75",
+    );
+    expect(response.status).toBe(200);
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "edge.rendition",
+        routeClass: "public",
+        cacheOutcome: "r2-hit",
+        kind: "video",
+      }),
+    );
+    expect(JSON.stringify(info.mock.calls)).not.toContain("raw-observability-source");
+    info.mockRestore();
+  });
+
   it("fails a public located-source miss closed before contacting the origin", async () => {
     const response = await SELF.fetch(
       "https://edge.shutter.test/v1/public/ernesta/located/missing/not-a-capability?w=640&q=75",

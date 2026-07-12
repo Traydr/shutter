@@ -118,6 +118,9 @@ importers:
       '@hono/node-server':
         specifier: 2.0.8
         version: 2.0.8(hono@4.12.28)
+      '@shutter/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       hono:
         specifier: 4.12.28
         version: 4.12.28
@@ -143,6 +146,9 @@ importers:
       '@hono/node-server':
         specifier: 2.0.8
         version: 2.0.8(hono@4.12.28)
+      '@shutter/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
       hono:
         specifier: 4.12.28
         version: 4.12.28
