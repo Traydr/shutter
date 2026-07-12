@@ -190,11 +190,14 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       return activeResponse(jobRepresentation(record), new URL(context.req.url).pathname);
     } catch (error) {
       if (error instanceof ProtocolError) return requestFailure(400, error.code);
-      emitOperationalEvent("error", {
+      const event = {
         event: "control.service.failed",
         outcome: "failed",
         failureCode: "service_unavailable",
-      });
+        errorName: error instanceof Error ? error.name : "NonErrorThrown",
+        errorMessage: error instanceof Error ? error.message : "unknown error",
+      } as const;
+      console.error(event);
       return requestFailure(503, "service_unavailable");
     }
   });

@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { InMemoryJobStore, jobRepresentation, MAX_ATTEMPTS } from "./job-store.js";
+import {
+  InMemoryJobStore,
+  jobRepresentation,
+  MAX_ATTEMPTS,
+  postgresSourceLockKey,
+} from "./job-store.js";
 
 const identity = { spaceId: "pane-view", sourceId: "source-1", kind: "video" as const };
 const start = new Date("2026-07-11T00:00:00Z");
 
 describe("rendition job store", () => {
+  it("builds PostgreSQL advisory-lock keys without forbidden NUL bytes or tuple collisions", () => {
+    expect(postgresSourceLockKey("a", "b\u0000c")).not.toContain("\u0000");
+    expect(postgresSourceLockKey("a", "b\u0000c")).not.toBe(postgresSourceLockKey("a\u0000b", "c"));
+  });
+
   it("converges duplicate submissions and rejects stale completion tokens", async () => {
     const store = new InMemoryJobStore();
     const input = {
