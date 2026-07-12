@@ -1,11 +1,11 @@
 import { emitOperationalEvent, operationalEvent, type RenditionKind } from "@shutter/protocol";
-import type { JobStore } from "./job-store.js";
+import type { RenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 
 export const RECOVERY_INTERVAL_MS = 5 * 60 * 1_000;
 export const RECOVERY_BATCH_SIZE = 100;
 
 export interface RecoveryRuntime {
-  store: JobStore;
+  lifecycle: RenditionJobLifecycle;
   now(): Date;
   dispatch(kind: RenditionKind): Promise<void>;
 }
@@ -42,19 +42,17 @@ async function dispatchKind(
 
 export async function runRecoverySweep(runtime: RecoveryRuntime): Promise<RecoveryResult> {
   const now = runtime.now();
-  const expiredPendingJobs = await runtime.store.expirePendingJobs(now);
-  const recoveredLeases = await runtime.store.recoverExpiredLeases(now);
-  const runnableKinds = await runtime.store.runnableJobKinds(now, RECOVERY_BATCH_SIZE);
+  const maintenance = await runtime.lifecycle.maintain(now, RECOVERY_BATCH_SIZE);
   const counts: Record<RenditionKind, number> = { video: 0, pdf: 0 };
-  for (const kind of runnableKinds) counts[kind] += 1;
+  for (const kind of maintenance.runnableKinds) counts[kind] += 1;
 
   const [video, pdf] = await Promise.all([
     dispatchKind("video", counts.video, runtime.dispatch),
     dispatchKind("pdf", counts.pdf, runtime.dispatch),
   ]);
   const result = {
-    expiredPendingJobs,
-    recoveredLeases,
+    expiredPendingJobs: maintenance.expiredPendingJobs,
+    recoveredLeases: maintenance.recoveredLeases,
     dispatchedJobs: video.dispatched + pdf.dispatched,
     dispatchFailures: video.failed + pdf.failed,
   };

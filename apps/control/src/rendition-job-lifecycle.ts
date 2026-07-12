@@ -19,6 +19,11 @@ export interface JobIdentity {
   kind: RenditionKind;
 }
 
+export interface SourceIdentity {
+  spaceId: string;
+  sourceId: string;
+}
+
 export interface SubmitJobInput extends JobIdentity {
   sourceCapability: string;
   capabilityExpiresAt: Date;
@@ -39,7 +44,7 @@ export interface MasterCompletion {
   objectEtag: string;
 }
 
-export interface JobRecord extends JobIdentity {
+interface JobRecord extends JobIdentity {
   status: JobStatus;
   sourceCapability?: string | undefined;
   executionCycle: number;
@@ -57,30 +62,60 @@ export interface JobRecord extends JobIdentity {
   failureCode?: JobFailureCode | undefined;
 }
 
-export interface JobStore {
-  submit(input: SubmitJobInput, now: Date): Promise<JobRecord>;
-  get(identity: JobIdentity): Promise<JobRecord | undefined>;
+export interface RenditionJobView extends JobIdentity {
+  status: JobStatus;
+  executionCycle: number;
+  attemptNumber: number;
+  representation: RenditionJobRepresentation;
+}
+
+export interface SubmissionResult {
+  disposition: "created" | "existing" | "reactivated";
+  job: RenditionJobView;
+}
+
+export type AttemptMutationResult = { outcome: "accepted" } | { outcome: "stale_attempt" };
+
+export type FailureResult =
+  | { outcome: "retry_scheduled" }
+  | { outcome: "terminal" }
+  | { outcome: "stale_attempt" };
+
+export interface MaintenanceResult {
+  expiredPendingJobs: number;
+  recoveredLeases: number;
+  runnableKinds: readonly RenditionKind[];
+}
+
+export interface RenditionJobLifecycle {
+  submit(input: SubmitJobInput, now: Date): Promise<SubmissionResult>;
+  read(identity: JobIdentity): Promise<RenditionJobView | undefined>;
   claim(kind: RenditionKind, now: Date): Promise<ClaimedJob | undefined>;
-  heartbeat(identity: JobIdentity, processingToken: string, now: Date): Promise<boolean>;
+  heartbeat(
+    identity: JobIdentity,
+    processingToken: string,
+    now: Date,
+  ): Promise<AttemptMutationResult>;
   complete(
     identity: JobIdentity,
     processingToken: string,
     completion: MasterCompletion,
     now: Date,
-  ): Promise<boolean>;
+  ): Promise<AttemptMutationResult>;
   fail(
     identity: JobIdentity,
     processingToken: string,
     failure: { retryable: boolean; code?: JobFailureCode },
     now: Date,
-  ): Promise<boolean>;
-  expirePendingJobs(now: Date): Promise<number>;
-  recoverExpiredLeases(now: Date): Promise<number>;
-  runnableJobKinds(now: Date, limit: number): Promise<readonly RenditionKind[]>;
-  purgeSource(spaceId: string, sourceId: string, cleanup: () => Promise<void>): Promise<void>;
+  ): Promise<FailureResult>;
+  maintain(now: Date, limit: number): Promise<MaintenanceResult>;
+  withInvalidatedSource<T>(
+    source: SourceIdentity,
+    whileExclusive: () => Promise<T>,
+  ): Promise<{ invalidatedJobs: number; value: T }>;
 }
 
-export function jobRepresentation(record: JobRecord): RenditionJobRepresentation {
+function jobRepresentation(record: JobRecord): RenditionJobRepresentation {
   if (record.status === "pending" || record.status === "processing") {
     return { status: record.status };
   }
@@ -103,6 +138,18 @@ export function jobRepresentation(record: JobRecord): RenditionJobRepresentation
       height: record.masterHeight,
       format: record.masterFormat,
     },
+  };
+}
+
+function jobView(record: JobRecord): RenditionJobView {
+  return {
+    spaceId: record.spaceId,
+    sourceId: record.sourceId,
+    kind: record.kind,
+    status: record.status,
+    executionCycle: record.executionCycle,
+    attemptNumber: record.attemptNumber,
+    representation: jobRepresentation(record),
   };
 }
 
@@ -171,263 +218,6 @@ function retryDeadline(input: SubmitJobInput, now: Date): Date {
   );
 }
 
-function identityKey(identity: JobIdentity): string {
-  return `${identity.spaceId}\u0000${identity.sourceId}\u0000${identity.kind}`;
-}
-
-export class InMemoryJobStore implements JobStore {
-  readonly #jobs = new Map<string, JobRecord>();
-  readonly #sourceLocks = new Map<string, Promise<void>>();
-
-  async #withSourceLock<T>(spaceId: string, sourceId: string, work: () => Promise<T>): Promise<T> {
-    const key = `${spaceId}\u0000${sourceId}`;
-    const previous = this.#sourceLocks.get(key) ?? Promise.resolve();
-    let release = () => {};
-    const current = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const queued = previous.then(() => current);
-    this.#sourceLocks.set(key, queued);
-    await previous;
-    try {
-      return await work();
-    } finally {
-      release();
-      if (this.#sourceLocks.get(key) === queued) this.#sourceLocks.delete(key);
-    }
-  }
-
-  async submit(input: SubmitJobInput, now: Date): Promise<JobRecord> {
-    return this.#withSourceLock(input.spaceId, input.sourceId, async () => {
-      const key = identityKey(input);
-      const existing = this.#jobs.get(key);
-      if (existing !== undefined) {
-        if (
-          existing.status === "failed" &&
-          (existing.failureCode === "source_expired" ||
-            existing.failureCode === "attempts_exhausted")
-        ) {
-          const reactivated: JobRecord = {
-            ...input,
-            status: "pending",
-            executionCycle: existing.executionCycle + 1,
-            attemptNumber: 0,
-            retryDeadlineAt: retryDeadline(input, now),
-            nextAttemptAt: now,
-          };
-          this.#jobs.set(key, reactivated);
-          return { ...reactivated };
-        }
-        return { ...existing };
-      }
-      const created: JobRecord = {
-        ...input,
-        status: "pending",
-        executionCycle: 0,
-        attemptNumber: 0,
-        retryDeadlineAt: retryDeadline(input, now),
-        nextAttemptAt: now,
-      };
-      this.#jobs.set(key, created);
-      return { ...created };
-    });
-  }
-
-  async get(identity: JobIdentity): Promise<JobRecord | undefined> {
-    const record = this.#jobs.get(identityKey(identity));
-    return record === undefined ? undefined : { ...record };
-  }
-
-  async claim(kind: RenditionKind, now: Date): Promise<ClaimedJob | undefined> {
-    for (const [key, record] of this.#jobs) {
-      if (record.status === "pending" && record.retryDeadlineAt <= now) {
-        this.#jobs.set(key, {
-          ...record,
-          status: "failed",
-          sourceCapability: undefined,
-          nextAttemptAt: undefined,
-          failureCode: "source_expired",
-        });
-      }
-    }
-    const record = [...this.#jobs.values()]
-      .filter(
-        (candidate) =>
-          candidate.kind === kind &&
-          candidate.status === "pending" &&
-          candidate.retryDeadlineAt > now &&
-          (candidate.nextAttemptAt === undefined || candidate.nextAttemptAt <= now),
-      )
-      .sort((left, right) => left.retryDeadlineAt.getTime() - right.retryDeadlineAt.getTime())[0];
-    if (record?.sourceCapability === undefined) return undefined;
-    const processingToken = randomUUID();
-    const processing: JobRecord = {
-      ...record,
-      status: "processing",
-      attemptNumber: record.attemptNumber + 1,
-      processingToken,
-      leaseExpiresAt: new Date(now.getTime() + PROCESSING_LEASE_SECONDS * 1_000),
-      heartbeatAt: now,
-      nextAttemptAt: undefined,
-    };
-    this.#jobs.set(identityKey(processing), processing);
-    return {
-      spaceId: processing.spaceId,
-      sourceId: processing.sourceId,
-      kind: processing.kind,
-      sourceCapability: processing.sourceCapability as string,
-      processingToken,
-      executionCycle: processing.executionCycle,
-      attemptNumber: processing.attemptNumber,
-    };
-  }
-
-  async heartbeat(identity: JobIdentity, processingToken: string, now: Date): Promise<boolean> {
-    const record = this.#jobs.get(identityKey(identity));
-    if (record?.status !== "processing" || record.processingToken !== processingToken) return false;
-    this.#jobs.set(identityKey(identity), {
-      ...record,
-      heartbeatAt: now,
-      leaseExpiresAt: new Date(now.getTime() + PROCESSING_LEASE_SECONDS * 1_000),
-    });
-    return true;
-  }
-
-  async complete(
-    identity: JobIdentity,
-    processingToken: string,
-    completion: MasterCompletion,
-    _now: Date,
-  ): Promise<boolean> {
-    return this.#withSourceLock(identity.spaceId, identity.sourceId, async () => {
-      const record = this.#jobs.get(identityKey(identity));
-      if (record?.status !== "processing" || record.processingToken !== processingToken)
-        return false;
-      this.#jobs.set(identityKey(identity), {
-        ...record,
-        status: "ready",
-        sourceCapability: undefined,
-        processingToken: undefined,
-        leaseExpiresAt: undefined,
-        heartbeatAt: undefined,
-        masterKey: completion.masterKey,
-        masterWidth: completion.width,
-        masterHeight: completion.height,
-        masterFormat: completion.format,
-        objectEtag: completion.objectEtag,
-        failureCode: undefined,
-      });
-      return true;
-    });
-  }
-
-  async fail(
-    identity: JobIdentity,
-    processingToken: string,
-    failure: { retryable: boolean; code?: JobFailureCode },
-    now: Date,
-  ): Promise<boolean> {
-    const record = this.#jobs.get(identityKey(identity));
-    if (record?.status !== "processing" || record.processingToken !== processingToken) return false;
-    const delay = RETRY_DELAYS_SECONDS[record.attemptNumber - 1];
-    if (failure.retryable && delay !== undefined) {
-      const nextAttemptAt = new Date(now.getTime() + delay * 1_000);
-      if (nextAttemptAt < record.retryDeadlineAt) {
-        this.#jobs.set(identityKey(identity), {
-          ...record,
-          status: "pending",
-          processingToken: undefined,
-          leaseExpiresAt: undefined,
-          heartbeatAt: undefined,
-          nextAttemptAt,
-        });
-        return true;
-      }
-    }
-    this.#jobs.set(identityKey(identity), {
-      ...record,
-      status: "failed",
-      sourceCapability: undefined,
-      processingToken: undefined,
-      leaseExpiresAt: undefined,
-      heartbeatAt: undefined,
-      nextAttemptAt: undefined,
-      failureCode: failure.retryable
-        ? "attempts_exhausted"
-        : (failure.code ?? "internal_invariant"),
-    });
-    return true;
-  }
-
-  async recoverExpiredLeases(now: Date): Promise<number> {
-    let recovered = 0;
-    for (const [key, record] of this.#jobs) {
-      if (
-        record.status !== "processing" ||
-        record.leaseExpiresAt === undefined ||
-        record.leaseExpiresAt > now
-      ) {
-        continue;
-      }
-      recovered += 1;
-      this.#jobs.set(key, {
-        ...record,
-        status: record.attemptNumber >= MAX_ATTEMPTS ? "failed" : "pending",
-        sourceCapability:
-          record.attemptNumber >= MAX_ATTEMPTS ? undefined : record.sourceCapability,
-        processingToken: undefined,
-        leaseExpiresAt: undefined,
-        heartbeatAt: undefined,
-        nextAttemptAt: record.attemptNumber >= MAX_ATTEMPTS ? undefined : now,
-        failureCode: record.attemptNumber >= MAX_ATTEMPTS ? "attempts_exhausted" : undefined,
-      });
-    }
-    return recovered;
-  }
-
-  async expirePendingJobs(now: Date): Promise<number> {
-    let expired = 0;
-    for (const [key, record] of this.#jobs) {
-      if (record.status !== "pending" || record.retryDeadlineAt > now) continue;
-      expired += 1;
-      this.#jobs.set(key, {
-        ...record,
-        status: "failed",
-        sourceCapability: undefined,
-        nextAttemptAt: undefined,
-        failureCode: "source_expired",
-      });
-    }
-    return expired;
-  }
-
-  async runnableJobKinds(now: Date, limit: number): Promise<readonly RenditionKind[]> {
-    return [...this.#jobs.values()]
-      .filter(
-        (record) =>
-          record.status === "pending" &&
-          record.retryDeadlineAt > now &&
-          (record.nextAttemptAt === undefined || record.nextAttemptAt <= now),
-      )
-      .sort((left, right) => left.retryDeadlineAt.getTime() - right.retryDeadlineAt.getTime())
-      .slice(0, limit)
-      .map((record) => record.kind);
-  }
-
-  async purgeSource(
-    spaceId: string,
-    sourceId: string,
-    cleanup: () => Promise<void>,
-  ): Promise<void> {
-    await this.#withSourceLock(spaceId, sourceId, async () => {
-      for (const [key, record] of this.#jobs) {
-        if (record.spaceId === spaceId && record.sourceId === sourceId) this.#jobs.delete(key);
-      }
-      await cleanup();
-    });
-  }
-}
-
 async function lockSource(client: PoolClient, spaceId: string, sourceId: string): Promise<void> {
   await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [
     postgresSourceLockKey(spaceId, sourceId),
@@ -438,14 +228,14 @@ export function postgresSourceLockKey(spaceId: string, sourceId: string): string
   return JSON.stringify([spaceId, sourceId]);
 }
 
-export class PostgresJobStore implements JobStore {
+export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
   readonly #pool: Pool;
 
   constructor(pool: Pool) {
     this.#pool = pool;
   }
 
-  async submit(input: SubmitJobInput, now: Date): Promise<JobRecord> {
+  async submit(input: SubmitJobInput, now: Date): Promise<SubmissionResult> {
     return transaction(this.#pool, async (client) => {
       await lockSource(client, input.spaceId, input.sourceId);
       const deadline = retryDeadline(input, now);
@@ -456,7 +246,9 @@ export class PostgresJobStore implements JobStore {
          on conflict do nothing returning *`,
         [input.spaceId, input.sourceId, input.kind, input.sourceCapability, deadline, now],
       );
-      if (inserted.rows[0] !== undefined) return fromRow(inserted.rows[0]);
+      if (inserted.rows[0] !== undefined) {
+        return { disposition: "created", job: jobView(fromRow(inserted.rows[0])) };
+      }
 
       const existing = await client.query<JobRow>(
         `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3 for update`,
@@ -468,7 +260,7 @@ export class PostgresJobStore implements JobStore {
         current.status !== "failed" ||
         (current.failure_code !== "source_expired" && current.failure_code !== "attempts_exhausted")
       ) {
-        return fromRow(current);
+        return { disposition: "existing", job: jobView(fromRow(current)) };
       }
       const reactivated = await client.query<JobRow>(
         `update rendition_jobs set
@@ -479,16 +271,19 @@ export class PostgresJobStore implements JobStore {
          where space_id = $1 and source_id = $2 and kind = $3 returning *`,
         [input.spaceId, input.sourceId, input.kind, input.sourceCapability, deadline, now],
       );
-      return fromRow(reactivated.rows[0] as JobRow);
+      return {
+        disposition: "reactivated",
+        job: jobView(fromRow(reactivated.rows[0] as JobRow)),
+      };
     });
   }
 
-  async get(identity: JobIdentity): Promise<JobRecord | undefined> {
+  async read(identity: JobIdentity): Promise<RenditionJobView | undefined> {
     const result = await this.#pool.query<JobRow>(
       `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3`,
       [identity.spaceId, identity.sourceId, identity.kind],
     );
-    return result.rows[0] === undefined ? undefined : fromRow(result.rows[0]);
+    return result.rows[0] === undefined ? undefined : jobView(fromRow(result.rows[0]));
   }
 
   async claim(kind: RenditionKind, now: Date): Promise<ClaimedJob | undefined> {
@@ -531,7 +326,11 @@ export class PostgresJobStore implements JobStore {
     });
   }
 
-  async heartbeat(identity: JobIdentity, processingToken: string, now: Date): Promise<boolean> {
+  async heartbeat(
+    identity: JobIdentity,
+    processingToken: string,
+    now: Date,
+  ): Promise<AttemptMutationResult> {
     const lease = new Date(now.getTime() + PROCESSING_LEASE_SECONDS * 1_000);
     const result = await this.#pool.query(
       `update rendition_jobs set heartbeat_at = $5, lease_expires_at = $6, updated_at = $5
@@ -539,7 +338,7 @@ export class PostgresJobStore implements JobStore {
          and status = 'processing' and processing_token = $4`,
       [identity.spaceId, identity.sourceId, identity.kind, processingToken, now, lease],
     );
-    return result.rowCount === 1;
+    return { outcome: result.rowCount === 1 ? "accepted" : "stale_attempt" };
   }
 
   async complete(
@@ -547,7 +346,7 @@ export class PostgresJobStore implements JobStore {
     processingToken: string,
     completion: MasterCompletion,
     now: Date,
-  ): Promise<boolean> {
+  ): Promise<AttemptMutationResult> {
     return transaction(this.#pool, async (client) => {
       await lockSource(client, identity.spaceId, identity.sourceId);
       const result = await client.query(
@@ -570,7 +369,7 @@ export class PostgresJobStore implements JobStore {
           now,
         ],
       );
-      return result.rowCount === 1;
+      return { outcome: result.rowCount === 1 ? "accepted" : "stale_attempt" };
     });
   }
 
@@ -579,7 +378,7 @@ export class PostgresJobStore implements JobStore {
     processingToken: string,
     failure: { retryable: boolean; code?: JobFailureCode },
     now: Date,
-  ): Promise<boolean> {
+  ): Promise<FailureResult> {
     return transaction(this.#pool, async (client) => {
       const selected = await client.query<JobRow>(
         `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3
@@ -587,7 +386,7 @@ export class PostgresJobStore implements JobStore {
         [identity.spaceId, identity.sourceId, identity.kind, processingToken],
       );
       const row = selected.rows[0];
-      if (row === undefined) return false;
+      if (row === undefined) return { outcome: "stale_attempt" };
       const delay = RETRY_DELAYS_SECONDS[row.attempt_number - 1];
       if (failure.retryable && delay !== undefined && row.retry_deadline_at > now) {
         const nextAttempt = new Date(now.getTime() + delay * 1_000);
@@ -598,7 +397,7 @@ export class PostgresJobStore implements JobStore {
              where space_id = $1 and source_id = $2 and kind = $3 and processing_token = $4`,
             [identity.spaceId, identity.sourceId, identity.kind, processingToken, nextAttempt, now],
           );
-          return true;
+          return { outcome: "retry_scheduled" };
         }
       }
       const code = failure.retryable
@@ -611,58 +410,77 @@ export class PostgresJobStore implements JobStore {
          where space_id = $1 and source_id = $2 and kind = $3 and processing_token = $4`,
         [identity.spaceId, identity.sourceId, identity.kind, processingToken, code, now],
       );
-      return true;
+      return { outcome: "terminal" };
     });
   }
 
-  async recoverExpiredLeases(now: Date): Promise<number> {
-    const result = await this.#pool.query(
-      `update rendition_jobs set status = case when attempt_number >= $2 then 'failed' else 'pending' end,
-        source_capability = case when attempt_number >= $2 then null else source_capability end,
-        processing_token = null, lease_expires_at = null, heartbeat_at = null,
-        next_attempt_at = case when attempt_number >= $2 then null else $1 end,
-        failure_code = case when attempt_number >= $2 then 'attempts_exhausted' else null end,
-        updated_at = $1
-       where status = 'processing' and lease_expires_at <= $1`,
-      [now, MAX_ATTEMPTS],
-    );
-    return result.rowCount ?? 0;
-  }
-
-  async expirePendingJobs(now: Date): Promise<number> {
-    const result = await this.#pool.query(
-      `update rendition_jobs set status = 'failed', source_capability = null,
-        next_attempt_at = null, failure_code = 'source_expired', updated_at = $1
-       where status = 'pending' and retry_deadline_at <= $1`,
-      [now],
-    );
-    return result.rowCount ?? 0;
-  }
-
-  async runnableJobKinds(now: Date, limit: number): Promise<readonly RenditionKind[]> {
-    const result = await this.#pool.query<Pick<JobRow, "kind">>(
-      `select kind from rendition_jobs
-       where status = 'pending' and retry_deadline_at > $1
-         and (next_attempt_at is null or next_attempt_at <= $1)
-       order by retry_deadline_at, created_at
-       limit $2`,
-      [now, limit],
-    );
-    return result.rows.map((row) => row.kind);
-  }
-
-  async purgeSource(
-    spaceId: string,
-    sourceId: string,
-    cleanup: () => Promise<void>,
-  ): Promise<void> {
-    await transaction(this.#pool, async (client) => {
-      await lockSource(client, spaceId, sourceId);
-      await client.query(`delete from rendition_jobs where space_id = $1 and source_id = $2`, [
-        spaceId,
-        sourceId,
-      ]);
-      await cleanup();
+  async maintain(now: Date, limit: number): Promise<MaintenanceResult> {
+    return transaction(this.#pool, async (client) => {
+      const expired = await client.query(
+        `update rendition_jobs set status = 'failed', source_capability = null,
+          next_attempt_at = null, failure_code = 'source_expired', updated_at = $1
+         where status = 'pending' and retry_deadline_at <= $1`,
+        [now],
+      );
+      const recovered = await client.query(
+        `update rendition_jobs set status = case when attempt_number >= $2 then 'failed' else 'pending' end,
+          source_capability = case when attempt_number >= $2 then null else source_capability end,
+          processing_token = null, lease_expires_at = null, heartbeat_at = null,
+          next_attempt_at = case when attempt_number >= $2 then null else $1 end,
+          failure_code = case when attempt_number >= $2 then 'attempts_exhausted' else null end,
+          updated_at = $1
+         where status = 'processing' and lease_expires_at <= $1`,
+        [now, MAX_ATTEMPTS],
+      );
+      const runnable = await client.query<Pick<JobRow, "kind">>(
+        `select kind from rendition_jobs
+         where status = 'pending' and retry_deadline_at > $1
+           and (next_attempt_at is null or next_attempt_at <= $1)
+         order by retry_deadline_at, created_at
+         limit $2`,
+        [now, limit],
+      );
+      return {
+        expiredPendingJobs: expired.rowCount ?? 0,
+        recoveredLeases: recovered.rowCount ?? 0,
+        runnableKinds: runnable.rows.map((row) => row.kind),
+      };
     });
+  }
+
+  async withInvalidatedSource<T>(
+    source: SourceIdentity,
+    whileExclusive: () => Promise<T>,
+  ): Promise<{ invalidatedJobs: number; value: T }> {
+    const client = await this.#pool.connect();
+    const lockKey = postgresSourceLockKey(source.spaceId, source.sourceId);
+    let locked = false;
+    try {
+      await client.query(`select pg_advisory_lock(hashtextextended($1, 0))`, [lockKey]);
+      locked = true;
+      await client.query("begin");
+      let invalidatedJobs: number;
+      try {
+        const deleted = await client.query(
+          `delete from rendition_jobs where space_id = $1 and source_id = $2`,
+          [source.spaceId, source.sourceId],
+        );
+        invalidatedJobs = deleted.rowCount ?? 0;
+        await client.query("commit");
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      }
+      const value = await whileExclusive();
+      return { invalidatedJobs, value };
+    } finally {
+      try {
+        if (locked) {
+          await client.query(`select pg_advisory_unlock(hashtextextended($1, 0))`, [lockKey]);
+        }
+      } finally {
+        client.release();
+      }
+    }
   }
 }

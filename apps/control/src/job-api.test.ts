@@ -1,7 +1,8 @@
 import { issueSourceCapability } from "@shutter/protocol";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createJobApi } from "./job-api.js";
-import { InMemoryJobStore } from "./job-store.js";
+import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
+import type { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 
 const KEY = Uint8Array.from({ length: 32 }, (_, index) => index);
 const KID = "test-key";
@@ -26,26 +27,39 @@ async function capability(): Promise<string> {
 }
 
 function runtime(
-  store: InMemoryJobStore,
+  lifecycle: PostgresRenditionJobLifecycle,
   dispatch = vi.fn(async () => {}),
-  sourcePurger?: { purge(spaceId: string, sourceId: string): Promise<void> },
+  sourcePurge?: { purge(source: { spaceId: string; sourceId: string }): Promise<void> },
 ) {
   return {
-    store,
+    lifecycle,
     now: () => NOW,
     spaceApiTokens: () => new Map([["pane-view", [SPACE_TOKEN]]]),
     capabilityKeys: () => new Map([["pane-view", new Map([[KID, KEY]])]]),
     executorToken: (kind: "video" | "pdf") => (kind === "video" ? VIDEO_TOKEN : undefined),
     dispatch,
-    ...(sourcePurger === undefined ? {} : { sourcePurger }),
+    ...(sourcePurge === undefined ? {} : { sourcePurge }),
   };
 }
 
 describe("job API", () => {
+  let test: PostgresTestLifecycle;
+  let lifecycle: PostgresRenditionJobLifecycle;
+
+  beforeAll(async () => {
+    test = await createPostgresTestLifecycle();
+    lifecycle = test.lifecycle;
+  });
+
+  afterAll(async () => test.close());
+
+  beforeEach(async () => {
+    await test.pool.query("truncate table rendition_jobs");
+  });
+
   it("submits, polls, claims, and completes one canonical video job", async () => {
-    const store = new InMemoryJobStore();
     const dispatch = vi.fn(async () => {});
-    const app = createJobApi(runtime(store, dispatch));
+    const app = createJobApi(runtime(lifecycle, dispatch));
     const resource = "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video";
     const submitted = await app.request(resource, {
       method: "PUT",
@@ -100,7 +114,7 @@ describe("job API", () => {
   });
 
   it("rejects cross-kind executor credentials and malformed submissions", async () => {
-    const app = createJobApi(runtime(new InMemoryJobStore()));
+    const app = createJobApi(runtime(lifecycle));
     const unauthorized = await app.request("http://shutter.test/internal/v1/executors/pdf/claim", {
       method: "POST",
       headers: { authorization: `Bearer ${VIDEO_TOKEN}` },
@@ -119,12 +133,11 @@ describe("job API", () => {
   });
 
   it("keeps a durable submission accepted when its initial dispatch fails", async () => {
-    const store = new InMemoryJobStore();
     const dispatch = vi.fn(async () => {
       throw new Error("executor unavailable");
     });
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    const app = createJobApi(runtime(store, dispatch));
+    const app = createJobApi(runtime(lifecycle, dispatch));
     const response = await app.request(
       "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video",
       {
@@ -137,15 +150,14 @@ describe("job API", () => {
     expect(response.status).toBe(202);
     await vi.waitFor(() => expect(log).toHaveBeenCalledOnce());
     expect(
-      await store.get({ spaceId: "pane-view", sourceId: "source-1", kind: "video" }),
+      await lifecycle.read({ spaceId: "pane-view", sourceId: "source-1", kind: "video" }),
     ).toMatchObject({ status: "pending" });
     log.mockRestore();
   });
 
   it("authenticates, repeats, and sanitizes Source Purge", async () => {
-    const store = new InMemoryJobStore();
     const identity = { spaceId: "pane-view", sourceId: "source-1", kind: "video" as const };
-    await store.submit(
+    await lifecycle.submit(
       {
         ...identity,
         sourceCapability: "opaque",
@@ -154,7 +166,7 @@ describe("job API", () => {
       NOW,
     );
     const purge = vi.fn(async () => {});
-    const app = createJobApi(runtime(store, undefined, { purge }));
+    const app = createJobApi(runtime(lifecycle, undefined, { purge }));
     const url = "http://shutter.test/v1/spaces/pane-view/sources/source-1/purge";
     expect((await app.request(url, { method: "POST" })).status).toBe(401);
     expect(
@@ -173,11 +185,12 @@ describe("job API", () => {
       expect(response.status).toBe(204);
     }
     expect(purge).toHaveBeenCalledTimes(2);
-    expect(await store.get(identity)).toBeUndefined();
 
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const failing = createJobApi(
-      runtime(store, undefined, { purge: async () => Promise.reject(new Error("secret detail")) }),
+      runtime(lifecycle, undefined, {
+        purge: async () => Promise.reject(new Error("secret detail")),
+      }),
     );
     const failed = await failing.request(url, {
       method: "POST",
