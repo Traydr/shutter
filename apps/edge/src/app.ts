@@ -2,6 +2,7 @@ import {
   buildCanonicalCacheUrl,
   buildR2CacheKey,
   buildSourceCacheTag,
+  decodeCapabilityKey,
   emitOperationalEvent,
   normalizeRenditionQuery,
   operationalEvent,
@@ -38,21 +39,6 @@ async function emitRenditionEvent(
   );
 }
 
-function decodeCapabilityKey(value: string): Uint8Array {
-  if (/^[0-9a-fA-F]{64}$/u.test(value)) {
-    return Uint8Array.from(value.match(/.{2}/gu) ?? [], (byte) => Number.parseInt(byte, 16));
-  }
-  if (!/^[A-Za-z0-9_-]+$/u.test(value) || value.length % 4 === 1) {
-    throw new Error("capability key must be 64-character hex or canonical unpadded base64url");
-  }
-  const padded = value
-    .replace(/-/gu, "+")
-    .replace(/_/gu, "/")
-    .padEnd(value.length + ((4 - (value.length % 4)) % 4), "=");
-  const decoded = atob(padded);
-  return Uint8Array.from(decoded, (character) => character.charCodeAt(0));
-}
-
 function parseKeyRegistry(value: string): KeyRegistry {
   if (keyRegistryCache?.raw === value) return keyRegistryCache.registry;
   let parsed: unknown;
@@ -76,9 +62,6 @@ function parseKeyRegistry(value: string): KeyRegistry {
         throw new Error(`CAPABILITY_KEYS.${spaceId}.${kid} must be a string`);
       }
       const key = decodeCapabilityKey(rawKey);
-      if (key.byteLength !== 32) {
-        throw new Error(`CAPABILITY_KEYS.${spaceId}.${kid} must decode to 32 bytes`);
-      }
       keys.set(kid, key);
     }
     registry.set(spaceId, keys);

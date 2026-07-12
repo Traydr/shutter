@@ -9,6 +9,7 @@ export {
 export * from "./constants.js";
 export * from "./errors.js";
 export * from "./jobs.js";
+export * from "./key-material.js";
 export * from "./normalization.js";
 export * from "./observability.js";
 export * from "./types.js";
