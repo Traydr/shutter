@@ -25,7 +25,11 @@ async function capability(): Promise<string> {
   );
 }
 
-function runtime(store: InMemoryJobStore, dispatch = vi.fn(async () => {})) {
+function runtime(
+  store: InMemoryJobStore,
+  dispatch = vi.fn(async () => {}),
+  sourcePurger?: { purge(spaceId: string, sourceId: string): Promise<void> },
+) {
   return {
     store,
     now: () => NOW,
@@ -33,6 +37,7 @@ function runtime(store: InMemoryJobStore, dispatch = vi.fn(async () => {})) {
     capabilityKeys: () => new Map([["pane-view", new Map([[KID, KEY]])]]),
     executorToken: (kind: "video" | "pdf") => (kind === "video" ? VIDEO_TOKEN : undefined),
     dispatch,
+    ...(sourcePurger === undefined ? {} : { sourcePurger }),
   };
 }
 
@@ -134,6 +139,53 @@ describe("job API", () => {
     expect(
       await store.get({ spaceId: "pane-view", sourceId: "source-1", kind: "video" }),
     ).toMatchObject({ status: "pending" });
+    log.mockRestore();
+  });
+
+  it("authenticates, repeats, and sanitizes Source Purge", async () => {
+    const store = new InMemoryJobStore();
+    const identity = { spaceId: "pane-view", sourceId: "source-1", kind: "video" as const };
+    await store.submit(
+      {
+        ...identity,
+        sourceCapability: "opaque",
+        capabilityExpiresAt: new Date(NOW.getTime() + 3_600_000),
+      },
+      NOW,
+    );
+    const purge = vi.fn(async () => {});
+    const app = createJobApi(runtime(store, undefined, { purge }));
+    const url = "http://shutter.test/v1/spaces/pane-view/sources/source-1/purge";
+    expect((await app.request(url, { method: "POST" })).status).toBe(401);
+    expect(
+      (
+        await app.request("http://shutter.test/v1/spaces/ernesta/sources/source-1/purge", {
+          method: "POST",
+          headers: { authorization: `Bearer ${SPACE_TOKEN}` },
+        })
+      ).status,
+    ).toBe(401);
+    for (let count = 0; count < 2; count += 1) {
+      const response = await app.request(url, {
+        method: "POST",
+        headers: { authorization: `Bearer ${SPACE_TOKEN}` },
+      });
+      expect(response.status).toBe(204);
+    }
+    expect(purge).toHaveBeenCalledTimes(2);
+    expect(await store.get(identity)).toBeUndefined();
+
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failing = createJobApi(
+      runtime(store, undefined, { purge: async () => Promise.reject(new Error("secret detail")) }),
+    );
+    const failed = await failing.request(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${SPACE_TOKEN}` },
+    });
+    expect(failed.status).toBe(503);
+    expect(await failed.json()).toEqual({ error: { code: "service_unavailable" } });
+    expect(JSON.stringify(log.mock.calls)).not.toContain("secret detail");
     log.mockRestore();
   });
 });

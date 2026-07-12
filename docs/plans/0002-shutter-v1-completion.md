@@ -65,6 +65,10 @@ capability, cache isolation, normalization, and fail-closed tests.
 
 ## Milestone 3: Source Purge
 
+Status: implemented. Production activation requires the non-secret
+`CLOUDFLARE_ZONE_ID` and a least-privilege `CLOUDFLARE_CACHE_PURGE_TOKEN` in
+Control's Railway environment; the route fails closed while either is absent.
+
 Implement the authenticated, retry-safe purge sequence for both rendition kinds
 and every route class. Delete job state, deterministic R2 prefixes, and tagged
 Cloudflare cache entries without exposing Source Locators.

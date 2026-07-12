@@ -92,6 +92,8 @@ export default defineRailway(() => {
     domains: [{ domain: "shutter-control.traydr.dev", port: nodePort }],
     env: {
       CAPABILITY_KEYS: preserve(),
+      CLOUDFLARE_CACHE_PURGE_TOKEN: preserve(),
+      CLOUDFLARE_ZONE_ID: preserve(),
       DATABASE_URL: Jobs.env.DATABASE_URL,
       IMGPROXY_BASE_URL: `http://\${{Shutter-Imgproxy.RAILWAY_PRIVATE_DOMAIN}}:${imgproxyPort}`,
       IMGPROXY_KEY: preserve(),

@@ -12,6 +12,7 @@ import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 import type { JobIdentity, JobStore, MasterCompletion } from "./job-store.js";
 import { jobRepresentation } from "./job-store.js";
+import type { SourcePurger } from "./source-purge.js";
 
 type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
 
@@ -22,6 +23,7 @@ export interface JobApiRuntime {
   capabilityKeys(): KeyRegistry;
   executorToken(kind: RenditionKind): string | undefined;
   dispatch(kind: RenditionKind): Promise<void>;
+  sourcePurger?: SourcePurger;
 }
 
 function digest(value: string): Uint8Array {
@@ -95,6 +97,24 @@ async function strictJson(request: Request): Promise<unknown> {
 export function createJobApi(runtime: JobApiRuntime): Hono {
   const api = new Hono();
   const resource = "/v1/spaces/:spaceId/sources/:sourceId/previews/:kind";
+
+  api.post("/v1/spaces/:spaceId/sources/:sourceId/purge", async (context) => {
+    const spaceId = context.req.param("spaceId");
+    const sourceId = context.req.param("sourceId");
+    if (getSpacePolicy(spaceId) === undefined) return requestFailure(404, "not_found");
+    if (!authorizedSpace(runtime, spaceId, context.req.header("authorization"))) {
+      return requestFailure(401, "unauthorized");
+    }
+    const purger = runtime.sourcePurger;
+    if (purger === undefined) return requestFailure(503, "service_unavailable");
+    try {
+      await runtime.store.purgeSource(spaceId, sourceId, () => purger.purge(spaceId, sourceId));
+      return new Response(null, { status: 204 });
+    } catch {
+      console.error({ spaceId }, "source purge failed");
+      return requestFailure(503, "service_unavailable");
+    }
+  });
 
   api.put(resource, async (context) => {
     const identity = identityFromRoute(context);

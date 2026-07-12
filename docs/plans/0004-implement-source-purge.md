@@ -146,13 +146,13 @@ deletes its output, and that retrying a partial purge is safe. Update milestone
 
 ## Done criteria
 
-- [ ] Authenticated canonical purge route returns 204 only after all phases.
-- [ ] Job invalidation, R2 deletion, and tag purge occur in contract order.
-- [ ] Partial failure is retryable and repeated calls converge.
-- [ ] No Source Locator, capability, token, or presigned URL appears in logs.
-- [ ] No purge/history table was added.
-- [ ] `pnpm check` exits 0.
-- [ ] Railway plan was reviewed but not applied.
+- [x] Authenticated canonical purge route returns 204 only after all phases.
+- [x] Job invalidation, R2 deletion, and tag purge occur in contract order.
+- [x] Partial failure is retryable and repeated calls converge.
+- [x] No Source Locator, capability, token, or presigned URL appears in logs.
+- [x] No purge/history table was added.
+- [x] `pnpm check` exits 0.
+- [x] Railway plan was reviewed but not applied.
 
 ## STOP conditions
 

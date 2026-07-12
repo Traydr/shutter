@@ -1,4 +1,5 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { S3Client } from "@aws-sdk/client-s3";
 import { buildMasterPreviewKey } from "@shutter/protocol";
 import { Hono } from "hono";
 import { Pool } from "pg";
@@ -6,6 +7,7 @@ import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
 import { PostgresJobStore } from "./job-store.js";
 import { createMasterStore, type MasterStore } from "./master-store.js";
+import { createSourcePurger } from "./source-purge.js";
 
 const EXECUTOR_WAKE_TIMEOUT_MS = 11 * 60 * 1_000;
 
@@ -252,6 +254,31 @@ const masterStore =
         secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
       })
     : undefined;
+const renditionS3 =
+  process.env.S3_ENDPOINT && process.env.S3_ACCESS_KEY_ID && process.env.S3_SECRET_ACCESS_KEY
+    ? new S3Client({
+        endpoint: process.env.S3_ENDPOINT,
+        region: process.env.S3_REGION ?? "auto",
+        forcePathStyle: true,
+        credentials: {
+          accessKeyId: process.env.S3_ACCESS_KEY_ID,
+          secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+        },
+      })
+    : undefined;
+const sourcePurger =
+  renditionS3 &&
+  process.env.S3_BUCKET &&
+  process.env.CLOUDFLARE_ZONE_ID &&
+  process.env.CLOUDFLARE_CACHE_PURGE_TOKEN
+    ? createSourcePurger({
+        s3: renditionS3,
+        bucket: process.env.S3_BUCKET,
+        cloudflareZoneId: process.env.CLOUDFLARE_ZONE_ID,
+        cloudflareApiToken: process.env.CLOUDFLARE_CACHE_PURGE_TOKEN,
+        fetch: globalThis.fetch,
+      })
+    : undefined;
 
 export const jobApiRuntime: JobApiRuntime | undefined =
   jobStore === undefined
@@ -264,6 +291,7 @@ export const jobApiRuntime: JobApiRuntime | undefined =
         executorToken: (kind) =>
           kind === "video" ? process.env.VIDEO_EXECUTOR_TOKEN : process.env.PDF_EXECUTOR_TOKEN,
         dispatch: dispatchExecutor,
+        ...(sourcePurger === undefined ? {} : { sourcePurger }),
       };
 
 export const app = createControlApp({
