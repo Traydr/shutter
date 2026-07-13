@@ -18,7 +18,12 @@ Results are written to `experiments/executor-perf/results/`.
 
 ## Experiment tracks
 
-1. **native-libs** — Performance improvements within the existing Node.js + subprocess stack
-2. **go-services** — Go service prototypes (imgproxy-style)
+1. **native-libs/** — Performance improvements within the existing Node.js + subprocess stack  
+   See `native-libs/RESULTS.md` for detailed results.
 
-See `docs/executor-perf-exploration.md` for consolidated findings and recommendations.
+2. **go-services/** — Go service prototypes (imgproxy-style)  
+   See `go-services/RESULTS.md` for detailed results.
+
+## Consolidated findings
+
+See [`docs/executor-perf-exploration.md`](../../docs/executor-perf-exploration.md) for pros/cons, decision matrix, and phased recommendations.
