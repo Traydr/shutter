@@ -1,0 +1,550 @@
+{
+  "timestamp": "2026-07-13T01:06:57.457Z",
+  "environment": {
+    "node": "v22.14.0",
+    "platform": "linux",
+    "arch": "x64",
+    "tools": {
+      "pdfinfo": "pdfinfo version 24.02.0",
+      "pdftoppm": "pdftoppm version 24.02.0",
+      "pdftocairo": "pdftocairo version 24.02.0",
+      "mutool": "mutool version 1.23.10",
+      "gs": "10.02.1",
+      "ffmpeg": "ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers",
+      "ffprobe": "ffprobe version 6.1.1-3ubuntu5 Copyright (c) 2007-2023 the FFmpeg developers",
+      "webpmux": "1.3.2"
+    }
+  },
+  "config": {
+    "iterations": 5,
+    "warmup": 1
+  },
+  "baselineReference": {
+    "pdfMedianMs": 243,
+    "video1080MedianMs": 222,
+    "video720MedianMs": 144,
+    "source": "experiments/executor-perf/results/baseline.json (3 iterations)"
+  },
+  "pdf": {
+    "pdf-baseline-pdftoppm-ffprobe": {
+      "name": "pdf-baseline-pdftoppm-ffprobe",
+      "samples": [
+        249.0478379999999,
+        242.16382000000021,
+        239.96220200000005,
+        245.5274199999999,
+        241.98002700000006
+      ],
+      "minMs": 239.96220200000005,
+      "maxMs": 249.0478379999999,
+      "meanMs": 243.73626140000002,
+      "medianMs": 242.16382000000021,
+      "p95Ms": 249.0478379999999,
+      "outputBytes": 9996,
+      "width": 1275,
+      "height": 1650,
+      "lastSteps": {
+        "pdfinfo": 6.817340999999942,
+        "pdftoppm": 67.59509800000001,
+        "ffmpeg": 134.07075499999996,
+        "ffprobe": 32.62199499999997
+      }
+    },
+    "pdf-baseline-webpmux-probe": {
+      "name": "pdf-baseline-webpmux-probe",
+      "samples": [
+        210.4025389999997,
+        203.74707799999987,
+        209.59168299999965,
+        204.55931900000041,
+        204.45673599999964
+      ],
+      "minMs": 203.74707799999987,
+      "maxMs": 210.4025389999997,
+      "meanMs": 206.55147099999985,
+      "medianMs": 204.55931900000041,
+      "p95Ms": 210.4025389999997,
+      "outputBytes": 9996,
+      "width": 1275,
+      "height": 1650,
+      "lastSteps": {
+        "pdfinfo": 5.670992999999726,
+        "pdftoppm": 66.77585199999976,
+        "ffmpeg": 130.9396240000001,
+        "webpmux": 1.1275369999998475
+      }
+    },
+    "pdf-mutool-pipe-ffmpeg": {
+      "name": "pdf-mutool-pipe-ffmpeg",
+      "samples": [
+        146.2090100000005,
+        146.1143280000001,
+        146.5658510000003,
+        147.07754799999975,
+        148.24846899999966
+      ],
+      "minMs": 146.1143280000001,
+      "maxMs": 148.24846899999966,
+      "meanMs": 146.84304120000007,
+      "medianMs": 146.5658510000003,
+      "p95Ms": 148.24846899999966,
+      "outputBytes": 10078,
+      "width": 1275,
+      "height": 1650,
+      "lastSteps": {
+        "pdfinfo": 6.189139999999952,
+        "mutool_ffmpeg_pipe": 140.55732199999966,
+        "webpmux": 1.3621000000002823
+      }
+    },
+    "pdf-mutool-file-ffmpeg": {
+      "name": "pdf-mutool-file-ffmpeg",
+      "samples": [
+        173.13458300000002,
+        174.66665000000012,
+        171.81649000000107,
+        171.61182299999928,
+        177.49838900000123
+      ],
+      "minMs": 171.61182299999928,
+      "maxMs": 177.49838900000123,
+      "meanMs": 173.74558700000034,
+      "medianMs": 173.13458300000002,
+      "p95Ms": 177.49838900000123,
+      "outputBytes": 10078,
+      "width": 1275,
+      "height": 1650,
+      "lastSteps": {
+        "pdfinfo": 6.620676000000458,
+        "mutool": 27.48958500000026,
+        "ffmpeg": 141.7886980000003,
+        "webpmux": 2.0234080000000176
+      }
+    },
+    "pdf-gs-jpeg-pipe-ffmpeg": {
+      "name": "pdf-gs-jpeg-pipe-ffmpeg",
+      "samples": [
+        133.87266799999998,
+        136.70247199999903,
+        135.4308200000005,
+        135.8634059999995,
+        134.77188399999886
+      ],
+      "minMs": 133.87266799999998,
+      "maxMs": 136.70247199999903,
+      "meanMs": 135.32824999999957,
+      "medianMs": 135.4308200000005,
+      "p95Ms": 136.70247199999903,
+      "outputBytes": 9382,
+      "width": 1275,
+      "height": 1650,
+      "lastSteps": {
+        "pdfinfo": 6.786629000000175,
+        "gs_ffmpeg_pipe": 126.36049299999922,
+        "webpmux": 1.5546209999993152
+      }
+    },
+    "pdf-gs-png-pipe-ffmpeg": {
+      "name": "pdf-gs-png-pipe-ffmpeg",
+      "samples": [
+        184.12493000000086,
+        184.5017710000002,
+        183.97683899999993,
+        185.39483999999993,
+        185.05141800000092
+      ],
+      "minMs": 183.97683899999993,
+      "maxMs": 185.39483999999993,
+      "meanMs": 184.60995960000037,
+      "medianMs": 184.5017710000002,
+      "p95Ms": 185.39483999999993,
+      "outputBytes": 9336,
+      "width": 1275,
+      "height": 1650,
+      "lastSteps": {
+        "pdfinfo": 6.018952000000354,
+        "gs_ffmpeg_pipe": 177.55174100000022,
+        "webpmux": 1.443739999999707
+      }
+    },
+    "pdf-pdftocairo-png-ffmpeg": {
+      "name": "pdf-pdftocairo-png-ffmpeg",
+      "samples": [
+        218.5581319999992,
+        221.91918299999907,
+        222.32644700000037,
+        221.9991630000004,
+        217.29858100000274
+      ],
+      "minMs": 217.29858100000274,
+      "maxMs": 222.32644700000037,
+      "meanMs": 220.42030120000035,
+      "medianMs": 221.91918299999907,
+      "p95Ms": 222.32644700000037,
+      "outputBytes": 10090,
+      "width": 1275,
+      "height": 1650,
+      "lastSteps": {
+        "pdfinfo": 6.6047490000000835,
+        "pdftocairo": 74.57644100000107,
+        "ffmpeg": 134.3745480000016,
+        "webpmux": 1.581122999999934
+      }
+    },
+    "pdf-pdftoppm-100dpi-ffmpeg": {
+      "name": "pdf-pdftoppm-100dpi-ffmpeg",
+      "samples": [
+        128.26932699999998,
+        128.07228399999985,
+        127.4258400000017,
+        121.64084299999922,
+        124.50314999999864
+      ],
+      "minMs": 121.64084299999922,
+      "maxMs": 128.26932699999998,
+      "meanMs": 125.98228879999988,
+      "medianMs": 127.4258400000017,
+      "p95Ms": 128.26932699999998,
+      "outputBytes": 5848,
+      "width": 850,
+      "height": 1100,
+      "lastSteps": {
+        "pdfinfo": 5.688505000000077,
+        "pdftoppm": 37.865757999999914,
+        "ffmpeg": 79.53498799999943,
+        "webpmux": 1.1688469999990048
+      }
+    },
+    "pdf-ffmpeg-direct": {
+      "error": "ffmpeg exited with code 183: ffmpeg: /exec-daemon/tmux-root/lib/libncursesw.so.6: no version information available (required by /lib/x86_64-linux-gnu/libcaca.so.0)\nffmpeg: /exec-daemon/tmux-root/lib/libncursesw.so.6: no version information available (required by /lib/x86_64-linux-gnu/libcaca.so.0)\n[in#0 @ 0x55ff3bf8fe40] Error opening input: Invalid data found when processing input\nError opening input file /tmp/shutter-native-perf-Yp5w8z/input.pdf.\nError opening input files: Invalid data found when processing input"
+    },
+    "pdf-ghostscript-webp": {
+      "error": "gs exited with code 1"
+    },
+    "pdf-pdftocairo-webp": {
+      "error": "pdftocairo exited with code 99: pdftocairo version 24.02.0\nCopyright 2005-2024 The Poppler Developers - http://poppler.freedesktop.org\nCopyright 1996-2011, 2022 Glyph & Cog, LLC\nUsage: pdftocairo [options] <PDF-file> [<output-file>]\n  -png                     : generate a PNG file\n  -jpeg                    : generate a JPEG file\n  -jpegopt <string>        : jpeg options, with format <opt1>=<val1>[,<optN>=<valN>]*\n  -tiff                    : generate a TIFF file\n  -tiffcompression <string>: set TIFF compression: none, packbits, jpeg, lzw, deflate\n  -ps                      : generate PostScript file\n  -eps                     : generate Encapsulated PostScript (EPS)\n  -pdf                     : generate a PDF file\n  -svg                     : generate a Scalable Vector Graphics (SVG) file\n  -f <int>                 : first page to print\n  -l <int>                 : last page to print\n  -o                       : print only odd pages\n  -e                       : print only even pages\n  -singlefile              : write only the first page and do not add digits\n  -r <fp>                  : resolution, in PPI (default is 150)\n  -rx <fp>                 : X resolution, in PPI (default is 150)\n  -ry <fp>                 : Y resolution, in PPI (default is 150)\n  -scale-to <int>          : scales each page to fit within scale-to*scale-to pixel box\n  -scale-to-x <int>        : scales each page horizontally to fit in scale-to-x pixels\n  -scale-to-y <int>        : scales each page vertically to fit in scale-to-y pixels\n  -x <int>                 : x-coordinate of the crop area top left corner\n  -y <int>                 : y-coordinate of the crop area top left corner\n  -W <int>                 : width of crop area in pixels (default is 0)\n  -H <int>                 : height of crop area in pixels (default is 0)\n  -sz <int>                : size of crop square in pixels (sets W and H)\n  -cropbox                 : use the crop box rather than media box\n  -mono                    : generate a monochrome image file (PNG, JPEG)\n  -gray                    : generate a grayscale image file (PNG, JPEG)\n  -transp                  : use a transparent background instead of white (PNG)\n  -antialias <string>      : set cairo antialias option\n  -icc <string>            : ICC color profile to use\n  -level2                  : generate Level 2 PostScript (PS, EPS)\n  -level3                  : generate Level 3 PostScript (PS, EPS)\n  -origpagesizes           : conserve original page sizes (PS, PDF, SVG)\n  -paper <string>          : paper size (letter, legal, A4, A3, match)\n  -paperw <int>            : paper width, in points\n  -paperh <int>            : paper height, in points\n  -nocrop                  : don't crop pages to CropBox\n  -expand                  : expand pages smaller than the paper size\n  -noshrink                : don't shrink pages larger than the paper size\n  -nocenter                : don't center pages smaller than the paper size\n  -duplex                  : enable duplex printing\n  -struct                  : enable logical document structure\n  -opw <string>            : owner password (for encrypted files)\n  -upw <string>            : user password (for encrypted files)\n  -q                       : don't print any messages or errors\n  -v                       : print copyright and version info\n  -h                       : print usage information\n  -help                    : print usage information\n  --help                   : print usage information\n  -?                       : print usage information"
+    }
+  },
+  "video": {
+    "1080p-video-baseline-ss1-ffprobe": {
+      "name": "video-baseline-ss1-ffprobe",
+      "samples": [
+        232.15579600000092,
+        233.01261999999952,
+        228.26320899999882,
+        231.47315499999968,
+        227.25602900000013
+      ],
+      "minMs": 227.25602900000013,
+      "maxMs": 233.01261999999952,
+      "meanMs": 230.43216179999982,
+      "medianMs": 231.47315499999968,
+      "p95Ms": 233.01261999999952,
+      "outputBytes": 68934,
+      "width": 1920,
+      "height": 1080,
+      "lastSteps": {
+        "ffmpeg": 187.6868799999993,
+        "ffprobe": 39.569149000000834
+      }
+    },
+    "1080p-video-baseline-ss1-webpmux": {
+      "name": "video-baseline-ss1-webpmux",
+      "samples": [
+        198.41411100000005,
+        200.14219000000048,
+        192.4502819999998,
+        190.01138899999933,
+        194.6280110000007
+      ],
+      "minMs": 190.01138899999933,
+      "maxMs": 200.14219000000048,
+      "meanMs": 195.12919660000006,
+      "medianMs": 194.6280110000007,
+      "p95Ms": 200.14219000000048,
+      "outputBytes": 68934,
+      "width": 1920,
+      "height": 1080,
+      "lastSteps": {
+        "ffmpeg": 192.01326700000027,
+        "webpmux": 2.614744000000428
+      }
+    },
+    "1080p-video-input-seek-ss-before-i": {
+      "name": "video-input-seek-ss-before-i",
+      "samples": [
+        188.60436099999788,
+        195.10250599999927,
+        190.1974100000025,
+        192.98410899999908,
+        191.43217099999856
+      ],
+      "minMs": 188.60436099999788,
+      "maxMs": 195.10250599999927,
+      "meanMs": 191.66411139999946,
+      "medianMs": 191.43217099999856,
+      "p95Ms": 195.10250599999927,
+      "outputBytes": 68934,
+      "width": 1920,
+      "height": 1080,
+      "lastSteps": {
+        "ffmpeg": 188.95869999999923,
+        "webpmux": 2.363275000001522
+      }
+    },
+    "1080p-video-fast-seek-noaccurate": {
+      "name": "video-fast-seek-noaccurate",
+      "samples": [
+        191.7871639999994,
+        192.73063400000137,
+        191.67406200000005,
+        189.44479900000078,
+        185.8068999999996
+      ],
+      "minMs": 185.8068999999996,
+      "maxMs": 192.73063400000137,
+      "meanMs": 190.28871180000024,
+      "medianMs": 191.67406200000005,
+      "p95Ms": 192.73063400000137,
+      "outputBytes": 68806,
+      "width": 1920,
+      "height": 1080,
+      "lastSteps": {
+        "ffmpeg": 183.24119299999984,
+        "webpmux": 2.0485050000006595
+      }
+    },
+    "1080p-video-output-seek-ss-after-i": {
+      "name": "video-output-seek-ss-after-i",
+      "samples": [
+        211.9393590000018,
+        190.96742600000107,
+        191.84086699999898,
+        195.55955899999753,
+        209.45427600000403
+      ],
+      "minMs": 190.96742600000107,
+      "maxMs": 211.9393590000018,
+      "meanMs": 199.95229740000067,
+      "medianMs": 195.55955899999753,
+      "p95Ms": 211.9393590000018,
+      "outputBytes": 68934,
+      "width": 1920,
+      "height": 1080,
+      "lastSteps": {
+        "ffmpeg": 206.30329500000153,
+        "webpmux": 3.1509810000025027
+      }
+    },
+    "1080p-video-skip-frame-nokey": {
+      "name": "video-skip-frame-nokey",
+      "samples": [
+        183.50293299999976,
+        190.11935699999958,
+        195.713458000002,
+        188.19103099999847,
+        183.47227399999974
+      ],
+      "minMs": 183.47227399999974,
+      "maxMs": 195.713458000002,
+      "meanMs": 188.19981059999992,
+      "medianMs": 188.19103099999847,
+      "p95Ms": 195.713458000002,
+      "outputBytes": 71626,
+      "width": 1920,
+      "height": 1080,
+      "lastSteps": {
+        "ffmpeg": 180.60421199999837,
+        "webpmux": 3.1102329999994254
+      }
+    },
+    "1080p-video-fast-seek-nokey": {
+      "name": "video-fast-seek-nokey",
+      "samples": [
+        183.98681000000215,
+        187.470401999999,
+        186.49522899999647,
+        186.8694030000006,
+        189.10865999999805
+      ],
+      "minMs": 183.98681000000215,
+      "maxMs": 189.10865999999805,
+      "meanMs": 186.78610079999925,
+      "medianMs": 186.8694030000006,
+      "p95Ms": 189.10865999999805,
+      "outputBytes": 71626,
+      "width": 1920,
+      "height": 1080,
+      "lastSteps": {
+        "ffmpeg": 186.15091100000063,
+        "webpmux": 2.2860299999993003
+      }
+    },
+    "1080p-video-thumbnail-filter": {
+      "name": "video-thumbnail-filter",
+      "samples": [
+        796.9154129999988,
+        803.1966209999991,
+        505.93443000000116,
+        492.7126660000031,
+        493.62831800000276
+      ],
+      "minMs": 492.7126660000031,
+      "maxMs": 803.1966209999991,
+      "meanMs": 618.477489600001,
+      "medianMs": 505.93443000000116,
+      "p95Ms": 803.1966209999991,
+      "outputBytes": 70694,
+      "width": 1920,
+      "height": 1080,
+      "lastSteps": {
+        "ffmpeg": 489.8225980000025,
+        "webpmux": 3.805720000000292
+      }
+    },
+    "1080p-video-hw-vaapi": {
+      "error": "ffmpeg exited with code 234: ffmpeg: /exec-daemon/tmux-root/lib/libncursesw.so.6: no version information available (required by /lib/x86_64-linux-gnu/libcaca.so.0)\nffmpeg: /exec-daemon/tmux-root/lib/libncursesw.so.6: no version information available (required by /lib/x86_64-linux-gnu/libcaca.so.0)\n[AVHWDeviceContext @ 0x562e1e0b49c0] No VA display found for device /dev/dri/renderD128.\nDevice creation failed: -22.\nNo device available for decoder: device type vaapi needed for codec h264.\n[vist#0:0/h264 @ 0x562e1e192c40] Hardware device setup failed for decoder: Invalid argument\n[vost#0:0/libwebp @ 0x562e1e0b41c0] Error initializing a simple filtergraph\nError opening output file /tmp/shutter-native-perf-ByFitv/out.webp.\nError opening output files: Invalid argument"
+    },
+    "720p-video-baseline-ss1-ffprobe": {
+      "name": "video-baseline-ss1-ffprobe",
+      "samples": [
+        146.00657700000374,
+        144.41884500000015,
+        143.59133100000327,
+        148.43689000000086,
+        145.89165599999615
+      ],
+      "minMs": 143.59133100000327,
+      "maxMs": 148.43689000000086,
+      "meanMs": 145.66905980000084,
+      "medianMs": 145.89165599999615,
+      "p95Ms": 148.43689000000086,
+      "outputBytes": 37740,
+      "width": 1280,
+      "height": 720,
+      "lastSteps": {
+        "ffmpeg": 109.67783199999758,
+        "ffprobe": 36.21382399999857
+      }
+    },
+    "720p-video-baseline-ss1-webpmux": {
+      "name": "video-baseline-ss1-webpmux",
+      "samples": [
+        113.13574399999925,
+        114.57918600000266,
+        109.20352500000081,
+        111.87106800000402,
+        112.256268000001
+      ],
+      "minMs": 109.20352500000081,
+      "maxMs": 114.57918600000266,
+      "meanMs": 112.20915820000155,
+      "medianMs": 112.256268000001,
+      "p95Ms": 114.57918600000266,
+      "outputBytes": 37740,
+      "width": 1280,
+      "height": 720,
+      "lastSteps": {
+        "ffmpeg": 110.03963600000134,
+        "webpmux": 2.216631999999663
+      }
+    },
+    "720p-video-input-seek-ss-before-i": {
+      "name": "video-input-seek-ss-before-i",
+      "samples": [
+        111.33312600000136,
+        109.76958000000013,
+        109.76821399999972,
+        110.8529950000011,
+        112.41381299999921
+      ],
+      "minMs": 109.76821399999972,
+      "maxMs": 112.41381299999921,
+      "meanMs": 110.8275456000003,
+      "medianMs": 110.8529950000011,
+      "p95Ms": 112.41381299999921,
+      "outputBytes": 37740,
+      "width": 1280,
+      "height": 720,
+      "lastSteps": {
+        "ffmpeg": 110.36353400000007,
+        "webpmux": 2.1770890000007057
+      }
+    },
+    "720p-video-fast-seek-noaccurate": {
+      "name": "video-fast-seek-noaccurate",
+      "samples": [
+        113.39931299999807,
+        118.2712490000049,
+        107.62450099999842,
+        111.76526100000046,
+        116.05809399999998
+      ],
+      "minMs": 107.62450099999842,
+      "maxMs": 118.2712490000049,
+      "meanMs": 113.42368360000037,
+      "medianMs": 113.39931299999807,
+      "p95Ms": 118.2712490000049,
+      "outputBytes": 37354,
+      "width": 1280,
+      "height": 720,
+      "lastSteps": {
+        "ffmpeg": 114.11859899999763,
+        "webpmux": 1.6360090000016498
+      }
+    },
+    "720p-video-output-seek-ss-after-i": {
+      "name": "video-output-seek-ss-after-i",
+      "samples": [
+        116.61129999999685,
+        118.87582100000145,
+        109.22304599999916,
+        116.95150799999828,
+        113.09708700000192
+      ],
+      "minMs": 109.22304599999916,
+      "maxMs": 118.87582100000145,
+      "meanMs": 114.95175239999953,
+      "medianMs": 116.61129999999685,
+      "p95Ms": 118.87582100000145,
+      "outputBytes": 37740,
+      "width": 1280,
+      "height": 720,
+      "lastSteps": {
+        "ffmpeg": 110.70445100000143,
+        "webpmux": 2.3926360000004934
+      }
+    },
+    "720p-video-skip-frame-nokey": {
+      "error": "webpmux exited with code 1: Failed to create mux object from file /tmp/shutter-native-perf-5c2Mvs/out.webp."
+    },
+    "720p-video-fast-seek-nokey": {
+      "error": "webpmux exited with code 1: Failed to create mux object from file /tmp/shutter-native-perf-ybSoeW/out.webp."
+    },
+    "720p-video-thumbnail-filter": {
+      "name": "video-thumbnail-filter",
+      "samples": [
+        254.6880590000037,
+        253.62917999999627,
+        270.13871500000096,
+        257.92675299999974,
+        265.189196000003
+      ],
+      "minMs": 253.62917999999627,
+      "maxMs": 270.13871500000096,
+      "meanMs": 260.31438060000073,
+      "medianMs": 257.92675299999974,
+      "p95Ms": 270.13871500000096,
+      "outputBytes": 39556,
+      "width": 1280,
+      "height": 720,
+      "lastSteps": {
+        "ffmpeg": 262.67913000000044,
+        "webpmux": 2.5100660000025528
+      }
+    },
+    "720p-video-hw-vaapi": {
+      "error": "ffmpeg exited with code 234: ffmpeg: /exec-daemon/tmux-root/lib/libncursesw.so.6: no version information available (required by /lib/x86_64-linux-gnu/libcaca.so.0)\nffmpeg: /exec-daemon/tmux-root/lib/libncursesw.so.6: no version information available (required by /lib/x86_64-linux-gnu/libcaca.so.0)\n[AVHWDeviceContext @ 0x556cbee3ef80] No VA display found for device /dev/dri/renderD128.\nDevice creation failed: -22.\nNo device available for decoder: device type vaapi needed for codec h264.\n[vist#0:0/h264 @ 0x556cbede5d00] Hardware device setup failed for decoder: Invalid argument\n[vost#0:0/libwebp @ 0x556cbee3e640] Error initializing a simple filtergraph\nError opening output file /tmp/shutter-native-perf-ZqrquN/out.webp.\nError opening output files: Invalid argument"
+    }
+  }
+}
