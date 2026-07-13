@@ -1,0 +1,468 @@
+{
+  "timestamp": "2026-07-13T01:06:19.888Z",
+  "mode": "all",
+  "config": {
+    "iterations": 5,
+    "warmup": 1
+  },
+  "environment": {
+    "go": "go version go1.22.2 linux/amd64",
+    "node": "v22.14.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "binaries": {
+    "render-cli": 13116200,
+    "subprocess-svc": 17230784,
+    "combined-svc": 17231736,
+    "fitz-svc": 17492520
+  },
+  "baseline": {
+    "pdf": 243.34529199999997,
+    "video1080": 221.557773,
+    "video720": 144.07140399999935
+  },
+  "pdf": {
+    "go-subprocess-pdf": {
+      "name": "go-subprocess-pdf",
+      "samples": [
+        246.096,
+        242.819,
+        240.099,
+        231.847,
+        241.537
+      ],
+      "minMs": 231.847,
+      "maxMs": 246.096,
+      "meanMs": 240.47960000000003,
+      "medianMs": 241.537,
+      "p95Ms": 246.096,
+      "outputBytes": 9996,
+      "lastSteps": [
+        {
+          "name": "pdfinfo",
+          "ms": 5.678
+        },
+        {
+          "name": "pdftoppm",
+          "ms": 67.179
+        },
+        {
+          "name": "ffmpeg",
+          "ms": 133.815
+        },
+        {
+          "name": "ffprobe",
+          "ms": 34.774
+        }
+      ],
+      "renderMs": 241.537
+    },
+    "go-combined-pdf": {
+      "name": "go-combined-pdf",
+      "samples": [
+        212.191,
+        219.864,
+        208.716,
+        206.729,
+        214.256
+      ],
+      "minMs": 206.729,
+      "maxMs": 219.864,
+      "meanMs": 212.3512,
+      "medianMs": 212.191,
+      "p95Ms": 219.864,
+      "outputBytes": 9996,
+      "lastSteps": [
+        {
+          "name": "pdfinfo",
+          "ms": 5.981
+        },
+        {
+          "name": "pdftoppm",
+          "ms": 73.317
+        },
+        {
+          "name": "image_decode_config",
+          "ms": 0.073
+        },
+        {
+          "name": "ffmpeg",
+          "ms": 134.812
+        }
+      ],
+      "renderMs": 214.256
+    },
+    "go-fitz-pdf": {
+      "name": "go-fitz-pdf",
+      "samples": [
+        109.703,
+        108.204,
+        108.895,
+        111.701,
+        114.503
+      ],
+      "minMs": 108.204,
+      "maxMs": 114.503,
+      "meanMs": 110.60120000000002,
+      "medianMs": 109.703,
+      "p95Ms": 114.503,
+      "outputBytes": 10074,
+      "lastSteps": [
+        {
+          "name": "fitz_render",
+          "ms": 23.701
+        },
+        {
+          "name": "webp_encode",
+          "ms": 90.793
+        }
+      ],
+      "renderMs": 114.503
+    }
+  },
+  "video": {
+    "go-subprocess-video-1080p": {
+      "name": "go-subprocess-video-1080p",
+      "samples": [
+        240.999,
+        239.481,
+        237.914,
+        246.391,
+        236.792
+      ],
+      "minMs": 236.792,
+      "maxMs": 246.391,
+      "meanMs": 240.3154,
+      "medianMs": 239.481,
+      "p95Ms": 246.391,
+      "outputBytes": 68934,
+      "lastSteps": [
+        {
+          "name": "ffmpeg",
+          "ms": 200.314
+        },
+        {
+          "name": "ffprobe",
+          "ms": 36.345
+        }
+      ],
+      "renderMs": 236.792
+    },
+    "go-combined-video-1080p": {
+      "name": "go-combined-video-1080p",
+      "samples": [
+        197.144,
+        207.704,
+        206.182,
+        199.901,
+        209.401
+      ],
+      "minMs": 197.144,
+      "maxMs": 209.401,
+      "meanMs": 204.06640000000002,
+      "medianMs": 206.182,
+      "p95Ms": 209.401,
+      "outputBytes": 68934,
+      "lastSteps": [
+        {
+          "name": "ffmpeg",
+          "ms": 209.273
+        },
+        {
+          "name": "image_decode_config",
+          "ms": 0.044
+        }
+      ],
+      "renderMs": 209.401
+    },
+    "go-fitz-video-1080p": {
+      "name": "go-fitz-video-1080p",
+      "samples": [
+        191.07,
+        186.232,
+        188.392,
+        206.635,
+        189.252
+      ],
+      "minMs": 186.232,
+      "maxMs": 206.635,
+      "meanMs": 192.31619999999998,
+      "medianMs": 189.252,
+      "p95Ms": 206.635,
+      "outputBytes": 68934,
+      "lastSteps": [
+        {
+          "name": "ffmpeg",
+          "ms": 189.171
+        },
+        {
+          "name": "image_decode_config",
+          "ms": 0.034
+        }
+      ],
+      "renderMs": 189.252
+    },
+    "go-subprocess-video-720p": {
+      "name": "go-subprocess-video-720p",
+      "samples": [
+        137.241,
+        143.67,
+        143.916,
+        141.155,
+        141.154
+      ],
+      "minMs": 137.241,
+      "maxMs": 143.916,
+      "meanMs": 141.4272,
+      "medianMs": 141.155,
+      "p95Ms": 143.916,
+      "outputBytes": 37740,
+      "lastSteps": [
+        {
+          "name": "ffmpeg",
+          "ms": 106.71
+        },
+        {
+          "name": "ffprobe",
+          "ms": 34.333
+        }
+      ],
+      "renderMs": 141.154
+    },
+    "go-combined-video-720p": {
+      "name": "go-combined-video-720p",
+      "samples": [
+        108.555,
+        108.263,
+        107.231,
+        107.722,
+        105.435
+      ],
+      "minMs": 105.435,
+      "maxMs": 108.555,
+      "meanMs": 107.44119999999998,
+      "medianMs": 107.722,
+      "p95Ms": 108.555,
+      "outputBytes": 37740,
+      "lastSteps": [
+        {
+          "name": "ffmpeg",
+          "ms": 105.36
+        },
+        {
+          "name": "image_decode_config",
+          "ms": 0.043
+        }
+      ],
+      "renderMs": 105.435
+    },
+    "go-fitz-video-720p": {
+      "name": "go-fitz-video-720p",
+      "samples": [
+        109.215,
+        119.47,
+        114.494,
+        110.585,
+        115.153
+      ],
+      "minMs": 109.215,
+      "maxMs": 119.47,
+      "meanMs": 113.7834,
+      "medianMs": 114.494,
+      "p95Ms": 119.47,
+      "outputBytes": 37740,
+      "lastSteps": [
+        {
+          "name": "ffmpeg",
+          "ms": 115.066
+        },
+        {
+          "name": "image_decode_config",
+          "ms": 0.048
+        }
+      ],
+      "renderMs": 115.153
+    }
+  },
+  "http": {
+    "go-http-subprocess-pdf": {
+      "name": "go-http-subprocess-pdf",
+      "samples": [
+        239.26369200000045,
+        254.88140700000076,
+        239.0585289999999,
+        235.28284299999905,
+        251.42396499999995
+      ],
+      "minMs": 235.28284299999905,
+      "maxMs": 254.88140700000076,
+      "meanMs": 243.98208720000002,
+      "medianMs": 239.26369200000045,
+      "p95Ms": 254.88140700000076,
+      "outputBytes": 9996,
+      "lastSteps": [
+        {
+          "name": "pdfinfo",
+          "ms": 5.539
+        },
+        {
+          "name": "pdftoppm",
+          "ms": 66.051
+        },
+        {
+          "name": "ffmpeg",
+          "ms": 141.943
+        },
+        {
+          "name": "ffprobe",
+          "ms": 35.883
+        }
+      ],
+      "renderMs": 249.472
+    },
+    "go-http-combined-pdf": {
+      "name": "go-http-combined-pdf",
+      "samples": [
+        214.11593000000175,
+        208.70724399999926,
+        206.88166699999965,
+        208.91743599999973,
+        206.13740900000084
+      ],
+      "minMs": 206.13740900000084,
+      "maxMs": 214.11593000000175,
+      "meanMs": 208.95193720000026,
+      "medianMs": 208.70724399999926,
+      "p95Ms": 214.11593000000175,
+      "outputBytes": 9996,
+      "lastSteps": [
+        {
+          "name": "pdfinfo",
+          "ms": 5.192
+        },
+        {
+          "name": "pdftoppm",
+          "ms": 66.421
+        },
+        {
+          "name": "image_decode_config",
+          "ms": 0.045
+        },
+        {
+          "name": "ffmpeg",
+          "ms": 133.141
+        }
+      ],
+      "renderMs": 204.866
+    },
+    "go-http-fitz-pdf": {
+      "name": "go-http-fitz-pdf",
+      "samples": [
+        106.91097099999934,
+        104.32578399999875,
+        101.88980400000037,
+        104.9632959999999,
+        102.37517900000057
+      ],
+      "minMs": 101.88980400000037,
+      "maxMs": 106.91097099999934,
+      "meanMs": 104.09300679999978,
+      "medianMs": 104.32578399999875,
+      "p95Ms": 106.91097099999934,
+      "outputBytes": 10074,
+      "lastSteps": [
+        {
+          "name": "fitz_render",
+          "ms": 15.007
+        },
+        {
+          "name": "webp_encode",
+          "ms": 86.153
+        }
+      ],
+      "renderMs": 101.163
+    },
+    "go-http-subprocess-video-1080p": {
+      "name": "go-http-subprocess-video-1080p",
+      "samples": [
+        241.54007999999885,
+        236.0685369999992,
+        229.00198900000032,
+        231.35773300000074,
+        235.24221600000055
+      ],
+      "minMs": 229.00198900000032,
+      "maxMs": 241.54007999999885,
+      "meanMs": 234.64211099999994,
+      "medianMs": 235.24221600000055,
+      "p95Ms": 241.54007999999885,
+      "outputBytes": 68934,
+      "lastSteps": [
+        {
+          "name": "ffmpeg",
+          "ms": 190.605
+        },
+        {
+          "name": "ffprobe",
+          "ms": 43.021
+        }
+      ],
+      "renderMs": 233.726
+    },
+    "go-http-combined-video-1080p": {
+      "name": "go-http-combined-video-1080p",
+      "samples": [
+        197.021490000001,
+        193.3268189999999,
+        195.56673299999966,
+        190.17443400000047,
+        190.85588700000153
+      ],
+      "minMs": 190.17443400000047,
+      "maxMs": 197.021490000001,
+      "meanMs": 193.3890726000005,
+      "medianMs": 193.3268189999999,
+      "p95Ms": 197.021490000001,
+      "outputBytes": 68934,
+      "lastSteps": [
+        {
+          "name": "ffmpeg",
+          "ms": 189.352
+        },
+        {
+          "name": "image_decode_config",
+          "ms": 0.047
+        }
+      ],
+      "renderMs": 189.455
+    },
+    "go-http-fitz-video-1080p": {
+      "name": "go-http-fitz-video-1080p",
+      "samples": [
+        196.0686829999977,
+        199.64538399999947,
+        199.90341199999966,
+        201.29707599999892,
+        196.50488899999982
+      ],
+      "minMs": 196.0686829999977,
+      "maxMs": 201.29707599999892,
+      "meanMs": 198.68388879999912,
+      "medianMs": 199.64538399999947,
+      "p95Ms": 201.29707599999892,
+      "outputBytes": 68934,
+      "lastSteps": [
+        {
+          "name": "ffmpeg",
+          "ms": 194.902
+        },
+        {
+          "name": "image_decode_config",
+          "ms": 0.047
+        }
+      ],
+      "renderMs": 195.01
+    }
+  }
+}
