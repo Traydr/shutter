@@ -1,0 +1,186 @@
+{
+  "timestamp": "2026-07-13T01:03:20.506Z",
+  "environment": {
+    "node": "v22.14.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "config": {
+    "iterations": 3,
+    "warmup": 1
+  },
+  "pdf": {
+    "pdf-baseline-pdftoppm-ffmpeg": {
+      "name": "pdf-baseline-pdftoppm-ffmpeg",
+      "samples": [
+        246.3091809999999,
+        243.34529199999997,
+        243.038316
+      ],
+      "minMs": 243.038316,
+      "maxMs": 246.3091809999999,
+      "meanMs": 244.23092966666664,
+      "medianMs": 243.34529199999997,
+      "p95Ms": 246.3091809999999,
+      "outputBytes": 9996,
+      "lastSteps": {
+        "pdfinfo": 6.11587499999996,
+        "pdftoppm": 68.18956800000001,
+        "ffmpeg": 134.57092999999998,
+        "ffprobe": 34.161943000000065
+      }
+    },
+    "pdf-ffmpeg-direct": {
+      "error": "ffmpeg exited with code 183"
+    },
+    "pdf-ghostscript-webp": {
+      "error": "gs exited with code 1"
+    },
+    "pdf-pdftocairo-ffmpeg": {
+      "error": "pdftocairo exited with code 99"
+    },
+    "pdf-pdftocairo-direct": {
+      "error": "pdftocairo exited with code 99"
+    }
+  },
+  "video": {
+    "1080p-video-baseline-ss1-fallback": {
+      "name": "video-baseline-ss1-fallback",
+      "samples": [
+        218.628921,
+        228.39762799999994,
+        221.557773
+      ],
+      "minMs": 218.628921,
+      "maxMs": 228.39762799999994,
+      "meanMs": 222.86144066666665,
+      "medianMs": 221.557773,
+      "p95Ms": 228.39762799999994,
+      "outputBytes": 68934,
+      "lastSteps": {
+        "ffmpeg": 181.53784200000018,
+        "ffprobe": 40.019930999999815
+      }
+    },
+    "1080p-video-fast-seek-noaccurate": {
+      "name": "video-fast-seek-noaccurate",
+      "samples": [
+        190.6926500000004,
+        192.3906320000001,
+        183.3952760000002
+      ],
+      "minMs": 183.3952760000002,
+      "maxMs": 192.3906320000001,
+      "meanMs": 188.82618600000023,
+      "medianMs": 190.6926500000004,
+      "p95Ms": 192.3906320000001,
+      "outputBytes": 68806,
+      "lastSteps": {
+        "ffmpeg": 183.3952760000002
+      }
+    },
+    "1080p-video-input-seek-ss-before-i": {
+      "name": "video-input-seek-ss-before-i",
+      "samples": [
+        180.07486800000015,
+        194.60224900000003,
+        185.75567899999987
+      ],
+      "minMs": 180.07486800000015,
+      "maxMs": 194.60224900000003,
+      "meanMs": 186.810932,
+      "medianMs": 185.75567899999987,
+      "p95Ms": 194.60224900000003,
+      "outputBytes": 68934,
+      "lastSteps": {
+        "ffmpeg": 185.75567899999987
+      }
+    },
+    "1080p-video-thumbnail-filter": {
+      "name": "video-thumbnail-filter",
+      "samples": [
+        505.8881929999998,
+        502.2042900000006,
+        488.04856500000005
+      ],
+      "minMs": 488.04856500000005,
+      "maxMs": 505.8881929999998,
+      "meanMs": 498.7136826666668,
+      "medianMs": 502.2042900000006,
+      "p95Ms": 505.8881929999998,
+      "outputBytes": 70694,
+      "lastSteps": {
+        "ffmpeg": 488.04856500000005
+      }
+    },
+    "720p-video-baseline-ss1-fallback": {
+      "name": "video-baseline-ss1-fallback",
+      "samples": [
+        146.78744899999947,
+        143.7071189999997,
+        144.07140399999935
+      ],
+      "minMs": 143.7071189999997,
+      "maxMs": 146.78744899999947,
+      "meanMs": 144.8553239999995,
+      "medianMs": 144.07140399999935,
+      "p95Ms": 146.78744899999947,
+      "outputBytes": 37740,
+      "lastSteps": {
+        "ffmpeg": 107.31150999999954,
+        "ffprobe": 36.759893999999804
+      }
+    },
+    "720p-video-fast-seek-noaccurate": {
+      "name": "video-fast-seek-noaccurate",
+      "samples": [
+        106.79661300000043,
+        105.9076070000001,
+        105.13242600000012
+      ],
+      "minMs": 105.13242600000012,
+      "maxMs": 106.79661300000043,
+      "meanMs": 105.94554866666688,
+      "medianMs": 105.9076070000001,
+      "p95Ms": 106.79661300000043,
+      "outputBytes": 37354,
+      "lastSteps": {
+        "ffmpeg": 105.13242600000012
+      }
+    },
+    "720p-video-input-seek-ss-before-i": {
+      "name": "video-input-seek-ss-before-i",
+      "samples": [
+        106.3093689999996,
+        107.99107099999947,
+        120.56043299999965
+      ],
+      "minMs": 106.3093689999996,
+      "maxMs": 120.56043299999965,
+      "meanMs": 111.62029099999957,
+      "medianMs": 107.99107099999947,
+      "p95Ms": 120.56043299999965,
+      "outputBytes": 37740,
+      "lastSteps": {
+        "ffmpeg": 120.56043299999965
+      }
+    },
+    "720p-video-thumbnail-filter": {
+      "name": "video-thumbnail-filter",
+      "samples": [
+        254.09626500000013,
+        259.28746800000044,
+        253.58169799999996
+      ],
+      "minMs": 253.58169799999996,
+      "maxMs": 259.28746800000044,
+      "meanMs": 255.65514366666685,
+      "medianMs": 254.09626500000013,
+      "p95Ms": 259.28746800000044,
+      "outputBytes": 39556,
+      "lastSteps": {
+        "ffmpeg": 253.58169799999996
+      }
+    }
+  }
+}
