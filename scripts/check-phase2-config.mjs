@@ -35,10 +35,12 @@ if (!railway.includes("ghcr.io/imgproxy/imgproxy:v4.0.3")) {
 for (const source of [
   "https://8w0z32yftd.ufs.sh/f/",
   "https://rrsku8h9ue.ufs.sh/f/",
-  "https://t3.storageapi.dev/",
-  "https://pane-view.traydr.dev/",
+  "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/",
 ]) {
   if (!railway.includes(source)) {
     throw new Error(`imgproxy must retain reviewed source prefix ${source}`);
   }
+}
+if (railway.includes("https://pane-view.traydr.dev/")) {
+  throw new Error("imgproxy must not allow the Pane View app host as a source origin");
 }
