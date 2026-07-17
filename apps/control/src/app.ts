@@ -2,9 +2,9 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { S3Client } from "@aws-sdk/client-s3";
 import {
   buildMasterPreviewKey,
-  decodeCapabilityKey,
   emitOperationalEvent,
   ProtocolError,
+  parseCapabilityKeyRegistry,
   validateSourceLocator,
 } from "@shutter/protocol";
 import { getSpacePolicy } from "@shutter/space-config";
@@ -279,13 +279,7 @@ function parseCapabilityKeys(
   value: string | undefined,
 ): Map<string, ReadonlyMap<string, Uint8Array>> {
   if (value === undefined) return new Map();
-  const parsed = JSON.parse(value) as Record<string, Record<string, string>>;
-  return new Map(
-    Object.entries(parsed).map(([spaceId, keys]) => [
-      spaceId,
-      new Map(Object.entries(keys).map(([kid, key]) => [kid, decodeCapabilityKey(key)])),
-    ]),
-  );
+  return new Map(parseCapabilityKeyRegistry(value));
 }
 
 async function dispatchExecutor(kind: "video" | "pdf"): Promise<void> {

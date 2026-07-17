@@ -115,4 +115,34 @@ export interface PreviewJobSubmission {
   sourceCapability: string;
 }
 
+export interface ExecutorClaim {
+  spaceId: string;
+  sourceId: string;
+  kind: RenditionKind;
+  locator: string;
+  outputKey: string;
+  processingToken: string;
+  executionCycle: number;
+  attemptNumber: number;
+}
+
+export interface ExecutorHeartbeatRequest {
+  processingToken: string;
+}
+
+export interface ExecutorCompleteRequest {
+  processingToken: string;
+  masterKey: string;
+  width: number;
+  height: number;
+  format: "webp";
+  objectEtag: string;
+}
+
+export interface ExecutorFailRequest {
+  processingToken: string;
+  retryable: boolean;
+  code?: JobFailureCode;
+}
+
 export type RenditionInput = { type: "source" } | { type: "master"; kind: RenditionKind };

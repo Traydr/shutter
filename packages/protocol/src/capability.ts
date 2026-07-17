@@ -74,10 +74,7 @@ function expectedClaimKeys(purpose: CapabilityPurpose): readonly string[] {
   return ["exp", "iat", "kind", "locator", "purpose", "source_id", "space_id"];
 }
 
-export function validateSourceLocator(
-  locator: string,
-  rules: readonly SourceOriginRule[],
-): void {
+export function validateSourceLocator(locator: string, rules: readonly SourceOriginRule[]): void {
   validateLocator(locator, rules);
 }
 

@@ -180,6 +180,9 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.1084.0
         version: 3.1084.0
+      '@hono/node-server':
+        specifier: 2.0.8
+        version: 2.0.8(hono@4.12.28)
       '@shutter/protocol':
         specifier: workspace:*
         version: link:../protocol

@@ -2,27 +2,28 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DeleteObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { serve } from "@hono/node-server";
 import {
+  type ExecutorClaim,
   emitOperationalEvent,
   type JobFailureCode,
   operationalEvent,
+  parseExecutorClaim,
   type RenditionKind,
   type SourceOriginRule,
 } from "@shutter/protocol";
 import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 
-interface Claim {
-  spaceId: string;
-  sourceId: string;
-  kind: RenditionKind;
-  locator: string;
-  outputKey: string;
-  processingToken: string;
-  executionCycle: number;
-  attemptNumber: number;
-}
+export {
+  type CommandRunner,
+  downloadSource,
+  ProcessingFailure,
+  parseFfprobeDimensions,
+  probeWebpDimensions,
+  runCommand,
+} from "./media.js";
 
 export interface ExecutorConfig {
   controlBaseUrl: string;
@@ -65,7 +66,7 @@ export async function runExecutorOnce(
   });
   if (claimed.status === 204) return "idle";
   if (!claimed.ok) throw new Error(`Control claim failed with ${claimed.status}`);
-  const claim = (await claimed.json()) as Claim;
+  const claim = parseExecutorClaim(await claimed.json());
   if (claim.kind !== processor.kind) throw new Error("Control returned the wrong Rendition kind");
   const startedAt = Date.now();
   emitOperationalEvent(
@@ -181,7 +182,7 @@ async function deleteUploadedAttempt(
 async function emit(
   event: "executor.completed" | "executor.failed" | "executor.stale_completion",
   level: "info" | "error",
-  claim: Claim,
+  claim: ExecutorClaim,
   startedAt: number,
   failureCode?: JobFailureCode | "stale_attempt",
 ) {
@@ -251,4 +252,58 @@ export function createExecutorApp(
     }
   });
   return app;
+}
+
+export function createExecutorConfigFromEnv(): ExecutorConfig | undefined {
+  const required = [
+    "CONTROL_BASE_URL",
+    "EXECUTOR_ROLE_TOKEN",
+    "S3_ENDPOINT",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+    "S3_BUCKET",
+  ] as const;
+  if (!required.every((name) => process.env[name] !== undefined)) return undefined;
+  return {
+    controlBaseUrl: process.env.CONTROL_BASE_URL as string,
+    roleToken: process.env.EXECUTOR_ROLE_TOKEN as string,
+    bucket: process.env.S3_BUCKET as string,
+    fetch: globalThis.fetch,
+    s3: new S3Client({
+      region: process.env.S3_REGION ?? "auto",
+      endpoint: process.env.S3_ENDPOINT as string,
+      forcePathStyle: true,
+      credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY_ID as string,
+        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY as string,
+      },
+    }),
+  };
+}
+
+export function serveExecutorApp(
+  kind: RenditionKind,
+  app: Hono,
+): { close(callback?: (error?: Error) => void): void } {
+  const portValue = process.env.PORT ?? "3000";
+  if (!/^[1-9]\d*$/.test(portValue)) throw new Error("PORT must be a positive integer");
+  const port = Number(portValue);
+  if (!Number.isSafeInteger(port) || port > 65_535) throw new Error("PORT is out of range");
+  const server = serve({ fetch: app.fetch, port });
+  function shutdown() {
+    server.close((error) => {
+      if (error) {
+        emitOperationalEvent("error", {
+          event: "executor.failed",
+          kind,
+          outcome: "failed",
+          failureCode: "service_unavailable",
+        });
+        process.exitCode = 1;
+      }
+    });
+  }
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+  return server;
 }

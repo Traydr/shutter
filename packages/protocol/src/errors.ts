@@ -13,7 +13,8 @@ export type ProtocolErrorCode =
   | "source_mismatch"
   | "locator_not_allowed"
   | "query_invalid"
-  | "submission_invalid";
+  | "submission_invalid"
+  | "request_invalid";
 
 export class ProtocolError extends Error {
   readonly code: ProtocolErrorCode;

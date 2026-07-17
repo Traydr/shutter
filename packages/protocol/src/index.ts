@@ -3,8 +3,8 @@ export {
   type CapabilityKeyMaterial,
   type IssueCapabilityOptions,
   issueSourceCapability,
-  validateSourceLocator,
   type VerifyCapabilityOptions,
+  validateSourceLocator,
   verifySourceCapability,
 } from "./capability.js";
 export * from "./constants.js";
