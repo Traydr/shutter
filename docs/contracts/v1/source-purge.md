@@ -26,4 +26,8 @@ produce `204`, making the operation idempotent. Any partial failure returns a
 retryable service error and the caller repeats the same request.
 
 R2 deletion occurs before Cloudflare tag purge. An Executor that loses its
-processing-token comparison after uploading deletes that stale output.
+processing-token comparison after uploading deletes **this attempt's** stale
+output only, conditioned on the object ETag from its own upload, so a newer
+winning Master Preview at the same deterministic key is left intact. Ambiguous
+complete failures (lost responses or non-CAS Control errors) must not delete
+the object until Control accepts a fail transition for that processing token.

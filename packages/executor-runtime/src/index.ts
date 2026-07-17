@@ -81,6 +81,7 @@ export async function runExecutorOnce(
   );
   const directory = await mkdtemp(join(tmpdir(), `shutter-${processor.kind}-`));
   let uploaded = false;
+  let objectEtag: string | undefined;
   const transition = `/internal/v1/executors/${processor.kind}/jobs/${encodeURIComponent(claim.spaceId)}/${encodeURIComponent(claim.sourceId)}`;
   const heartbeat = setInterval(() => {
     void control(config, `${transition}/heartbeat`, {
@@ -100,6 +101,7 @@ export async function runExecutorOnce(
       }),
     );
     uploaded = true;
+    objectEtag = put.ETag;
     const completed = await control(config, `${transition}/complete`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -109,35 +111,59 @@ export async function runExecutorOnce(
         width: preview.width,
         height: preview.height,
         format: "webp",
-        objectEtag: put.ETag ?? "",
+        objectEtag: objectEtag ?? "",
       }),
     });
     if (!completed.ok) {
-      await config.s3.send(
-        new DeleteObjectCommand({ Bucket: config.bucket, Key: claim.outputKey }),
-      );
-      uploaded = false;
-      if (completed.status !== 409)
-        throw new Error(`Control completion failed with ${completed.status}`);
-      await emit("executor.stale_completion", "error", claim, startedAt, "stale_attempt");
-    } else await emit("executor.completed", "info", claim, startedAt);
+      if (completed.status === 409) {
+        await deleteUploadedAttempt(config, claim.outputKey, objectEtag);
+        uploaded = false;
+        await emit("executor.stale_completion", "error", claim, startedAt, "stale_attempt");
+        return "processed";
+      }
+      throw new Error(`Control completion failed with ${completed.status}`);
+    }
+    await emit("executor.completed", "info", claim, startedAt);
     return "processed";
   } catch (error) {
-    if (uploaded)
-      await config.s3.send(
-        new DeleteObjectCommand({ Bucket: config.bucket, Key: claim.outputKey }),
-      );
     const failure = processor.failure(error);
     await emit("executor.failed", "error", claim, startedAt, failure.code);
-    await control(config, `${transition}/fail`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ processingToken: claim.processingToken, ...failure }),
-    });
+    let failed: Response;
+    try {
+      failed = await control(config, `${transition}/fail`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ processingToken: claim.processingToken, ...failure }),
+      });
+    } catch {
+      // Prefer an orphaned object over deleting a master Control may already own.
+      return "processed";
+    }
+    if (uploaded && failed.status === 204)
+      await deleteUploadedAttempt(config, claim.outputKey, objectEtag);
     return "processed";
   } finally {
     clearInterval(heartbeat);
     await rm(directory, { recursive: true, force: true });
+  }
+}
+
+async function deleteUploadedAttempt(
+  config: ExecutorConfig,
+  key: string,
+  objectEtag: string | undefined,
+): Promise<void> {
+  if (objectEtag === undefined || objectEtag === "") return;
+  try {
+    await config.s3.send(
+      new DeleteObjectCommand({
+        Bucket: config.bucket,
+        Key: key,
+        IfMatch: objectEtag,
+      }),
+    );
+  } catch {
+    // Precondition failure means a newer object owns the key; leave it alone.
   }
 }
 
