@@ -13,6 +13,12 @@ import {
 import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 
+declare module "hono" {
+  interface ExecutionContext {
+    cache?: CacheContext;
+  }
+}
+
 const PRIVATE_EDGE_TTL_SECONDS = 86_400;
 const PUBLIC_BROWSER_TTL_SECONDS = 86_400;
 const PUBLIC_EDGE_TTL_SECONDS = 2_592_000;
