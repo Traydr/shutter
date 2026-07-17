@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -205,6 +206,19 @@ async function emit(
 
 export type ExecutorRunner = (config: ExecutorConfig) => Promise<"idle" | "processed">;
 
+function credentialDigest(value: string): Uint8Array {
+  return createHash("sha256").update(value, "utf8").digest();
+}
+
+function authorizedWake(header: string | undefined, expectedToken: string): boolean {
+  if (expectedToken.length < 32 || header === undefined || !header.startsWith("Bearer "))
+    return false;
+  return timingSafeEqual(
+    credentialDigest(header.slice("Bearer ".length)),
+    credentialDigest(expectedToken),
+  );
+}
+
 export function createExecutorApp(
   kind: RenditionKind,
   config?: ExecutorConfig,
@@ -217,7 +231,7 @@ export function createExecutorApp(
     if (
       config === undefined ||
       run === undefined ||
-      context.req.header("authorization") !== `Bearer ${config.roleToken}`
+      !authorizedWake(context.req.header("authorization"), config.roleToken)
     )
       return context.json({ error: { code: "unauthorized" } }, 401);
     if (running) return context.json({ result: "busy" }, 202);

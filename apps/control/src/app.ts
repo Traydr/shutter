@@ -4,7 +4,10 @@ import {
   buildMasterPreviewKey,
   decodeCapabilityKey,
   emitOperationalEvent,
+  ProtocolError,
+  validateSourceLocator,
 } from "@shutter/protocol";
+import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 import { Pool } from "pg";
 import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
@@ -47,6 +50,26 @@ function isCacheKey(value: string): boolean {
   );
 }
 
+function spaceIdFromCacheKey(key: string): string | undefined {
+  const segments = key.split("/");
+  // cache/v1/{routeClass}/{spaceId}/{fingerprint}/{input}/wN-qN.webp
+  if (segments.length < 6 || segments[0] !== "cache" || segments[1] !== "v1") return undefined;
+  const routeClass = segments[2];
+  const spaceId = segments[3];
+  if (
+    (routeClass !== "public" && routeClass !== "private") ||
+    spaceId === undefined ||
+    spaceId.length === 0
+  ) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(spaceId);
+  } catch {
+    return undefined;
+  }
+}
+
 function strictPositiveInteger(value: string | null): number | undefined {
   if (value === null || !/^[1-9]\d*$/u.test(value)) return undefined;
   const parsed = Number(value);
@@ -82,9 +105,13 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
     const width = strictPositiveInteger(query.get("w"));
     const quality = strictPositiveInteger(query.get("q"));
     const imgproxy = runtime.imgproxyConfig();
+    const spaceId = key === null ? undefined : spaceIdFromCacheKey(key);
+    const policy = spaceId === undefined ? undefined : getSpacePolicy(spaceId);
     if (
       key === null ||
       !isCacheKey(key) ||
+      spaceId === undefined ||
+      policy === undefined ||
       source === null ||
       width === undefined ||
       quality === undefined ||
@@ -94,6 +121,17 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
       return context.json({ error: { code: "request_invalid" } }, 400, {
         "cache-control": "private, no-store",
       });
+    }
+
+    try {
+      validateSourceLocator(source, policy.allowedSourceOrigins);
+    } catch (error) {
+      if (error instanceof ProtocolError) {
+        return context.json({ error: { code: error.code } }, 403, {
+          "cache-control": "private, no-store",
+        });
+      }
+      throw error;
     }
 
     try {
