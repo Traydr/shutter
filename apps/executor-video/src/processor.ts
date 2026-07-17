@@ -3,6 +3,7 @@ import { createWriteStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { type SourceOriginRule, validateSourceLocator } from "@shutter/protocol";
 
 export const VIDEO_MAX_BYTES = 512 * 1024 * 1024;
 export const ATTEMPT_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -27,6 +28,7 @@ export type CommandRunner = (
 export interface VideoProcessorDependencies {
   fetch: typeof globalThis.fetch;
   runCommand: CommandRunner;
+  allowedSourceOrigins: readonly SourceOriginRule[];
 }
 
 export interface ProcessedVideoPreview {
@@ -54,10 +56,22 @@ export async function runCommand(
   });
 }
 
-async function download(locator: string, destination: string, fetch_: typeof fetch): Promise<void> {
+function assertAllowlisted(locator: string, rules: readonly SourceOriginRule[]): void {
+  try {
+    validateSourceLocator(locator, rules);
+  } catch {
+    throw new ProcessingFailure("source_missing", "source locator is not allowlisted");
+  }
+}
+
+async function download(
+  locator: string,
+  destination: string,
+  fetch_: typeof fetch,
+  allowedSourceOrigins: readonly SourceOriginRule[],
+): Promise<void> {
+  assertAllowlisted(locator, allowedSourceOrigins);
   let url = new URL(locator);
-  if (url.protocol !== "https:")
-    throw new ProcessingFailure("source_missing", "source must be HTTPS");
   for (let redirects = 0; redirects <= 2; redirects += 1) {
     const response = await fetch_(url, { redirect: "manual", signal: AbortSignal.timeout(30_000) });
     if (response.status >= 300 && response.status < 400) {
@@ -65,8 +79,7 @@ async function download(locator: string, destination: string, fetch_: typeof fet
       if (location === null || redirects === 2)
         throw new ProcessingFailure("source_missing", "redirect rejected");
       url = new URL(location, url);
-      if (url.protocol !== "https:")
-        throw new ProcessingFailure("source_missing", "redirect must be HTTPS");
+      assertAllowlisted(url.toString(), allowedSourceOrigins);
       continue;
     }
     if (response.status === 404 || response.status === 410)
@@ -110,7 +123,7 @@ export async function processVideoPreview(
   outputPath: string,
   dependencies: VideoProcessorDependencies,
 ): Promise<ProcessedVideoPreview> {
-  await download(locator, inputPath, dependencies.fetch);
+  await download(locator, inputPath, dependencies.fetch, dependencies.allowedSourceOrigins);
   const common = [
     "-hide_banner",
     "-loglevel",

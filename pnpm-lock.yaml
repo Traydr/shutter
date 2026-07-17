@@ -183,6 +183,9 @@ importers:
       '@shutter/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@shutter/space-config':
+        specifier: workspace:*
+        version: link:../space-config
       hono:
         specifier: 4.12.28
         version: 4.12.28

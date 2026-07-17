@@ -7,7 +7,9 @@ import {
   type JobFailureCode,
   operationalEvent,
   type RenditionKind,
+  type SourceOriginRule,
 } from "@shutter/protocol";
+import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 
 interface Claim {
@@ -41,6 +43,7 @@ export interface ExecutorProcessor {
     locator: string,
     directory: string,
     fetch: typeof globalThis.fetch,
+    allowedSourceOrigins: readonly SourceOriginRule[],
   ): Promise<ProcessedMasterPreview>;
   failure(error: unknown): { retryable: boolean; code?: JobFailureCode };
 }
@@ -83,6 +86,8 @@ export async function runExecutorOnce(
   let uploaded = false;
   let objectEtag: string | undefined;
   const transition = `/internal/v1/executors/${processor.kind}/jobs/${encodeURIComponent(claim.spaceId)}/${encodeURIComponent(claim.sourceId)}`;
+  const policy = getSpacePolicy(claim.spaceId);
+  if (policy === undefined) throw new Error(`Unknown Shutter Space ${claim.spaceId}`);
   const heartbeat = setInterval(() => {
     void control(config, `${transition}/heartbeat`, {
       method: "POST",
@@ -91,7 +96,12 @@ export async function runExecutorOnce(
     });
   }, 60_000);
   try {
-    const preview = await processor.process(claim.locator, directory, config.fetch);
+    const preview = await processor.process(
+      claim.locator,
+      directory,
+      config.fetch,
+      policy.allowedSourceOrigins,
+    );
     const put = await config.s3.send(
       new PutObjectCommand({
         Bucket: config.bucket,

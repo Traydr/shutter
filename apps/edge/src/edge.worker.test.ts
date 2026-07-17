@@ -53,7 +53,8 @@ describe("edge app", () => {
         space_id: "pane-view",
         source_id: sourceId,
         purpose: "image_source",
-        locator: "https://pane-view.traydr.dev/private-source.webp",
+        locator:
+          "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source.webp",
         iat: now - 60,
         exp: now + 3_600,
       },
@@ -314,7 +315,8 @@ describe("edge app", () => {
         space_id: "pane-view",
         source_id: "private-source-miss",
         purpose: "image_source",
-        locator: "https://pane-view.traydr.dev/private-source-miss.webp",
+        locator:
+          "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source-miss.webp",
         iat: now - 60,
         exp: now + 3_600,
       },

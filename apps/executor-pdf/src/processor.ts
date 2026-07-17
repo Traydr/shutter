@@ -3,6 +3,7 @@ import { createWriteStream } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { type SourceOriginRule, validateSourceLocator } from "@shutter/protocol";
 
 export const PDF_MAX_BYTES = 128 * 1024 * 1024;
 export const ATTEMPT_TIMEOUT_MS = 10 * 60 * 1_000;
@@ -30,6 +31,7 @@ export type CommandRunner = (
 export interface PdfProcessorDependencies {
   fetch: typeof globalThis.fetch;
   runCommand: CommandRunner;
+  allowedSourceOrigins: readonly SourceOriginRule[];
 }
 
 export async function runCommand(
@@ -51,11 +53,22 @@ export async function runCommand(
   });
 }
 
-async function download(locator: string, destination: string, fetch_: typeof fetch): Promise<void> {
-  let url = new URL(locator);
-  if (url.protocol !== "https:") {
-    throw new ProcessingFailure("source_missing", "source must be HTTPS");
+function assertAllowlisted(locator: string, rules: readonly SourceOriginRule[]): void {
+  try {
+    validateSourceLocator(locator, rules);
+  } catch {
+    throw new ProcessingFailure("source_missing", "source locator is not allowlisted");
   }
+}
+
+async function download(
+  locator: string,
+  destination: string,
+  fetch_: typeof fetch,
+  allowedSourceOrigins: readonly SourceOriginRule[],
+): Promise<void> {
+  assertAllowlisted(locator, allowedSourceOrigins);
+  let url = new URL(locator);
   for (let redirects = 0; redirects <= 2; redirects += 1) {
     const response = await fetch_(url, {
       redirect: "manual",
@@ -67,9 +80,7 @@ async function download(locator: string, destination: string, fetch_: typeof fet
         throw new ProcessingFailure("source_missing", "redirect rejected");
       }
       url = new URL(location, url);
-      if (url.protocol !== "https:") {
-        throw new ProcessingFailure("source_missing", "redirect must be HTTPS");
-      }
+      assertAllowlisted(url.toString(), allowedSourceOrigins);
       continue;
     }
     if (response.status === 404 || response.status === 410) {
@@ -116,7 +127,7 @@ export async function processPdfPreview(
   outputPath: string,
   dependencies: PdfProcessorDependencies,
 ): Promise<{ bytes: Uint8Array; width: number; height: number }> {
-  await download(locator, inputPath, dependencies.fetch);
+  await download(locator, inputPath, dependencies.fetch, dependencies.allowedSourceOrigins);
   let info: string;
   try {
     info = await dependencies.runCommand("pdfinfo", [inputPath], 30_000);

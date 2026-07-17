@@ -24,8 +24,10 @@ const paneView = Object.freeze({
   qualities: Object.freeze([30, 75, 80]),
   defaultQuality: 75,
   allowedSourceOrigins: Object.freeze([
-    Object.freeze({ origin: "https://t3.storageapi.dev" }),
-    Object.freeze({ origin: "https://pane-view.traydr.dev" }),
+    Object.freeze({
+      origin: "https://t3.storageapi.dev",
+      pathPrefix: "/balanced-wrap-ocyiwwexhao",
+    }),
   ]),
   resolvers: Object.freeze([] as const),
 }) satisfies SpacePolicy;

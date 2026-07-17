@@ -3,6 +3,7 @@ export {
   type CapabilityKeyMaterial,
   type IssueCapabilityOptions,
   issueSourceCapability,
+  validateSourceLocator,
   type VerifyCapabilityOptions,
   verifySourceCapability,
 } from "./capability.js";

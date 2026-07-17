@@ -18,7 +18,7 @@ async function capability(): Promise<string> {
       source_id: "source-1",
       purpose: "preview_job",
       kind: "video",
-      locator: "https://pane-view.traydr.dev/source-1.mp4",
+      locator: "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/source-1.mp4",
       iat: seconds - 60,
       exp: seconds + 3_600,
     },
@@ -78,7 +78,9 @@ describe("job API", () => {
     expect(claim.status).toBe(200);
     const work = await claim.json<Record<string, unknown>>();
     expect(work).not.toHaveProperty("sourceCapability");
-    expect(work.locator).toBe("https://pane-view.traydr.dev/source-1.mp4");
+    expect(work.locator).toBe(
+      "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/source-1.mp4",
+    );
 
     const completed = await app.request(
       "http://shutter.test/internal/v1/executors/video/jobs/pane-view/source-1/complete",
