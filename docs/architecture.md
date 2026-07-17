@@ -210,14 +210,16 @@ All Cloudflare cache entries for a source carry a tag derived from a hash of the
 Space ID and Source ID. R2 keys group cached renditions and Master Previews under
 equivalent per-source prefixes. While serializing Control operations for that
 source, Shutter invalidates its jobs, deletes all matching R2 objects through
-paginated prefix listing, globally purges its Cloudflare cache tag, and then
-returns `204 No Content`. The R2 deletion precedes the edge purge so a concurrent
-edge request cannot repopulate a globally purged cache from a stored rendition.
+paginated prefix listing, purges the Worker Cache API via Edge
+`POST /internal/v1/cache/purge`, globally purges the Cloudflare zone cache tag,
+and then returns `204 No Content`. The R2 deletion precedes both edge purges so a
+concurrent edge request cannot repopulate a purged cache from a stored rendition.
 
-The operation returns success only after all three stores are cleared. A partial
-failure returns a retryable service error; repeating the same request safely
-repeats every step. A stale Executor whose processing-token comparison fails
-must delete any output it uploaded and cannot recreate job state after purge.
+The operation returns success only after R2, the Worker Cache API, and the zone
+CDN tag are cleared. A partial failure returns a retryable service error;
+repeating the same request safely repeats every step. A stale Executor whose
+processing-token comparison fails must delete any output it uploaded (etag-
+conditioned) and cannot recreate job state after purge.
 
 ## Image delivery
 

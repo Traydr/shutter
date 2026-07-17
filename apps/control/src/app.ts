@@ -310,13 +310,17 @@ const sourcePurge =
   renditionJobLifecycle &&
   process.env.S3_BUCKET &&
   process.env.CLOUDFLARE_ZONE_ID &&
-  process.env.CLOUDFLARE_CACHE_PURGE_TOKEN
+  process.env.CLOUDFLARE_CACHE_PURGE_TOKEN &&
+  process.env.EDGE_BASE_URL &&
+  process.env.ORIGIN_AUTH_TOKEN
     ? createSourcePurge({
         lifecycle: renditionJobLifecycle,
         s3: renditionS3,
         bucket: process.env.S3_BUCKET,
         cloudflareZoneId: process.env.CLOUDFLARE_ZONE_ID,
         cloudflareApiToken: process.env.CLOUDFLARE_CACHE_PURGE_TOKEN,
+        edgeBaseUrl: process.env.EDGE_BASE_URL,
+        edgeAuthToken: process.env.ORIGIN_AUTH_TOKEN,
         fetch: globalThis.fetch,
       })
     : undefined;

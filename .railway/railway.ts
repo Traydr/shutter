@@ -95,6 +95,7 @@ export default defineRailway(() => {
       CLOUDFLARE_CACHE_PURGE_TOKEN: preserve(),
       CLOUDFLARE_ZONE_ID: preserve(),
       DATABASE_URL: Jobs.env.DATABASE_URL,
+      EDGE_BASE_URL: preserve(),
       IMGPROXY_BASE_URL: `http://\${{Shutter-Imgproxy.RAILWAY_PRIVATE_DOMAIN}}:${imgproxyPort}`,
       IMGPROXY_KEY: preserve(),
       IMGPROXY_SALT: preserve(),
