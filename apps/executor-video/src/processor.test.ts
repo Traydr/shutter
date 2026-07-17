@@ -38,6 +38,7 @@ describe("video preview processor", () => {
     const result = await processVideoPreview("https://media.example/video.mp4", input, output, {
       fetch: fetch_,
       runCommand: run,
+      allowedSourceOrigins: [{ origin: "https://media.example" }],
     });
     expect({ ...result, bytes: [...result.bytes] }).toEqual({
       bytes: [4, 5],
@@ -62,6 +63,30 @@ describe("video preview processor", () => {
       processVideoPreview("https://media.example/start", input, output, {
         fetch: fetch_,
         runCommand: vi.fn(),
+        allowedSourceOrigins: [{ origin: "https://media.example" }],
+      }),
+    ).rejects.toMatchObject<Partial<ProcessingFailure>>({
+      code: "source_missing",
+      retryable: false,
+    });
+    expect(fetch_).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a redirect off the Space allowlist", async () => {
+    const { input, output } = await paths();
+    const fetch_ = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://evil.example/video.mp4" },
+        }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      processVideoPreview("https://media.example/start", input, output, {
+        fetch: fetch_,
+        runCommand: vi.fn(),
+        allowedSourceOrigins: [{ origin: "https://media.example" }],
       }),
     ).rejects.toMatchObject<Partial<ProcessingFailure>>({
       code: "source_missing",

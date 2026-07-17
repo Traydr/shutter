@@ -10,13 +10,13 @@ export type PdfExecutorConfig = ExecutorConfig;
 
 const pdfProcessor: ExecutorProcessor = {
   kind: "pdf",
-  process: (locator, directory, fetch) =>
+  process: (locator, directory, fetch, allowedSourceOrigins) =>
     processPdfPreview(
       locator,
       join(directory, "source.pdf"),
       join(directory, "page"),
       join(directory, "preview.webp"),
-      { fetch, runCommand },
+      { fetch, runCommand, allowedSourceOrigins },
     ),
   failure: (error) =>
     error instanceof ProcessingFailure

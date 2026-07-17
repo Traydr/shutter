@@ -4,6 +4,7 @@ export {
   type IssueCapabilityOptions,
   issueSourceCapability,
   type VerifyCapabilityOptions,
+  validateSourceLocator,
   verifySourceCapability,
 } from "./capability.js";
 export * from "./constants.js";

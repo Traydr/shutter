@@ -74,6 +74,10 @@ function expectedClaimKeys(purpose: CapabilityPurpose): readonly string[] {
   return ["exp", "iat", "kind", "locator", "purpose", "source_id", "space_id"];
 }
 
+export function validateSourceLocator(locator: string, rules: readonly SourceOriginRule[]): void {
+  validateLocator(locator, rules);
+}
+
 function validateLocator(locator: string, rules: readonly SourceOriginRule[]): void {
   if (encodeUtf8(locator).byteLength > SOURCE_LOCATOR_MAX_BYTES) {
     throw new ProtocolError("claims_invalid", "source locator is too large");

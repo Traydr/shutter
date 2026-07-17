@@ -1,11 +1,15 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
   buildMasterPreviewKey,
+  type ExecutorCompleteRequest,
+  type ExecutorFailRequest,
+  type ExecutorHeartbeatRequest,
   emitOperationalEvent,
-  FAILURE_ACTIONS,
-  type JobFailureCode,
   operationalEvent,
   ProtocolError,
+  parseExecutorCompleteRequest,
+  parseExecutorFailRequest,
+  parseExecutorHeartbeatRequest,
   parsePreviewJobSubmission,
   type RenditionJobRepresentation,
   type RenditionKind,
@@ -50,12 +54,6 @@ function tokenMatches(actual: string | undefined, expected: readonly string[]): 
 
 function kind(value: string): RenditionKind | undefined {
   return value === "video" || value === "pdf" ? value : undefined;
-}
-
-function failureCode(value: unknown): JobFailureCode | undefined {
-  return typeof value === "string" && value in FAILURE_ACTIONS
-    ? (value as JobFailureCode)
-    : undefined;
 }
 
 function identityFromRoute(context: {
@@ -264,13 +262,12 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     ) {
       return requestFailure(401, "unauthorized");
     }
-    let body: { processingToken?: unknown };
+    let body: ExecutorHeartbeatRequest;
     try {
-      body = (await strictJson(context.req.raw)) as { processingToken?: unknown };
+      body = parseExecutorHeartbeatRequest(await strictJson(context.req.raw));
     } catch {
       return requestFailure(400, "request_invalid");
     }
-    if (typeof body.processingToken !== "string") return requestFailure(400, "request_invalid");
     const result = await runtime.lifecycle.heartbeat(identity, body.processingToken, runtime.now());
     return result.outcome === "accepted"
       ? new Response(null, { status: 204 })
@@ -287,22 +284,10 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     ) {
       return requestFailure(401, "unauthorized");
     }
-    let body: Record<string, unknown>;
+    let body: ExecutorCompleteRequest;
     try {
-      body = (await strictJson(context.req.raw)) as Record<string, unknown>;
+      body = parseExecutorCompleteRequest(await strictJson(context.req.raw));
     } catch {
-      return requestFailure(400, "request_invalid");
-    }
-    if (
-      Object.keys(body).sort().join(",") !==
-        "format,height,masterKey,objectEtag,processingToken,width" ||
-      typeof body.processingToken !== "string" ||
-      typeof body.masterKey !== "string" ||
-      !Number.isSafeInteger(body.width) ||
-      !Number.isSafeInteger(body.height) ||
-      body.format !== "webp" ||
-      typeof body.objectEtag !== "string"
-    ) {
       return requestFailure(400, "request_invalid");
     }
     const expectedKey = await buildMasterPreviewKey(
@@ -313,8 +298,8 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     if (body.masterKey !== expectedKey) return requestFailure(400, "request_invalid");
     const completion: MasterCompletion = {
       masterKey: body.masterKey,
-      width: body.width as number,
-      height: body.height as number,
+      width: body.width,
+      height: body.height,
       format: "webp",
       objectEtag: body.objectEtag,
     };
@@ -354,24 +339,19 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     ) {
       return requestFailure(401, "unauthorized");
     }
-    let body: Record<string, unknown>;
+    let body: ExecutorFailRequest;
     try {
-      body = (await strictJson(context.req.raw)) as Record<string, unknown>;
+      body = parseExecutorFailRequest(await strictJson(context.req.raw));
     } catch {
-      return requestFailure(400, "request_invalid");
-    }
-    const code = body.code === undefined ? undefined : failureCode(body.code);
-    if (
-      typeof body.processingToken !== "string" ||
-      typeof body.retryable !== "boolean" ||
-      (body.code !== undefined && code === undefined)
-    ) {
       return requestFailure(400, "request_invalid");
     }
     const result = await runtime.lifecycle.fail(
       identity,
       body.processingToken,
-      { retryable: body.retryable, ...(code === undefined ? {} : { code }) },
+      {
+        retryable: body.retryable,
+        ...(body.code === undefined ? {} : { code: body.code }),
+      },
       runtime.now(),
     );
     emitOperationalEvent(
@@ -384,7 +364,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         fields: {
           kind: identity.kind,
           outcome: "failed",
-          ...(code === undefined ? {} : { failureCode: code }),
+          ...(body.code === undefined ? {} : { failureCode: body.code }),
         },
       }),
     );

@@ -39,7 +39,7 @@ export default defineRailway(() => {
     networking: { privateNetworkEndpoint: "shutter-imgproxy" },
     env: {
       IMGPROXY_ALLOWED_SOURCES:
-        "https://8w0z32yftd.ufs.sh/f/,https://rrsku8h9ue.ufs.sh/f/,https://t3.storageapi.dev/,https://pane-view.traydr.dev/,https://d786e753d574eb02fb154ecf8015eb86.r2.cloudflarestorage.com/",
+        "https://8w0z32yftd.ufs.sh/f/,https://rrsku8h9ue.ufs.sh/f/,https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/,https://d786e753d574eb02fb154ecf8015eb86.r2.cloudflarestorage.com/",
       IMGPROXY_ALLOW_LINK_LOCAL_SOURCE_ADDRESSES: "false",
       IMGPROXY_ALLOW_LOOPBACK_SOURCE_ADDRESSES: "false",
       IMGPROXY_ALLOW_PRIVATE_SOURCE_ADDRESSES: "false",
@@ -95,6 +95,7 @@ export default defineRailway(() => {
       CLOUDFLARE_CACHE_PURGE_TOKEN: preserve(),
       CLOUDFLARE_ZONE_ID: preserve(),
       DATABASE_URL: Jobs.env.DATABASE_URL,
+      EDGE_BASE_URL: preserve(),
       IMGPROXY_BASE_URL: `http://\${{Shutter-Imgproxy.RAILWAY_PRIVATE_DOMAIN}}:${imgproxyPort}`,
       IMGPROXY_KEY: preserve(),
       IMGPROXY_SALT: preserve(),

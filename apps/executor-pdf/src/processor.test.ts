@@ -45,6 +45,7 @@ describe("PDF preview processor", () => {
       {
         fetch: fetch_,
         runCommand: run,
+        allowedSourceOrigins: [{ origin: "https://media.example" }],
       },
     );
     expect({ ...result, bytes: [...result.bytes] }).toEqual({
@@ -63,6 +64,7 @@ describe("PDF preview processor", () => {
       processPdfPreview("https://media.example/file.pdf", input, prefix, output, {
         fetch: fetch_,
         runCommand: vi.fn(async () => "Pages: 1\nEncrypted: yes\n"),
+        allowedSourceOrigins: [{ origin: "https://media.example" }],
       }),
     ).rejects.toMatchObject<Partial<ProcessingFailure>>({
       code: "pdf_password_protected",

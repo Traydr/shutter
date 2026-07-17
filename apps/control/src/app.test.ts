@@ -12,8 +12,14 @@ const IMGPROXY = {
 
 function spikeUrl(): string {
   const url = new URL("http://shutter.test/internal/v1/spike/rendition");
-  url.searchParams.set("key", "cache/v1/public/test.webp");
-  url.searchParams.set("source", "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/test.jpg");
+  url.searchParams.set(
+    "key",
+    "cache/v1/private/pane-view/N9NjtQwUp8dMa1ZiHnNJoAhg7-DZ-KOSehNDho5dYKs/source/w640-q75.webp",
+  );
+  url.searchParams.set(
+    "source",
+    "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/test.jpg",
+  );
   url.searchParams.set("w", "640");
   url.searchParams.set("q", "75");
   return url.href;
@@ -86,11 +92,28 @@ describe("control app", () => {
       fetch,
     });
     const missingSource = await control.request(
-      "http://shutter.test/internal/v1/spike/rendition?key=cache/v1/public/test.webp&w=640&q=75",
+      "http://shutter.test/internal/v1/spike/rendition?key=cache/v1/private/pane-view/fp/source/w640-q75.webp&w=640&q=75",
       { headers: { authorization: `Bearer ${TOKEN}` } },
     );
 
     expect(missingSource.status).toBe(400);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects origin sources outside the Space allowlist", async () => {
+    const fetch = vi.fn();
+    const control = createControlApp({
+      originAuthToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch,
+    });
+    const url = new URL(spikeUrl());
+    url.searchParams.set("source", "https://evil.example/object.jpg");
+    const response = await control.request(url, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: { code: "locator_not_allowed" } });
     expect(fetch).not.toHaveBeenCalled();
   });
 

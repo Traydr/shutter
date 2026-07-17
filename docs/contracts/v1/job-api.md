@@ -109,3 +109,35 @@ The response contains no raw source locator, upstream response, stack trace,
 Executor command line, or stderr. Those details exist only in access-controlled,
 redacted operational logs. An invalid capability or request rejected before job
 creation is an HTTP request error, not a persisted failed job.
+
+## Executor Control wire API
+
+Authenticated Executor role credentials call kind-scoped internal routes. Request
+and response bodies are validated by `@shutter/protocol` parsers shared with
+Executors.
+
+### Claim response (`POST /internal/v1/executors/{kind}/claim`)
+
+`204` when idle. Otherwise JSON:
+
+```json
+{
+  "spaceId": "pane-view",
+  "sourceId": "application-issued-source-id",
+  "kind": "video",
+  "locator": "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/a.mp4",
+  "outputKey": "masters/v1/pane-view/<fingerprint>/video.webp",
+  "processingToken": "opaque-token",
+  "executionCycle": 0,
+  "attemptNumber": 1
+}
+```
+
+### Heartbeat / complete / fail
+
+- Heartbeat body: `{ "processingToken": "..." }`
+- Complete body: `{ "processingToken", "masterKey", "width", "height", "format": "webp", "objectEtag" }`
+- Fail body: `{ "processingToken", "retryable", "code"? }` where `code` is a
+  known job failure code when present
+
+Stale processing tokens return `409` with `stale_attempt`.

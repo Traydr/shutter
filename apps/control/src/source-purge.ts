@@ -18,6 +18,8 @@ export interface SourcePurgeConfig {
   bucket: string;
   cloudflareZoneId: string;
   cloudflareApiToken: string;
+  edgeBaseUrl: string;
+  edgeAuthToken: string;
   fetch: typeof globalThis.fetch;
 }
 
@@ -59,6 +61,19 @@ export function createSourcePurge(config: SourcePurgeConfig): SourcePurge {
           for (const prefix of prefixes) await deletePrefix(config.s3, config.bucket, prefix);
 
           const tag = await buildSourceCacheTag(source.spaceId, source.sourceId);
+          const edgePurge = await config.fetch(
+            new URL("/internal/v1/cache/purge", config.edgeBaseUrl),
+            {
+              method: "POST",
+              headers: {
+                authorization: `Bearer ${config.edgeAuthToken}`,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({ tags: [tag] }),
+            },
+          );
+          if (!edgePurge.ok) throw new Error("worker cache purge failed");
+
           const response = await config.fetch(
             `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(config.cloudflareZoneId)}/purge_cache`,
             {

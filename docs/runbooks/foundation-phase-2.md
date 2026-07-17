@@ -28,7 +28,7 @@ provider evidence required to close Phase 2.
 
 1. Confirm the reviewed imgproxy and Space allowlists remain limited to Ernesta
    UploadThing projects `8w0z32yftd` and `rrsku8h9ue`, Pane View origins
-   `https://t3.storageapi.dev` and `https://pane-view.traydr.dev`, and the exact
+   `https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/`, and the exact
    R2 S3 endpoint used for short-lived Master Preview reads.
 2. Preview `.railway/railway.ts` with `railway config plan`. Review every
    resource and variable change.

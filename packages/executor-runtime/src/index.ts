@@ -1,25 +1,29 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DeleteObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { serve } from "@hono/node-server";
 import {
+  type ExecutorClaim,
   emitOperationalEvent,
   type JobFailureCode,
   operationalEvent,
+  parseExecutorClaim,
   type RenditionKind,
+  type SourceOriginRule,
 } from "@shutter/protocol";
+import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 
-interface Claim {
-  spaceId: string;
-  sourceId: string;
-  kind: RenditionKind;
-  locator: string;
-  outputKey: string;
-  processingToken: string;
-  executionCycle: number;
-  attemptNumber: number;
-}
+export {
+  type CommandRunner,
+  downloadSource,
+  ProcessingFailure,
+  parseFfprobeDimensions,
+  probeWebpDimensions,
+  runCommand,
+} from "./media.js";
 
 export interface ExecutorConfig {
   controlBaseUrl: string;
@@ -41,6 +45,7 @@ export interface ExecutorProcessor {
     locator: string,
     directory: string,
     fetch: typeof globalThis.fetch,
+    allowedSourceOrigins: readonly SourceOriginRule[],
   ): Promise<ProcessedMasterPreview>;
   failure(error: unknown): { retryable: boolean; code?: JobFailureCode };
 }
@@ -61,7 +66,7 @@ export async function runExecutorOnce(
   });
   if (claimed.status === 204) return "idle";
   if (!claimed.ok) throw new Error(`Control claim failed with ${claimed.status}`);
-  const claim = (await claimed.json()) as Claim;
+  const claim = parseExecutorClaim(await claimed.json());
   if (claim.kind !== processor.kind) throw new Error("Control returned the wrong Rendition kind");
   const startedAt = Date.now();
   emitOperationalEvent(
@@ -81,7 +86,10 @@ export async function runExecutorOnce(
   );
   const directory = await mkdtemp(join(tmpdir(), `shutter-${processor.kind}-`));
   let uploaded = false;
+  let objectEtag: string | undefined;
   const transition = `/internal/v1/executors/${processor.kind}/jobs/${encodeURIComponent(claim.spaceId)}/${encodeURIComponent(claim.sourceId)}`;
+  const policy = getSpacePolicy(claim.spaceId);
+  if (policy === undefined) throw new Error(`Unknown Shutter Space ${claim.spaceId}`);
   const heartbeat = setInterval(() => {
     void control(config, `${transition}/heartbeat`, {
       method: "POST",
@@ -90,7 +98,12 @@ export async function runExecutorOnce(
     });
   }, 60_000);
   try {
-    const preview = await processor.process(claim.locator, directory, config.fetch);
+    const preview = await processor.process(
+      claim.locator,
+      directory,
+      config.fetch,
+      policy.allowedSourceOrigins,
+    );
     const put = await config.s3.send(
       new PutObjectCommand({
         Bucket: config.bucket,
@@ -100,6 +113,7 @@ export async function runExecutorOnce(
       }),
     );
     uploaded = true;
+    objectEtag = put.ETag;
     const completed = await control(config, `${transition}/complete`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -109,31 +123,36 @@ export async function runExecutorOnce(
         width: preview.width,
         height: preview.height,
         format: "webp",
-        objectEtag: put.ETag ?? "",
+        objectEtag: objectEtag ?? "",
       }),
     });
     if (!completed.ok) {
-      await config.s3.send(
-        new DeleteObjectCommand({ Bucket: config.bucket, Key: claim.outputKey }),
-      );
-      uploaded = false;
-      if (completed.status !== 409)
-        throw new Error(`Control completion failed with ${completed.status}`);
-      await emit("executor.stale_completion", "error", claim, startedAt, "stale_attempt");
-    } else await emit("executor.completed", "info", claim, startedAt);
+      if (completed.status === 409) {
+        await deleteUploadedAttempt(config, claim.outputKey, objectEtag);
+        uploaded = false;
+        await emit("executor.stale_completion", "error", claim, startedAt, "stale_attempt");
+        return "processed";
+      }
+      throw new Error(`Control completion failed with ${completed.status}`);
+    }
+    await emit("executor.completed", "info", claim, startedAt);
     return "processed";
   } catch (error) {
-    if (uploaded)
-      await config.s3.send(
-        new DeleteObjectCommand({ Bucket: config.bucket, Key: claim.outputKey }),
-      );
     const failure = processor.failure(error);
     await emit("executor.failed", "error", claim, startedAt, failure.code);
-    await control(config, `${transition}/fail`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ processingToken: claim.processingToken, ...failure }),
-    });
+    let failed: Response;
+    try {
+      failed = await control(config, `${transition}/fail`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ processingToken: claim.processingToken, ...failure }),
+      });
+    } catch {
+      // Prefer an orphaned object over deleting a master Control may already own.
+      return "processed";
+    }
+    if (uploaded && failed.status === 204)
+      await deleteUploadedAttempt(config, claim.outputKey, objectEtag);
     return "processed";
   } finally {
     clearInterval(heartbeat);
@@ -141,10 +160,29 @@ export async function runExecutorOnce(
   }
 }
 
+async function deleteUploadedAttempt(
+  config: ExecutorConfig,
+  key: string,
+  objectEtag: string | undefined,
+): Promise<void> {
+  if (objectEtag === undefined || objectEtag === "") return;
+  try {
+    await config.s3.send(
+      new DeleteObjectCommand({
+        Bucket: config.bucket,
+        Key: key,
+        IfMatch: objectEtag,
+      }),
+    );
+  } catch {
+    // Precondition failure means a newer object owns the key; leave it alone.
+  }
+}
+
 async function emit(
   event: "executor.completed" | "executor.failed" | "executor.stale_completion",
   level: "info" | "error",
-  claim: Claim,
+  claim: ExecutorClaim,
   startedAt: number,
   failureCode?: JobFailureCode | "stale_attempt",
 ) {
@@ -169,6 +207,19 @@ async function emit(
 
 export type ExecutorRunner = (config: ExecutorConfig) => Promise<"idle" | "processed">;
 
+function credentialDigest(value: string): Uint8Array {
+  return createHash("sha256").update(value, "utf8").digest();
+}
+
+function authorizedWake(header: string | undefined, expectedToken: string): boolean {
+  if (expectedToken.length < 32 || header === undefined || !header.startsWith("Bearer "))
+    return false;
+  return timingSafeEqual(
+    credentialDigest(header.slice("Bearer ".length)),
+    credentialDigest(expectedToken),
+  );
+}
+
 export function createExecutorApp(
   kind: RenditionKind,
   config?: ExecutorConfig,
@@ -181,7 +232,7 @@ export function createExecutorApp(
     if (
       config === undefined ||
       run === undefined ||
-      context.req.header("authorization") !== `Bearer ${config.roleToken}`
+      !authorizedWake(context.req.header("authorization"), config.roleToken)
     )
       return context.json({ error: { code: "unauthorized" } }, 401);
     if (running) return context.json({ result: "busy" }, 202);
@@ -201,4 +252,58 @@ export function createExecutorApp(
     }
   });
   return app;
+}
+
+export function createExecutorConfigFromEnv(): ExecutorConfig | undefined {
+  const required = [
+    "CONTROL_BASE_URL",
+    "EXECUTOR_ROLE_TOKEN",
+    "S3_ENDPOINT",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+    "S3_BUCKET",
+  ] as const;
+  if (!required.every((name) => process.env[name] !== undefined)) return undefined;
+  return {
+    controlBaseUrl: process.env.CONTROL_BASE_URL as string,
+    roleToken: process.env.EXECUTOR_ROLE_TOKEN as string,
+    bucket: process.env.S3_BUCKET as string,
+    fetch: globalThis.fetch,
+    s3: new S3Client({
+      region: process.env.S3_REGION ?? "auto",
+      endpoint: process.env.S3_ENDPOINT as string,
+      forcePathStyle: true,
+      credentials: {
+        accessKeyId: process.env.S3_ACCESS_KEY_ID as string,
+        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY as string,
+      },
+    }),
+  };
+}
+
+export function serveExecutorApp(
+  kind: RenditionKind,
+  app: Hono,
+): { close(callback?: (error?: Error) => void): void } {
+  const portValue = process.env.PORT ?? "3000";
+  if (!/^[1-9]\d*$/.test(portValue)) throw new Error("PORT must be a positive integer");
+  const port = Number(portValue);
+  if (!Number.isSafeInteger(port) || port > 65_535) throw new Error("PORT is out of range");
+  const server = serve({ fetch: app.fetch, port });
+  function shutdown() {
+    server.close((error) => {
+      if (error) {
+        emitOperationalEvent("error", {
+          event: "executor.failed",
+          kind,
+          outcome: "failed",
+          failureCode: "service_unavailable",
+        });
+        process.exitCode = 1;
+      }
+    });
+  }
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+  return server;
 }

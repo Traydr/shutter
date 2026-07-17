@@ -39,7 +39,10 @@ messages. Unexpected configuration and invariant failures are sanitized as
 `configuration_error` or `internal_invariant` and require operator attention.
 
 Every claim, heartbeat, completion, and failure transition compares the current
-processing token so a stale attempt cannot overwrite a newer result.
+processing token so a stale attempt cannot overwrite a newer result. When a
+stale attempt already uploaded bytes to the deterministic Master Preview key, it
+deletes only that attempt's object (R2 `If-Match` on the upload ETag). Ambiguous
+complete failures must not delete until Control accepts fail for that token.
 
 ## Capability boundary
 

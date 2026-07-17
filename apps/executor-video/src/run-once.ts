@@ -10,10 +10,11 @@ export type VideoExecutorConfig = ExecutorConfig;
 
 const videoProcessor: ExecutorProcessor = {
   kind: "video",
-  process: (locator, directory, fetch) =>
+  process: (locator, directory, fetch, allowedSourceOrigins) =>
     processVideoPreview(locator, join(directory, "source"), join(directory, "preview.webp"), {
       fetch,
       runCommand,
+      allowedSourceOrigins,
     }),
   failure: (error) =>
     error instanceof ProcessingFailure

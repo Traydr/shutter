@@ -53,7 +53,8 @@ describe("edge app", () => {
         space_id: "pane-view",
         source_id: sourceId,
         purpose: "image_source",
-        locator: "https://pane-view.traydr.dev/private-source.webp",
+        locator:
+          "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source.webp",
         iat: now - 60,
         exp: now + 3_600,
       },
@@ -314,7 +315,8 @@ describe("edge app", () => {
         space_id: "pane-view",
         source_id: "private-source-miss",
         purpose: "image_source",
-        locator: "https://pane-view.traydr.dev/private-source-miss.webp",
+        locator:
+          "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source-miss.webp",
         iat: now - 60,
         exp: now + 3_600,
       },
@@ -400,6 +402,41 @@ describe("workerd protocol conformance", () => {
       issueWithIv: issueSourceCapabilityWithIv,
       verify: verifySourceCapability,
     });
+  });
+
+  it("rejects unauthenticated Worker cache purge", async () => {
+    const response = await SELF.fetch("https://edge.shutter.test/internal/v1/cache/purge", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tags: ["shutter-v1-tag"] }),
+    });
+    expect(response.status).toBe(401);
+  });
+
+  it("rejects invalid Worker cache purge bodies", async () => {
+    const response = await SELF.fetch("https://edge.shutter.test/internal/v1/cache/purge", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.ORIGIN_AUTH_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ tags: [] }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("purges Worker Cache API tags when authorized", async () => {
+    const tag = await buildSourceCacheTag("pane-view", "private-source");
+    const response = await SELF.fetch("https://edge.shutter.test/internal/v1/cache/purge", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${env.ORIGIN_AUTH_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ tags: [tag] }),
+    });
+    expect([204, 503]).toContain(response.status);
+    if (response.status === 204) expect(await response.text()).toBe("");
   });
 
   it("matches the shared cache identity fixtures", async () => {

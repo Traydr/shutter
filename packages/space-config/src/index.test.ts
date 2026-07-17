@@ -23,8 +23,10 @@ describe("Space policies", () => {
       qualities: [30, 75, 80],
       defaultQuality: 75,
       allowedSourceOrigins: [
-        { origin: "https://t3.storageapi.dev" },
-        { origin: "https://pane-view.traydr.dev" },
+        {
+          origin: "https://t3.storageapi.dev",
+          pathPrefix: "/balanced-wrap-ocyiwwexhao",
+        },
       ],
       resolvers: [],
     });

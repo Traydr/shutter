@@ -2,11 +2,11 @@ import {
   buildCanonicalCacheUrl,
   buildR2CacheKey,
   buildSourceCacheTag,
-  decodeCapabilityKey,
   emitOperationalEvent,
   normalizeRenditionQuery,
   operationalEvent,
   ProtocolError,
+  parseCapabilityKeyRegistry,
   type RenditionCacheIdentity,
   verifySourceCapability,
 } from "@shutter/protocol";
@@ -41,31 +41,7 @@ async function emitRenditionEvent(
 
 function parseKeyRegistry(value: string): KeyRegistry {
   if (keyRegistryCache?.raw === value) return keyRegistryCache.registry;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error("CAPABILITY_KEYS must be valid JSON");
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("CAPABILITY_KEYS must be an object keyed by Space ID");
-  }
-
-  const registry = new Map<string, ReadonlyMap<string, Uint8Array>>();
-  for (const [spaceId, rawKeys] of Object.entries(parsed)) {
-    if (typeof rawKeys !== "object" || rawKeys === null || Array.isArray(rawKeys)) {
-      throw new Error(`CAPABILITY_KEYS.${spaceId} must be an object keyed by key ID`);
-    }
-    const keys = new Map<string, Uint8Array>();
-    for (const [kid, rawKey] of Object.entries(rawKeys)) {
-      if (typeof rawKey !== "string") {
-        throw new Error(`CAPABILITY_KEYS.${spaceId}.${kid} must be a string`);
-      }
-      const key = decodeCapabilityKey(rawKey);
-      keys.set(kid, key);
-    }
-    registry.set(spaceId, keys);
-  }
+  const registry = parseCapabilityKeyRegistry(value);
   keyRegistryCache = { raw: value, registry };
   return registry;
 }
@@ -324,9 +300,79 @@ async function publicMasterRendition(
   return deliverRendition(bindings, identity);
 }
 
+function timingSafeEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  let diff = 0;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    diff |= (left.at(index) ?? 0) ^ (right.at(index) ?? 0);
+  }
+  return diff === 0;
+}
+
+async function authorizedOrigin(
+  header: string | undefined,
+  expectedToken: string,
+): Promise<boolean> {
+  if (expectedToken.length < 32 || header === undefined || !header.startsWith("Bearer "))
+    return false;
+  const encoder = new TextEncoder();
+  const [actual, expected] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(header.slice("Bearer ".length))),
+    crypto.subtle.digest("SHA-256", encoder.encode(expectedToken)),
+  ]);
+  return timingSafeEqualBytes(new Uint8Array(actual), new Uint8Array(expected));
+}
+
 export const app = new Hono<{ Bindings: CloudflareBindings }>();
 
 app.get("/healthz", (context) => context.json({ ok: true, service: "edge" }));
+
+app.post("/internal/v1/cache/purge", async (context) => {
+  if (
+    !(await authorizedOrigin(context.req.header("authorization"), context.env.ORIGIN_AUTH_TOKEN))
+  ) {
+    return context.json({ error: { code: "unauthorized" } }, 401, {
+      "cache-control": "private, no-store",
+      "www-authenticate": "Bearer",
+    });
+  }
+
+  let body: unknown;
+  try {
+    body = await context.req.json();
+  } catch {
+    return context.json({ error: { code: "request_invalid" } }, 400, {
+      "cache-control": "private, no-store",
+    });
+  }
+  if (
+    typeof body !== "object" ||
+    body === null ||
+    !("tags" in body) ||
+    !Array.isArray(body.tags) ||
+    body.tags.length === 0 ||
+    body.tags.some((tag) => typeof tag !== "string" || tag.length === 0) ||
+    Object.keys(body).sort().join(",") !== "tags"
+  ) {
+    return context.json({ error: { code: "request_invalid" } }, 400, {
+      "cache-control": "private, no-store",
+    });
+  }
+
+  const cache = context.executionCtx.cache;
+  if (cache === undefined) {
+    return context.json({ error: { code: "service_unavailable" } }, 503, {
+      "cache-control": "private, no-store",
+    });
+  }
+  const result = await cache.purge({ tags: body.tags as string[] });
+  if (!result.success) {
+    return context.json({ error: { code: "service_unavailable" } }, 503, {
+      "cache-control": "private, no-store",
+    });
+  }
+  return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
+});
 
 app.get("/v1/public/:spaceId/resolver/:resolverId/*", async (context) => {
   try {
