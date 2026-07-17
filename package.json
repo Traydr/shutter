@@ -16,7 +16,7 @@
     "lint": "biome ci . && pnpm lint:edge-boundary && pnpm lint:phase2-config",
     "lint:edge-boundary": "node scripts/check-edge-boundary.mjs",
     "lint:phase2-config": "node scripts/check-phase2-config.mjs",
-    "test": "pnpm test:node && pnpm test:worker",
+    "test": "node scripts/run-workspace-tests.mjs",
     "test:node": "pnpm build:packages && vitest run --config vitest.node.config.ts",
     "test:worker": "pnpm build:packages && pnpm --filter @shutter/edge test",
     "typecheck": "pnpm build:packages && pnpm -r --sort --if-present typecheck",

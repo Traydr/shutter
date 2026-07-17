@@ -34,6 +34,10 @@ sudo chmod 666 /var/run/docker.sock     # allow non-sudo docker (testcontainers)
 Without a running daemon, only `test:node` is affected; lint, typecheck, build,
 and the worker tests do not need Docker.
 
+Cloudflare Workers Builds sets `WORKERS_CI=1` and has no Docker/cgroup support, so
+`pnpm check` / `pnpm test` skip `test:node` there and still run worker tests plus
+the rest of the gate.
+
 ### Edge worker local dev is version-blocked (build + tests still work)
 
 `pnpm --filter @shutter/edge dev` (and `wrangler dev`) currently **fail to boot**:
