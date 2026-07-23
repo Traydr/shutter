@@ -36,4 +36,30 @@ describe("operational events", () => {
     expect(JSON.stringify(info.mock.calls)).not.toContain("https://source.example");
     info.mockRestore();
   });
+
+  it("accepts only safe request completion metadata", async () => {
+    const event = await operationalEvent({
+      event: "control.http.completed",
+      fields: {
+        requestId: "0198f407-3177-7000-8000-000000000001",
+        httpMethod: "GET",
+        httpRoute: "/v1/spaces/:spaceId/sources/:sourceId/previews/:kind",
+        httpStatusCode: 401,
+        durationMs: 12,
+        outcome: "failed",
+        errorType: "ProtocolError",
+      },
+    });
+
+    expect(event).toEqual({
+      event: "control.http.completed",
+      requestId: "0198f407-3177-7000-8000-000000000001",
+      httpMethod: "GET",
+      httpRoute: "/v1/spaces/:spaceId/sources/:sourceId/previews/:kind",
+      httpStatusCode: 401,
+      durationMs: 12,
+      outcome: "failed",
+      errorType: "ProtocolError",
+    });
+  });
 });

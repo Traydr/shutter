@@ -13,9 +13,14 @@ export type OperationalEventName =
   | "control.purge.failed"
   | "control.recovery.completed"
   | "control.recovery.failed"
+  | "control.http.completed"
   | "control.rendition.failed"
   | "control.rendition.delegated"
+  | "control.service.started"
+  | "control.service.stopping"
   | "control.service.failed"
+  | "control.telemetry.configuration_failed"
+  | "control.telemetry.export_failed"
   | "executor.claimed"
   | "executor.completed"
   | "executor.stale_completion"
@@ -31,6 +36,11 @@ export interface OperationalEventFields {
   outcome?: "accepted" | "ready" | "failed" | "idle" | "busy";
   failureCode?: JobFailureCode | "service_unavailable" | "stale_attempt";
   count?: number;
+  requestId?: string;
+  httpMethod?: string;
+  httpRoute?: string;
+  httpStatusCode?: number;
+  errorType?: string;
 }
 
 export interface OperationalEvent extends OperationalEventFields {

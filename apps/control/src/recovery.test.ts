@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ControlLogger } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import { runRecoverySweep } from "./recovery.js";
 import type { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 
 const start = new Date("2026-07-12T00:00:00Z");
+const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
 
 async function submit(
   lifecycle: PostgresRenditionJobLifecycle,
@@ -43,7 +45,12 @@ describe("job recovery sweep", () => {
     await submit(lifecycle, "pdf-1", "pdf");
     const dispatch = vi.fn(async () => {});
 
-    const result = await runRecoverySweep({ lifecycle, now: () => start, dispatch });
+    const result = await runRecoverySweep({
+      logger: NOOP_LOGGER,
+      lifecycle,
+      now: () => start,
+      dispatch,
+    });
 
     expect(result).toEqual({
       expiredPendingJobs: 0,
@@ -62,9 +69,14 @@ describe("job recovery sweep", () => {
     const dispatch = vi.fn(async () => {
       throw new Error("executor unavailable");
     });
-    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const emit = vi.fn<ControlLogger["emit"]>();
 
-    const result = await runRecoverySweep({ lifecycle, now: () => afterLease, dispatch });
+    const result = await runRecoverySweep({
+      logger: { emit, async shutdown() {} },
+      lifecycle,
+      now: () => afterLease,
+      dispatch,
+    });
 
     expect(result).toEqual({
       expiredPendingJobs: 0,
@@ -75,6 +87,9 @@ describe("job recovery sweep", () => {
     expect(
       await lifecycle.read({ spaceId: "pane-view", sourceId: "video-1", kind: "video" }),
     ).toMatchObject({ status: "pending" });
-    log.mockRestore();
+    expect(emit).toHaveBeenCalledWith(
+      "error",
+      expect.objectContaining({ event: "control.dispatch.failed" }),
+    );
   });
 });

@@ -47,6 +47,17 @@ Railway origin carry a separate origin credential, and the origin rejects
 untrusted direct access. The exact public canonical-URL routing remains subject
 to an implementation spike.
 
+Shutter Control emits allowlisted operational events as structured JSON to
+Railway stdout and directly to the shared Parseable `shutter` dataset over
+OTLP/HTTP JSON. Resource attributes identify the service, deployment environment,
+version, replica, and region. Control also emits one completion event for each
+non-health HTTP request using a server-generated request ID and the matched Hono
+route template; it never records raw paths, queries, headers, bodies, locators,
+capabilities, Source IDs, error messages, or stacks. Direct export is best effort
+with an in-memory batch queue, while Railway stdout remains the independent
+fallback. The operational procedure is in
+[`runbooks/logging.md`](./runbooks/logging.md).
+
 V1 launches on Workers Free with security-sensitive routes configured to fail
 closed. A Cloudflare Free rate-limiting rule covers delivery paths, counts cached
 requests, and initially blocks a client IP after 300 requests in a 10-second

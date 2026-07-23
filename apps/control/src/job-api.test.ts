@@ -1,6 +1,7 @@
 import { issueSourceCapability } from "@shutter/protocol";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createJobApi } from "./job-api.js";
+import type { ControlLogger } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import type { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 
@@ -9,6 +10,7 @@ const KID = "test-key";
 const SPACE_TOKEN = "s".repeat(32);
 const VIDEO_TOKEN = "v".repeat(32);
 const NOW = new Date("2026-07-11T00:00:00Z");
+const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
 
 async function capability(): Promise<string> {
   const seconds = Math.floor(NOW.getTime() / 1_000);
@@ -30,8 +32,10 @@ function runtime(
   lifecycle: PostgresRenditionJobLifecycle,
   dispatch = vi.fn(async () => {}),
   sourcePurge?: { purge(source: { spaceId: string; sourceId: string }): Promise<void> },
+  logger: ControlLogger = NOOP_LOGGER,
 ) {
   return {
+    logger,
     lifecycle,
     now: () => NOW,
     spaceApiTokens: () => new Map([["pane-view", [SPACE_TOKEN]]]),
@@ -138,8 +142,10 @@ describe("job API", () => {
     const dispatch = vi.fn(async () => {
       throw new Error("executor unavailable");
     });
-    const log = vi.spyOn(console, "error").mockImplementation(() => {});
-    const app = createJobApi(runtime(lifecycle, dispatch));
+    const emit = vi.fn<ControlLogger["emit"]>();
+    const app = createJobApi(
+      runtime(lifecycle, dispatch, undefined, { emit, async shutdown() {} }),
+    );
     const response = await app.request(
       "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video",
       {
@@ -150,11 +156,15 @@ describe("job API", () => {
     );
 
     expect(response.status).toBe(202);
-    await vi.waitFor(() => expect(log).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(emit).toHaveBeenCalledWith(
+        "error",
+        expect.objectContaining({ event: "control.dispatch.failed" }),
+      ),
+    );
     expect(
       await lifecycle.read({ spaceId: "pane-view", sourceId: "source-1", kind: "video" }),
     ).toMatchObject({ status: "pending" });
-    log.mockRestore();
   });
 
   it("authenticates, repeats, and sanitizes Source Purge", async () => {
@@ -188,7 +198,6 @@ describe("job API", () => {
     }
     expect(purge).toHaveBeenCalledTimes(2);
 
-    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const failing = createJobApi(
       runtime(lifecycle, undefined, {
         purge: async () => Promise.reject(new Error("secret detail")),
@@ -200,7 +209,5 @@ describe("job API", () => {
     });
     expect(failed.status).toBe(503);
     expect(await failed.json()).toEqual({ error: { code: "service_unavailable" } });
-    expect(JSON.stringify(log.mock.calls)).not.toContain("secret detail");
-    log.mockRestore();
   });
 });

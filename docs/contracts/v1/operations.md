@@ -35,3 +35,21 @@ traffic splitter, timed observation gate, automatic rollback, provider-retiremen
 workflow, or cutover controller. Consumer deployment configuration may keep old
 and new providers selectable, while the operator owns switch timing, observation,
 rollback, and final cleanup.
+
+## Control logging
+
+- Every Control operational event is emitted as structured JSON to stdout.
+- When its OTLP endpoint is configured, Control also exports the same allowlisted
+  event to the Parseable `shutter` dataset. Export failure never blocks request
+  processing or weakens authorization behavior.
+- Every non-health Control request returns a server-generated `X-Request-Id` and
+  emits one `control.http.completed` event containing only that ID, method,
+  matched route template, status, duration, and outcome.
+- `/healthz` is excluded from request logs.
+- Capabilities, locators, presigned URLs, credentials, headers, cookies, bodies,
+  query strings, raw paths, raw Source IDs, command lines, stderr, error messages,
+  and stacks are forbidden from structured events.
+- Parseable retains the `shutter` dataset for 30 days. Its Control credential has
+  dataset-scoped ingestion authority only.
+- Railway stdout is the fallback because direct OTLP batching is memory-only and
+  a forced process kill can lose the final batch.

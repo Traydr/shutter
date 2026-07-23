@@ -4,7 +4,6 @@ import {
   type ExecutorCompleteRequest,
   type ExecutorFailRequest,
   type ExecutorHeartbeatRequest,
-  emitOperationalEvent,
   operationalEvent,
   ProtocolError,
   parseExecutorCompleteRequest,
@@ -17,6 +16,7 @@ import {
 } from "@shutter/protocol";
 import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
+import { type ControlLogger, operationalErrorType } from "./logging.js";
 import type {
   JobIdentity,
   MasterCompletion,
@@ -27,6 +27,7 @@ import type { SourcePurge } from "./source-purge.js";
 type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
 
 export interface JobApiRuntime {
+  logger: ControlLogger;
   lifecycle: RenditionJobLifecycle;
   now(): Date;
   spaceApiTokens(): ReadonlyMap<string, readonly string[]>;
@@ -148,7 +149,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         now,
       );
       const record = submissionResult.job;
-      emitOperationalEvent(
+      runtime.logger.emit(
         "info",
         await operationalEvent({
           event: "control.job.submitted",
@@ -169,20 +170,18 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
             spaceId: record.spaceId,
             sourceId: record.sourceId,
             fields: { kind: record.kind, outcome: "failed", failureCode: "service_unavailable" },
-          }).then((event) => emitOperationalEvent("error", event));
+          }).then((event) => runtime.logger.emit("error", event));
         });
       }
       return activeResponse(record.representation, new URL(context.req.url).pathname);
     } catch (error) {
       if (error instanceof ProtocolError) return requestFailure(400, error.code);
-      const event = {
+      runtime.logger.emit("error", {
         event: "control.service.failed",
         outcome: "failed",
         failureCode: "service_unavailable",
-        errorName: error instanceof Error ? error.name : "NonErrorThrown",
-        errorMessage: error instanceof Error ? error.message : "unknown error",
-      } as const;
-      console.error(event);
+        errorType: operationalErrorType(error),
+      });
       return requestFailure(503, "service_unavailable");
     }
   });
@@ -309,7 +308,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       completion,
       runtime.now(),
     );
-    emitOperationalEvent(
+    runtime.logger.emit(
       result.outcome === "accepted" ? "info" : "error",
       await operationalEvent({
         event:
@@ -354,7 +353,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       },
       runtime.now(),
     );
-    emitOperationalEvent(
+    runtime.logger.emit(
       result.outcome === "stale_attempt" ? "error" : "info",
       await operationalEvent({
         event: "control.job.failed",

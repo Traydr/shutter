@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server";
-import { emitOperationalEvent } from "@shutter/protocol";
 import { app, jobApiRuntime } from "./app.js";
+import { createControlShutdown } from "./lifecycle.js";
+import { controlLogger } from "./logging.js";
 import { startRecoverySweep } from "./recovery.js";
 
 const portValue = process.env.PORT ?? "3000";
@@ -11,20 +12,19 @@ if (!Number.isSafeInteger(port) || port > 65_535) throw new Error("PORT is out o
 
 const server = serve({ fetch: app.fetch, port });
 const stopRecovery = jobApiRuntime === undefined ? () => {} : startRecoverySweep(jobApiRuntime);
+controlLogger.emit("info", { event: "control.service.started", outcome: "ready" });
 
-function shutdown() {
-  stopRecovery();
-  server.close((error) => {
-    if (error) {
-      emitOperationalEvent("error", {
-        event: "control.service.failed",
-        outcome: "failed",
-        failureCode: "service_unavailable",
-      });
-      process.exitCode = 1;
-    }
-  });
-}
+const shutdown = createControlShutdown({
+  logger: controlLogger,
+  stopRecovery,
+  closeServer: () =>
+    new Promise<void>((resolve, reject) =>
+      server.close((error) => (error === undefined ? resolve() : reject(error))),
+    ),
+  setExitCode: (code) => {
+    process.exitCode = code;
+  },
+});
 
-process.once("SIGINT", shutdown);
-process.once("SIGTERM", shutdown);
+process.once("SIGINT", () => void shutdown());
+process.once("SIGTERM", () => void shutdown());

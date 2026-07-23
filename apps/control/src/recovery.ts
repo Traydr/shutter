@@ -1,10 +1,12 @@
-import { emitOperationalEvent, operationalEvent, type RenditionKind } from "@shutter/protocol";
+import { operationalEvent, type RenditionKind } from "@shutter/protocol";
+import type { ControlLogger } from "./logging.js";
 import type { RenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 
 export const RECOVERY_INTERVAL_MS = 5 * 60 * 1_000;
 export const RECOVERY_BATCH_SIZE = 100;
 
 export interface RecoveryRuntime {
+  logger: ControlLogger;
   lifecycle: RenditionJobLifecycle;
   now(): Date;
   dispatch(kind: RenditionKind): Promise<void>;
@@ -21,6 +23,7 @@ async function dispatchKind(
   kind: RenditionKind,
   count: number,
   dispatch: RecoveryRuntime["dispatch"],
+  logger: ControlLogger,
 ): Promise<{ dispatched: number; failed: number }> {
   let dispatched = 0;
   for (let index = 0; index < count; index += 1) {
@@ -28,7 +31,7 @@ async function dispatchKind(
       await dispatch(kind);
       dispatched += 1;
     } catch {
-      emitOperationalEvent("error", {
+      logger.emit("error", {
         event: "control.dispatch.failed",
         kind,
         outcome: "failed",
@@ -47,8 +50,8 @@ export async function runRecoverySweep(runtime: RecoveryRuntime): Promise<Recove
   for (const kind of maintenance.runnableKinds) counts[kind] += 1;
 
   const [video, pdf] = await Promise.all([
-    dispatchKind("video", counts.video, runtime.dispatch),
-    dispatchKind("pdf", counts.pdf, runtime.dispatch),
+    dispatchKind("video", counts.video, runtime.dispatch, runtime.logger),
+    dispatchKind("pdf", counts.pdf, runtime.dispatch, runtime.logger),
   ]);
   const result = {
     expiredPendingJobs: maintenance.expiredPendingJobs,
@@ -62,7 +65,7 @@ export async function runRecoverySweep(runtime: RecoveryRuntime): Promise<Recove
     result.dispatchedJobs > 0 ||
     result.dispatchFailures > 0
   ) {
-    emitOperationalEvent(
+    runtime.logger.emit(
       "info",
       await operationalEvent({
         event: "control.recovery.completed",
@@ -91,7 +94,7 @@ export function startRecoverySweep(
     try {
       await runRecoverySweep(runtime);
     } catch {
-      emitOperationalEvent("error", {
+      runtime.logger.emit("error", {
         event: "control.recovery.failed",
         outcome: "failed",
         failureCode: "service_unavailable",

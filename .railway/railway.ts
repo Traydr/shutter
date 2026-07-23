@@ -88,6 +88,7 @@ export default defineRailway(() => {
     replicas: { [region]: 1 },
     healthcheck: "/healthz",
     healthcheckTimeout: 30,
+    deploy: { drainingSeconds: 10 },
     networking: { privateNetworkEndpoint: "shutter-control" },
     domains: [{ domain: "shutter-control.traydr.dev", port: nodePort }],
     env: {
@@ -101,6 +102,10 @@ export default defineRailway(() => {
       IMGPROXY_SALT: preserve(),
       IMGPROXY_SECRET: preserve(),
       NODE_ENV: "production",
+      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://parseable.traydr.dev/v1/logs",
+      OTEL_EXPORTER_OTLP_LOGS_HEADERS: preserve(),
+      OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/json",
+      OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: "5000",
       ORIGIN_AUTH_TOKEN: preserve(),
       PDF_EXECUTOR_BASE_URL: `http://\${{Shutter-Executor-PDF.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
       PDF_EXECUTOR_TOKEN: preserve(),

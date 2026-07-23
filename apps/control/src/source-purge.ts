@@ -3,9 +3,9 @@ import {
   buildMasterPurgePrefix,
   buildR2CachePurgePrefix,
   buildSourceCacheTag,
-  emitOperationalEvent,
   operationalEvent,
 } from "@shutter/protocol";
+import type { ControlLogger } from "./logging.js";
 import type { RenditionJobLifecycle, SourceIdentity } from "./rendition-job-lifecycle.js";
 
 export interface SourcePurge {
@@ -13,6 +13,7 @@ export interface SourcePurge {
 }
 
 export interface SourcePurgeConfig {
+  logger: ControlLogger;
   lifecycle: RenditionJobLifecycle;
   s3: S3Client;
   bucket: string;
@@ -101,7 +102,7 @@ export function createSourcePurge(config: SourcePurgeConfig): SourcePurge {
             throw new Error("cache tag purge failed");
           }
         });
-        emitOperationalEvent(
+        config.logger.emit(
           "info",
           await operationalEvent({
             event: "control.purge.completed",
@@ -111,7 +112,7 @@ export function createSourcePurge(config: SourcePurgeConfig): SourcePurge {
           }),
         );
       } catch (error) {
-        emitOperationalEvent(
+        config.logger.emit(
           "error",
           await operationalEvent({
             event: "control.purge.failed",

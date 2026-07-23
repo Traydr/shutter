@@ -1,12 +1,14 @@
 import { type DeleteObjectsCommand, ListObjectsV2Command, type S3Client } from "@aws-sdk/client-s3";
 import { buildSourceCacheTag } from "@shutter/protocol";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ControlLogger } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import type { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 import { createSourcePurge } from "./source-purge.js";
 
 const EDGE_BASE = "https://edge.shutter.test";
 const EDGE_TOKEN = "o".repeat(32);
+const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
 
 describe("Source Purge", () => {
   let test: PostgresTestLifecycle;
@@ -25,6 +27,7 @@ describe("Source Purge", () => {
 
   function createPurge(fetch: typeof globalThis.fetch, send: S3Client["send"]) {
     return createSourcePurge({
+      logger: NOOP_LOGGER,
       lifecycle,
       s3: { send } as unknown as S3Client,
       bucket: "shutter-renditions",

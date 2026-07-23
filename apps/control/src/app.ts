@@ -1,17 +1,18 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { S3Client } from "@aws-sdk/client-s3";
 import {
   buildMasterPreviewKey,
-  emitOperationalEvent,
   ProtocolError,
   parseCapabilityKeyRegistry,
   validateSourceLocator,
 } from "@shutter/protocol";
 import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
+import { matchedRoutes } from "hono/route";
 import { Pool } from "pg";
 import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
+import { type ControlLogger, controlLogger, operationalErrorType } from "./logging.js";
 import { createMasterStore, type MasterStore } from "./master-store.js";
 import { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 import { createSourcePurge } from "./source-purge.js";
@@ -19,11 +20,20 @@ import { createSourcePurge } from "./source-purge.js";
 const EXECUTOR_WAKE_TIMEOUT_MS = 11 * 60 * 1_000;
 
 export interface ControlRuntimeConfig {
+  logger: ControlLogger;
   originAuthToken(): string | undefined;
   imgproxyConfig(): ImgproxyConfig | undefined;
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   masterStore?: MasterStore;
   jobApiRuntime?: JobApiRuntime;
+}
+
+function safeRouteTemplate(context: Parameters<typeof matchedRoutes>[0]): string {
+  const route = matchedRoutes(context)
+    .map((matched) => matched.path)
+    .filter((path) => path !== "*" && path !== "/*")
+    .at(-1);
+  return route ?? "<unmatched>";
 }
 
 function credentialDigest(value: string): Uint8Array {
@@ -76,8 +86,48 @@ function strictPositiveInteger(value: string | null): number | undefined {
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
-export function createControlApp(runtime: ControlRuntimeConfig): Hono {
-  const control = new Hono();
+export function createControlApp(
+  runtime: ControlRuntimeConfig,
+): Hono<{ Variables: { requestId: string } }> {
+  const control = new Hono<{ Variables: { requestId: string } }>();
+
+  control.use("*", async (context, next) => {
+    const requestId = randomUUID();
+    const startedAt = performance.now();
+    context.set("requestId", requestId);
+    context.header("x-request-id", requestId);
+    try {
+      await next();
+    } finally {
+      const matchedRoute = safeRouteTemplate(context);
+      if (matchedRoute !== "/healthz") {
+        const status = context.res.status;
+        runtime.logger.emit(status >= 500 ? "error" : "info", {
+          event: "control.http.completed",
+          requestId,
+          httpMethod: context.req.method,
+          httpRoute: matchedRoute,
+          httpStatusCode: status,
+          durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
+          outcome: status >= 400 ? "failed" : "ready",
+        });
+      }
+    }
+  });
+
+  control.onError((error, context) => {
+    runtime.logger.emit("error", {
+      event: "control.service.failed",
+      requestId: context.get("requestId"),
+      httpRoute: safeRouteTemplate(context),
+      outcome: "failed",
+      failureCode: "service_unavailable",
+      errorType: operationalErrorType(error),
+    });
+    return context.json({ error: { code: "service_unavailable" } }, 500, {
+      "cache-control": "private, no-store",
+    });
+  });
 
   control.get("/healthz", (context) => context.json({ ok: true, service: "control" }));
   if (runtime.jobApiRuntime !== undefined) control.route("/", createJobApi(runtime.jobApiRuntime));
@@ -136,7 +186,7 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
 
     try {
       const request = buildImgproxyRequest({ sourceUrl: source, width, quality }, imgproxy);
-      emitOperationalEvent("info", {
+      runtime.logger.emit("info", {
         event: "control.rendition.delegated",
         outcome: "accepted",
       });
@@ -145,7 +195,7 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
         redirect: "error",
       });
       if (!response.ok || response.body === null) {
-        emitOperationalEvent("error", {
+        runtime.logger.emit("error", {
           event: "control.rendition.failed",
           outcome: "failed",
           failureCode: "service_unavailable",
@@ -154,7 +204,7 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
           "cache-control": "private, no-store",
         });
       }
-      emitOperationalEvent("info", {
+      runtime.logger.emit("info", {
         event: "control.rendition.delegated",
         outcome: "ready",
       });
@@ -165,7 +215,7 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
       });
       return new Response(response.body, { status: 200, headers });
     } catch {
-      emitOperationalEvent("error", {
+      runtime.logger.emit("error", {
         event: "control.rendition.failed",
         outcome: "failed",
         failureCode: "service_unavailable",
@@ -223,7 +273,7 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
       const imgproxy = runtime.imgproxyConfig();
       if (imgproxy === undefined) throw new Error("imgproxy unavailable");
       const request = buildImgproxyRequest({ sourceUrl, width, quality }, imgproxy);
-      emitOperationalEvent("info", {
+      runtime.logger.emit("info", {
         event: "control.rendition.delegated",
         kind: value.kind,
         outcome: "accepted",
@@ -233,7 +283,7 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
         redirect: "error",
       });
       if (!response.ok || response.body === null) throw new Error("rendition failed");
-      emitOperationalEvent("info", {
+      runtime.logger.emit("info", {
         event: "control.rendition.delegated",
         kind: value.kind,
         outcome: "ready",
@@ -245,7 +295,7 @@ export function createControlApp(runtime: ControlRuntimeConfig): Hono {
         },
       });
     } catch {
-      emitOperationalEvent("error", {
+      runtime.logger.emit("error", {
         event: "control.rendition.failed",
         kind: value.kind as "video" | "pdf",
         outcome: "failed",
@@ -282,7 +332,7 @@ function parseCapabilityKeys(
   return new Map(parseCapabilityKeyRegistry(value));
 }
 
-async function dispatchExecutor(kind: "video" | "pdf"): Promise<void> {
+async function dispatchExecutor(logger: ControlLogger, kind: "video" | "pdf"): Promise<void> {
   const baseUrl =
     kind === "video" ? process.env.VIDEO_EXECUTOR_BASE_URL : process.env.PDF_EXECUTOR_BASE_URL;
   const token =
@@ -290,7 +340,7 @@ async function dispatchExecutor(kind: "video" | "pdf"): Promise<void> {
   if (baseUrl === undefined || token === undefined) {
     throw new Error(`${kind} executor dispatch is not configured`);
   }
-  emitOperationalEvent("info", {
+  logger.emit("info", {
     event: "control.executor.delegated",
     kind,
     outcome: "accepted",
@@ -301,7 +351,7 @@ async function dispatchExecutor(kind: "video" | "pdf"): Promise<void> {
     signal: AbortSignal.timeout(EXECUTOR_WAKE_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error(`${kind} executor wake failed with ${response.status}`);
-  emitOperationalEvent("info", {
+  logger.emit("info", {
     event: "control.executor.delegated",
     kind,
     outcome: "ready",
@@ -346,6 +396,7 @@ const sourcePurge =
   process.env.EDGE_BASE_URL &&
   process.env.ORIGIN_AUTH_TOKEN
     ? createSourcePurge({
+        logger: controlLogger,
         lifecycle: renditionJobLifecycle,
         s3: renditionS3,
         bucket: process.env.S3_BUCKET,
@@ -367,11 +418,13 @@ export const jobApiRuntime: JobApiRuntime | undefined =
         capabilityKeys: () => parseCapabilityKeys(process.env.CAPABILITY_KEYS),
         executorToken: (kind) =>
           kind === "video" ? process.env.VIDEO_EXECUTOR_TOKEN : process.env.PDF_EXECUTOR_TOKEN,
-        dispatch: dispatchExecutor,
+        dispatch: (kind) => dispatchExecutor(controlLogger, kind),
+        logger: controlLogger,
         ...(sourcePurge === undefined ? {} : { sourcePurge }),
       };
 
 export const app = createControlApp({
+  logger: controlLogger,
   originAuthToken: () => process.env.ORIGIN_AUTH_TOKEN,
   imgproxyConfig: () => {
     const baseUrl = process.env.IMGPROXY_BASE_URL;
