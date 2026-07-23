@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createControlShutdown } from "./lifecycle.js";
 import type { ControlLogger } from "./logging.js";
+import { createControlShutdown } from "./shutdown.js";
 
 describe("Control process lifecycle", () => {
   it("stops work and HTTP before flushing logs exactly once", async () => {
@@ -20,7 +20,8 @@ describe("Control process lifecycle", () => {
         calls.push("server.close");
       },
       setExitCode: vi.fn(),
-      timeoutMs: 1_000,
+      closeBudgetMs: 500,
+      flushBudgetMs: 500,
     });
 
     await Promise.all([shutdown(), shutdown()]);
@@ -42,7 +43,8 @@ describe("Control process lifecycle", () => {
       stopRecovery: vi.fn(),
       closeServer: async () => Promise.reject(new Error("socket secret")),
       setExitCode,
-      timeoutMs: 1_000,
+      closeBudgetMs: 500,
+      flushBudgetMs: 500,
     });
 
     await shutdown();
@@ -56,5 +58,33 @@ describe("Control process lifecycle", () => {
       errorType: "Error",
     });
     expect(JSON.stringify(emit.mock.calls)).not.toContain("socket secret");
+  });
+
+  it("reserves time for log flush without failing the process when HTTP drain times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger: ControlLogger = {
+        emit: vi.fn(),
+        shutdown: vi.fn(async () => {}),
+      };
+      const setExitCode = vi.fn();
+      const shutdown = createControlShutdown({
+        logger,
+        stopRecovery: vi.fn(),
+        closeServer: () => new Promise<void>(() => {}),
+        setExitCode,
+        closeBudgetMs: 10,
+        flushBudgetMs: 10,
+      });
+
+      const completion = shutdown();
+      await vi.advanceTimersByTimeAsync(20);
+      await completion;
+
+      expect(logger.shutdown).toHaveBeenCalledOnce();
+      expect(setExitCode).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

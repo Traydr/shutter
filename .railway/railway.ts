@@ -88,7 +88,7 @@ export default defineRailway(() => {
     replicas: { [region]: 1 },
     healthcheck: "/healthz",
     healthcheckTimeout: 30,
-    deploy: { drainingSeconds: 10 },
+    deploy: { drainingSeconds: 15 },
     networking: { privateNetworkEndpoint: "shutter-control" },
     domains: [{ domain: "shutter-control.traydr.dev", port: nodePort }],
     env: {

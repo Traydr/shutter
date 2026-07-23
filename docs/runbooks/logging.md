@@ -5,6 +5,11 @@ configured, sends the same allowlisted event to Parseable with OTLP/HTTP JSON.
 Railway logs are the fallback if Parseable is unavailable. OTLP delivery uses an
 in-memory batch queue, so a forced process kill can lose the final batch.
 
+Pino supplies the stdout envelope: stable JSON serialization, numeric levels,
+timestamps, and a testable destination stream. It is not trusted to redact
+events. The shared protocol sanitizer drops invalid or unknown fields first, and
+one declarative projection table then produces both the Pino and OTLP records.
+
 ## Parseable resources
 
 Provision these resources in the existing Parseable deployment before enabling
@@ -62,6 +67,11 @@ or a log query. `.railway/railway.ts` must retain it as `preserve()`.
 When the endpoint is absent, Control continues with stdout-only logging. Invalid
 Parseable configuration also falls back to stdout and emits one sanitized
 `control.telemetry.configuration_failed` event.
+
+The exporter accepts only the normalized exact endpoint
+`https://parseable.traydr.dev/v1/logs`. It rejects hostname aliases, query
+parameters, URL credentials, alternate paths, and any header bundle other than
+the Parseable Basic authorization, `shutter` stream, and `otel-logs` source.
 
 ## Event schema
 
@@ -136,7 +146,7 @@ ORDER BY p95_ms DESC;
 
 1. Run `pnpm check` with the Docker-backed Postgres tests available.
 2. Run `railway config plan` and confirm that only Control environment values,
-   its ten-second drain window, and the new package deployment are changing.
+   its 15-second drain window, and the new package deployment are changing.
 3. Apply the plan only after explicit review and authorization.
 4. Wait for the Control deployment to reach `SUCCESS`.
 5. Send a safe unauthenticated request to a known Control route. `/healthz` is
@@ -167,3 +177,11 @@ for diagnosis and its normal 30-day expiry.
 Introduce an OpenTelemetry Collector when more Shutter services export logs,
 disk-backed buffering becomes necessary, or application-held ingest credentials
 are no longer acceptable.
+
+## Shutdown budget
+
+Railway gives Control 15 seconds to drain. Control reserves at most three seconds
+for HTTP close before starting log shutdown, then reserves 5.5 seconds for the
+OTLP flush. A phase exceeding its budget does not by itself mark the deployment
+failed; only a real close or flush rejection sets a failing exit code. The
+remaining Railway margin covers signal delivery and process teardown.

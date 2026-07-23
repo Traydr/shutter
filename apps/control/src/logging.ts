@@ -6,8 +6,12 @@ import {
   LoggerProvider,
   type LogRecordExporter,
 } from "@opentelemetry/sdk-logs";
-import type { OperationalEvent } from "@shutter/protocol";
+import { type OperationalEvent, sanitizeOperationalEvent } from "@shutter/protocol";
 import pino, { type DestinationStream, type Logger } from "pino";
+import { type ControlLoggingEnvironment, readOtlpLogsConfig } from "./logging-config.js";
+
+export { operationalErrorType } from "@shutter/protocol";
+export type { ControlLoggingEnvironment } from "./logging-config.js";
 
 export type OperationalLogLevel = "info" | "error";
 
@@ -21,15 +25,7 @@ export interface ControlLoggerDependencies {
   packageVersion?: string;
   now?: () => number;
   batchDelayMillis?: number;
-}
-
-export type ControlLoggingEnvironment = Readonly<Record<string, string | undefined>>;
-
-const SAFE_ERROR_TYPE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
-
-export function operationalErrorType(error: unknown): string {
-  if (!(error instanceof Error)) return "NonErrorThrown";
-  return SAFE_ERROR_TYPE.test(error.name) ? error.name : "Error";
+  allowedOtlpEndpoints?: readonly string[];
 }
 
 function createStdoutLogger(stdout?: DestinationStream): Logger {
@@ -39,22 +35,6 @@ function createStdoutLogger(stdout?: DestinationStream): Logger {
     },
     stdout,
   );
-}
-
-function parseHeaders(value: string | undefined): Record<string, string> {
-  if (value === undefined || value.trim() === "") return {};
-  const headers: Record<string, string> = {};
-  for (const entry of value.split(",")) {
-    const separator = entry.indexOf("=");
-    if (separator <= 0) throw new Error("invalid OTLP headers");
-    const name = decodeURIComponent(entry.slice(0, separator).trim());
-    const headerValue = decodeURIComponent(entry.slice(separator + 1).trim());
-    if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u.test(name) || /[\r\n]/u.test(headerValue)) {
-      throw new Error("invalid OTLP headers");
-    }
-    headers[name] = headerValue;
-  }
-  return headers;
 }
 
 function resourceAttributes(
@@ -79,65 +59,50 @@ function resourceAttributes(
   };
 }
 
-function eventAttributes(event: OperationalEvent): LogAttributes {
-  return {
-    "event.name": event.event,
-    ...(event.requestId === undefined ? {} : { "request.id": event.requestId }),
-    ...(event.httpMethod === undefined ? {} : { "http.request.method": event.httpMethod }),
-    ...(event.httpRoute === undefined ? {} : { "http.route": event.httpRoute }),
-    ...(event.httpStatusCode === undefined
-      ? {}
-      : { "http.response.status_code": event.httpStatusCode }),
-    ...(event.errorType === undefined ? {} : { "error.type": event.errorType }),
-    ...(event.sourceHash === undefined ? {} : { "shutter.source.hash": event.sourceHash }),
-    ...(event.processingTokenHash === undefined
-      ? {}
-      : { "shutter.processing_token.hash": event.processingTokenHash }),
-    ...(event.routeClass === undefined ? {} : { "shutter.route_class": event.routeClass }),
-    ...(event.cacheOutcome === undefined ? {} : { "shutter.cache.outcome": event.cacheOutcome }),
-    ...(event.kind === undefined ? {} : { "shutter.rendition.kind": event.kind }),
-    ...(event.executionCycle === undefined
-      ? {}
-      : { "shutter.execution.cycle": event.executionCycle }),
-    ...(event.attemptNumber === undefined ? {} : { "shutter.attempt.number": event.attemptNumber }),
-    ...(event.durationMs === undefined ? {} : { "shutter.duration_ms": event.durationMs }),
-    ...(event.outcome === undefined ? {} : { "shutter.outcome": event.outcome }),
-    ...(event.failureCode === undefined ? {} : { "shutter.failure.code": event.failureCode }),
-    ...(event.count === undefined ? {} : { "shutter.count": event.count }),
-  };
-}
+type OptionalOperationalEventField = Exclude<keyof OperationalEvent, "event">;
 
-function stdoutEvent(event: OperationalEvent): OperationalEvent {
-  return {
-    event: event.event,
-    ...(event.sourceHash === undefined ? {} : { sourceHash: event.sourceHash }),
-    ...(event.processingTokenHash === undefined
-      ? {}
-      : { processingTokenHash: event.processingTokenHash }),
-    ...(event.routeClass === undefined ? {} : { routeClass: event.routeClass }),
-    ...(event.cacheOutcome === undefined ? {} : { cacheOutcome: event.cacheOutcome }),
-    ...(event.kind === undefined ? {} : { kind: event.kind }),
-    ...(event.executionCycle === undefined ? {} : { executionCycle: event.executionCycle }),
-    ...(event.attemptNumber === undefined ? {} : { attemptNumber: event.attemptNumber }),
-    ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
-    ...(event.outcome === undefined ? {} : { outcome: event.outcome }),
-    ...(event.failureCode === undefined ? {} : { failureCode: event.failureCode }),
-    ...(event.count === undefined ? {} : { count: event.count }),
-    ...(event.requestId === undefined ? {} : { requestId: event.requestId }),
-    ...(event.httpMethod === undefined ? {} : { httpMethod: event.httpMethod }),
-    ...(event.httpRoute === undefined ? {} : { httpRoute: event.httpRoute }),
-    ...(event.httpStatusCode === undefined ? {} : { httpStatusCode: event.httpStatusCode }),
-    ...(event.errorType === undefined ? {} : { errorType: event.errorType }),
-  };
-}
+const EVENT_FIELD_PROJECTIONS = [
+  ["sourceHash", "shutter.source.hash"],
+  ["processingTokenHash", "shutter.processing_token.hash"],
+  ["routeClass", "shutter.route_class"],
+  ["cacheOutcome", "shutter.cache.outcome"],
+  ["kind", "shutter.rendition.kind"],
+  ["executionCycle", "shutter.execution.cycle"],
+  ["attemptNumber", "shutter.attempt.number"],
+  ["durationMs", "shutter.duration_ms"],
+  ["outcome", "shutter.outcome"],
+  ["failureCode", "shutter.failure.code"],
+  ["count", "shutter.count"],
+  ["requestId", "request.id"],
+  ["httpMethod", "http.request.method"],
+  ["httpRoute", "http.route"],
+  ["httpStatusCode", "http.response.status_code"],
+  ["errorType", "error.type"],
+] as const satisfies readonly (readonly [OptionalOperationalEventField, string])[];
 
-function timeoutMillis(environment: ControlLoggingEnvironment): number {
-  const value = environment.OTEL_EXPORTER_OTLP_LOGS_TIMEOUT;
-  if (value === undefined) return 5_000;
-  if (!/^[1-9]\d*$/u.test(value)) throw new Error("invalid OTLP timeout");
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed)) throw new Error("invalid OTLP timeout");
-  return parsed;
+type ProjectedField = (typeof EVENT_FIELD_PROJECTIONS)[number][0];
+const ALL_EVENT_FIELDS_PROJECTED: Exclude<
+  OptionalOperationalEventField,
+  ProjectedField
+> extends never
+  ? true
+  : never = true;
+void ALL_EVENT_FIELDS_PROJECTED;
+
+function projectEvent(event: OperationalEvent): {
+  stdout: Record<string, string | number>;
+  attributes: LogAttributes;
+} {
+  const stdout: Record<string, string | number> = { event: event.event };
+  const attributes: LogAttributes = { "event.name": event.event };
+  for (const [field, attribute] of EVENT_FIELD_PROJECTIONS) {
+    const value = event[field];
+    if (value !== undefined) {
+      stdout[field] = value;
+      attributes[attribute] = value;
+    }
+  }
+  return { stdout, attributes };
 }
 
 function reportingExporter(
@@ -180,37 +145,14 @@ export function createControlLogger(
   let provider: LoggerProvider | undefined;
   let otelLogger: ReturnType<LoggerProvider["getLogger"]> | undefined;
 
-  const endpoint = environment.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
-  if (endpoint !== undefined) {
+  if (environment.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT !== undefined) {
     try {
-      const url = new URL(endpoint);
-      if (url.protocol !== "http:" && url.protocol !== "https:") {
-        throw new Error("invalid OTLP endpoint");
-      }
-      if (
-        environment.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL !== undefined &&
-        environment.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL !== "http/json"
-      ) {
-        throw new Error("unsupported OTLP protocol");
-      }
-      const headers = parseHeaders(environment.OTEL_EXPORTER_OTLP_LOGS_HEADERS);
-      if (url.hostname === "parseable.traydr.dev") {
-        const normalized = new Map(
-          Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]),
-        );
-        if (
-          normalized.get("x-p-stream") !== "shutter" ||
-          normalized.get("x-p-log-source") !== "otel-logs" ||
-          !normalized.get("authorization")?.startsWith("Basic ")
-        ) {
-          throw new Error("incomplete Parseable headers");
-        }
-      }
-      const exportTimeoutMillis = timeoutMillis(environment);
+      const config = readOtlpLogsConfig(environment, dependencies.allowedOtlpEndpoints);
+      if (config === undefined) throw new Error("missing OTLP configuration");
       const exporter = new OTLPLogExporter({
-        url: url.href,
-        headers,
-        timeoutMillis: exportTimeoutMillis,
+        url: config.endpoint,
+        headers: config.headers,
+        timeoutMillis: config.timeoutMillis,
       });
       provider = new LoggerProvider({
         resource: resourceFromAttributes(
@@ -222,7 +164,7 @@ export function createControlLogger(
             maxExportBatchSize: 512,
             maxQueueSize: 2_048,
             scheduledDelayMillis: dependencies.batchDelayMillis ?? 1_000,
-            exportTimeoutMillis,
+            exportTimeoutMillis: config.timeoutMillis,
           }),
         ],
       });
@@ -241,13 +183,15 @@ export function createControlLogger(
 
   return {
     emit(level, event) {
-      stdout[level](stdoutEvent(event));
+      const sanitized = sanitizeOperationalEvent(event);
+      const projected = projectEvent(sanitized);
+      stdout[level](projected.stdout);
       otelLogger?.emit({
-        eventName: event.event,
+        eventName: sanitized.event,
         severityNumber: level === "info" ? SeverityNumber.INFO : SeverityNumber.ERROR,
         severityText: level === "info" ? "INFO" : "ERROR",
-        body: event.event,
-        attributes: eventAttributes(event),
+        body: sanitized.event,
+        attributes: projected.attributes,
       });
     },
     shutdown() {

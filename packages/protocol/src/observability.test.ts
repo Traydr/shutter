@@ -62,4 +62,26 @@ describe("operational events", () => {
       errorType: "ProtocolError",
     });
   });
+
+  it("drops invalid runtime metadata before emitting a shared event", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    emitOperationalEvent("info", {
+      event: "control.http.completed",
+      requestId: "request-id\nsecret",
+      httpMethod: "GET\r",
+      httpRoute: "/v1/source?token=secret",
+      httpStatusCode: 999,
+      durationMs: -1,
+      outcome: "failed",
+      errorType: "Error\nsecret",
+      authorization: "Bearer secret",
+    } as never);
+
+    expect(info).toHaveBeenCalledWith({
+      event: "control.http.completed",
+      outcome: "failed",
+    });
+    expect(JSON.stringify(info.mock.calls)).not.toContain("secret");
+    info.mockRestore();
+  });
 });

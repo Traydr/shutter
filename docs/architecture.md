@@ -49,8 +49,10 @@ to an implementation spike.
 
 Shutter Control emits allowlisted operational events as structured JSON to
 Railway stdout and directly to the shared Parseable `shutter` dataset over
-OTLP/HTTP JSON. Resource attributes identify the service, deployment environment,
-version, replica, and region. Control also emits one completion event for each
+OTLP/HTTP JSON. The direct exporter is pinned to the exact Parseable ingest URL
+and requires the complete dataset-scoped header bundle before it can start.
+Resource attributes identify the service, deployment environment, version,
+replica, and region. Control also emits one completion event for each
 non-health HTTP request using a server-generated request ID and the matched Hono
 route template; it never records raw paths, queries, headers, bodies, locators,
 capabilities, Source IDs, error messages, or stacks. Direct export is best effort

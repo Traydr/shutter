@@ -61,6 +61,7 @@ describe("ControlLogger", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
+    const endpoint = `http://127.0.0.1:${port}/v1/logs`;
     const stdout = new Writable({ write: (_chunk, _encoding, callback) => callback() });
     const logger = createControlLogger(
       {
@@ -70,12 +71,12 @@ describe("ControlLogger", () => {
         RAILWAY_REPLICA_ID: "replica-1",
         RAILWAY_REPLICA_REGION: "europe-west4-drams3a",
         RAILWAY_DEPLOYMENT_ID: "deployment-1",
-        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: `http://127.0.0.1:${port}/v1/logs`,
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: endpoint,
         OTEL_EXPORTER_OTLP_LOGS_HEADERS:
           "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter,X-P-Log-Source=otel-logs",
         OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: "5000",
       },
-      { stdout, packageVersion: "0.1.0" },
+      { stdout, packageVersion: "0.1.0", allowedOtlpEndpoints: [endpoint] },
     );
 
     try {
@@ -179,6 +180,72 @@ describe("ControlLogger", () => {
     expect(output).not.toContain("parseable.traydr.dev");
   });
 
+  it("refuses to send Parseable credentials to an unapproved endpoint", async () => {
+    let requests = 0;
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        requests += 1;
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end("{}");
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const endpoint = `http://127.0.0.1:${port}/v1/logs`;
+    let output = "";
+    const stdout = new Writable({
+      write(chunk, _encoding, callback) {
+        output += String(chunk);
+        callback();
+      },
+    });
+    const logger = createControlLogger(
+      {
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: endpoint,
+        OTEL_EXPORTER_OTLP_LOGS_HEADERS:
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter,X-P-Log-Source=otel-logs",
+      },
+      { stdout },
+    );
+
+    try {
+      logger.emit("info", { event: "control.service.started", outcome: "ready" });
+      await logger.shutdown();
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error === undefined ? resolve() : reject(error))),
+      );
+    }
+
+    expect(requests).toBe(0);
+    expect(output).toContain("control.telemetry.configuration_failed");
+    expect(output).not.toContain("dXNlcjpwYXNzd29yZA");
+  });
+
+  it("refuses a trailing-dot alias of the approved Parseable hostname", async () => {
+    let output = "";
+    const stdout = new Writable({
+      write(chunk, _encoding, callback) {
+        output += String(chunk);
+        callback();
+      },
+    });
+    const logger = createControlLogger(
+      {
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://parseable.traydr.dev./v1/logs",
+        OTEL_EXPORTER_OTLP_LOGS_HEADERS:
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter,X-P-Log-Source=otel-logs",
+      },
+      { stdout },
+    );
+
+    await logger.shutdown();
+
+    expect(output).toContain("control.telemetry.configuration_failed");
+    expect(output).not.toContain("parseable.traydr.dev.");
+  });
+
   it("normalizes thrown values without retaining messages or unsafe names", () => {
     const safe = new Error("do-not-log-this-message");
     safe.name = "DatabaseError";
@@ -202,6 +269,7 @@ describe("ControlLogger", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
+    const endpoint = `http://127.0.0.1:${port}/v1/logs`;
     let output = "";
     const stdout = new Writable({
       write(chunk, _encoding, callback) {
@@ -211,10 +279,17 @@ describe("ControlLogger", () => {
     });
     const logger = createControlLogger(
       {
-        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: `http://127.0.0.1:${port}/v1/logs`,
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: endpoint,
+        OTEL_EXPORTER_OTLP_LOGS_HEADERS:
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter,X-P-Log-Source=otel-logs",
         OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: "100",
       },
-      { stdout, now: () => 0, batchDelayMillis: 10 },
+      {
+        stdout,
+        now: () => 0,
+        batchDelayMillis: 10,
+        allowedOtlpEndpoints: [endpoint],
+      },
     );
 
     try {

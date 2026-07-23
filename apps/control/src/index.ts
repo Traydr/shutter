@@ -1,8 +1,8 @@
 import { serve } from "@hono/node-server";
 import { app, jobApiRuntime } from "./app.js";
-import { createControlShutdown } from "./lifecycle.js";
 import { controlLogger } from "./logging.js";
 import { startRecoverySweep } from "./recovery.js";
+import { createControlShutdown } from "./shutdown.js";
 
 const portValue = process.env.PORT ?? "3000";
 if (!/^[1-9]\d*$/.test(portValue)) throw new Error("PORT must be a positive integer");
