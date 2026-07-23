@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
   buildMasterPreviewKey,
+  CONTROL_HTTP_ROUTES,
   type ExecutorCompleteRequest,
   type ExecutorFailRequest,
   type ExecutorHeartbeatRequest,
@@ -101,9 +102,8 @@ async function strictJson(request: Request): Promise<unknown> {
 
 export function createJobApi(runtime: JobApiRuntime): Hono {
   const api = new Hono();
-  const resource = "/v1/spaces/:spaceId/sources/:sourceId/previews/:kind";
 
-  api.post("/v1/spaces/:spaceId/sources/:sourceId/purge", async (context) => {
+  api.post(CONTROL_HTTP_ROUTES.sourcePurge, async (context) => {
     const spaceId = context.req.param("spaceId");
     const sourceId = context.req.param("sourceId");
     if (getSpacePolicy(spaceId) === undefined) return requestFailure(404, "not_found");
@@ -120,7 +120,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     }
   });
 
-  api.put(resource, async (context) => {
+  api.put(CONTROL_HTTP_ROUTES.previewJob, async (context) => {
     const identity = identityFromRoute(context);
     if (identity === undefined) return requestFailure(404, "not_found");
     const policy = getSpacePolicy(identity.spaceId);
@@ -186,7 +186,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     }
   });
 
-  api.get(resource, async (context) => {
+  api.get(CONTROL_HTTP_ROUTES.previewJob, async (context) => {
     const identity = identityFromRoute(context);
     if (identity === undefined) return requestFailure(404, "not_found");
     if (!authorizedSpace(runtime, identity.spaceId, context.req.header("authorization"))) {
@@ -197,7 +197,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     return activeResponse(record.representation, new URL(context.req.url).pathname);
   });
 
-  api.post("/internal/v1/executors/:kind/claim", async (context) => {
+  api.post(CONTROL_HTTP_ROUTES.executorClaim, async (context) => {
     const parsedKind = kind(context.req.param("kind"));
     if (
       parsedKind === undefined ||
@@ -250,8 +250,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     }
   });
 
-  const transition = "/internal/v1/executors/:kind/jobs/:spaceId/:sourceId";
-  api.post(`${transition}/heartbeat`, async (context) => {
+  api.post(CONTROL_HTTP_ROUTES.executorHeartbeat, async (context) => {
     const identity = identityFromRoute(context);
     if (
       identity === undefined ||
@@ -273,7 +272,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       : requestFailure(409, "stale_attempt");
   });
 
-  api.post(`${transition}/complete`, async (context) => {
+  api.post(CONTROL_HTTP_ROUTES.executorComplete, async (context) => {
     const identity = identityFromRoute(context);
     if (
       identity === undefined ||
@@ -328,7 +327,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       : requestFailure(409, "stale_attempt");
   });
 
-  api.post(`${transition}/fail`, async (context) => {
+  api.post(CONTROL_HTTP_ROUTES.executorFail, async (context) => {
     const identity = identityFromRoute(context);
     if (
       identity === undefined ||

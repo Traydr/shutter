@@ -2,6 +2,8 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { S3Client } from "@aws-sdk/client-s3";
 import {
   buildMasterPreviewKey,
+  CONTROL_HTTP_ROUTES,
+  type ControlHttpRoute,
   ProtocolError,
   parseCapabilityKeyRegistry,
   validateSourceLocator,
@@ -28,12 +30,16 @@ export interface ControlRuntimeConfig {
   jobApiRuntime?: JobApiRuntime;
 }
 
-function safeRouteTemplate(context: Parameters<typeof matchedRoutes>[0]): string {
-  const route = matchedRoutes(context)
+function safeRouteTemplate(
+  context: Parameters<typeof matchedRoutes>[0],
+): ControlHttpRoute | "<unmatched>" {
+  const matchedRoute = matchedRoutes(context)
     .map((matched) => matched.path)
     .filter((path) => path !== "*" && path !== "/*")
     .at(-1);
-  return route ?? "<unmatched>";
+  return (
+    Object.values(CONTROL_HTTP_ROUTES).find((route) => route === matchedRoute) ?? "<unmatched>"
+  );
 }
 
 function credentialDigest(value: string): Uint8Array {
@@ -100,7 +106,7 @@ export function createControlApp(
       await next();
     } finally {
       const matchedRoute = safeRouteTemplate(context);
-      if (matchedRoute !== "/healthz") {
+      if (matchedRoute !== CONTROL_HTTP_ROUTES.healthz) {
         const status = context.res.status;
         runtime.logger.emit(status >= 500 ? "error" : "info", {
           event: "control.http.completed",
@@ -129,10 +135,12 @@ export function createControlApp(
     });
   });
 
-  control.get("/healthz", (context) => context.json({ ok: true, service: "control" }));
+  control.get(CONTROL_HTTP_ROUTES.healthz, (context) =>
+    context.json({ ok: true, service: "control" }),
+  );
   if (runtime.jobApiRuntime !== undefined) control.route("/", createJobApi(runtime.jobApiRuntime));
 
-  control.get("/internal/v1/spike/rendition", async (context) => {
+  control.get(CONTROL_HTTP_ROUTES.spikeRendition, async (context) => {
     if (!authorized(context.req.header("authorization"), runtime.originAuthToken())) {
       return context.json({ error: { code: "unauthorized" } }, 401, {
         "cache-control": "private, no-store",
@@ -226,7 +234,7 @@ export function createControlApp(
     }
   });
 
-  control.post("/internal/v1/master-rendition", async (context) => {
+  control.post(CONTROL_HTTP_ROUTES.masterRendition, async (context) => {
     if (!authorized(context.req.header("authorization"), runtime.originAuthToken())) {
       return context.json({ error: { code: "unauthorized" } }, 401, {
         "cache-control": "private, no-store",

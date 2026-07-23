@@ -1,4 +1,5 @@
 import { sourceFingerprint } from "./cache-identity.js";
+import { CONTROL_HTTP_ROUTES, type ControlHttpRoute } from "./control-routes.js";
 import {
   FAILURE_ACTIONS,
   type JobFailureCode,
@@ -46,7 +47,7 @@ export interface OperationalEventFields {
   count?: number;
   requestId?: string;
   httpMethod?: string;
-  httpRoute?: string;
+  httpRoute?: ControlHttpRoute | "<unmatched>";
   httpStatusCode?: number;
   errorType?: string;
 }
@@ -67,14 +68,7 @@ const ERROR_TYPE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
 const HASH = /^[A-Za-z0-9_-]{43}$/u;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const HTTP_METHOD = /^[A-Z]{1,16}$/u;
-const HTTP_ROUTE_TEMPLATE =
-  /^\/(?:[A-Za-z0-9_.-]+|:[A-Za-z][A-Za-z0-9_]*|\*)(?:\/(?:[A-Za-z0-9_.-]+|:[A-Za-z][A-Za-z0-9_]*|\*))*$/u;
-const HTTP_ROUTE_PARAMETER = /^:[A-Za-z][A-Za-z0-9_]*$/u;
-const STATIC_HTTP_ROUTES = new Set([
-  "/healthz",
-  "/internal/v1/master-rendition",
-  "/internal/v1/spike/rendition",
-]);
+const CONTROL_HTTP_ROUTE_TEMPLATES = new Set<string>(Object.values(CONTROL_HTTP_ROUTES));
 
 type OptionalOperationalEventField = Exclude<keyof OperationalEvent, "event">;
 type FieldSanitizers = {
@@ -103,16 +97,13 @@ function isNonNegativeNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-function safeHttpRoute(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  if (value === "<unmatched>" || STATIC_HTTP_ROUTES.has(value)) return value;
-  if (!HTTP_ROUTE_TEMPLATE.test(value)) return undefined;
-  return value
-    .slice(1)
-    .split("/")
-    .some((segment) => segment === "*" || HTTP_ROUTE_PARAMETER.test(segment))
-    ? value
-    : undefined;
+function isControlHttpRoute(value: string): value is ControlHttpRoute {
+  return CONTROL_HTTP_ROUTE_TEMPLATES.has(value);
+}
+
+function safeHttpRoute(value: unknown): ControlHttpRoute | "<unmatched>" | undefined {
+  if (value === "<unmatched>") return value;
+  return typeof value === "string" && isControlHttpRoute(value) ? value : undefined;
 }
 
 const FIELD_SANITIZERS = {
@@ -145,8 +136,19 @@ export function operationalErrorType(error: unknown): string {
   return ERROR_TYPE.test(error.name) ? error.name : "Error";
 }
 
-export function sanitizeOperationalEvent(event: OperationalEvent): OperationalEvent {
-  const candidate = event as unknown as Record<string, unknown>;
+function setSanitizedField<Field extends OptionalOperationalEventField>(
+  event: OperationalEvent,
+  field: Field,
+  value: NonNullable<OperationalEvent[Field]>,
+): void {
+  Object.assign(event, { [field]: value });
+}
+
+export function sanitizeOperationalEvent(event: unknown): OperationalEvent {
+  const candidate =
+    typeof event === "object" && event !== null && !Array.isArray(event)
+      ? (event as Record<string, unknown>)
+      : {};
   const eventName = candidate.event;
   if (typeof eventName !== "string" || !EVENT_NAMES.has(eventName)) {
     return {
@@ -157,15 +159,14 @@ export function sanitizeOperationalEvent(event: OperationalEvent): OperationalEv
     };
   }
 
-  const sanitizedFields: Partial<Record<OptionalOperationalEventField, string | number>> = {};
+  const sanitizedEvent: OperationalEvent = {
+    event: eventName as OperationalEventName,
+  };
   for (const field of Object.keys(FIELD_SANITIZERS) as OptionalOperationalEventField[]) {
     const sanitized = FIELD_SANITIZERS[field](candidate[field]);
-    if (sanitized !== undefined) sanitizedFields[field] = sanitized;
+    if (sanitized !== undefined) setSanitizedField(sanitizedEvent, field, sanitized);
   }
-  return {
-    event: eventName as OperationalEventName,
-    ...sanitizedFields,
-  } as OperationalEvent;
+  return sanitizedEvent;
 }
 
 export async function operationalEvent(input: {

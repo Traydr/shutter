@@ -104,6 +104,12 @@ describe("operational events", () => {
     expect(
       sanitizeOperationalEvent({
         ...base,
+        httpRoute: "/v1/spaces/:spaceId/sources/private-source/previews/:kind",
+      }),
+    ).toEqual(base);
+    expect(
+      sanitizeOperationalEvent({
+        ...base,
         httpRoute: "/internal/v1/spike/rendition",
       }),
     ).toEqual({ ...base, httpRoute: "/internal/v1/spike/rendition" });

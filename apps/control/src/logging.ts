@@ -61,33 +61,24 @@ function resourceAttributes(
 
 type OptionalOperationalEventField = Exclude<keyof OperationalEvent, "event">;
 
-const EVENT_FIELD_PROJECTIONS = [
-  ["sourceHash", "shutter.source.hash"],
-  ["processingTokenHash", "shutter.processing_token.hash"],
-  ["routeClass", "shutter.route_class"],
-  ["cacheOutcome", "shutter.cache.outcome"],
-  ["kind", "shutter.rendition.kind"],
-  ["executionCycle", "shutter.execution.cycle"],
-  ["attemptNumber", "shutter.attempt.number"],
-  ["durationMs", "shutter.duration_ms"],
-  ["outcome", "shutter.outcome"],
-  ["failureCode", "shutter.failure.code"],
-  ["count", "shutter.count"],
-  ["requestId", "request.id"],
-  ["httpMethod", "http.request.method"],
-  ["httpRoute", "http.route"],
-  ["httpStatusCode", "http.response.status_code"],
-  ["errorType", "error.type"],
-] as const satisfies readonly (readonly [OptionalOperationalEventField, string])[];
-
-type ProjectedField = (typeof EVENT_FIELD_PROJECTIONS)[number][0];
-const ALL_EVENT_FIELDS_PROJECTED: Exclude<
-  OptionalOperationalEventField,
-  ProjectedField
-> extends never
-  ? true
-  : never = true;
-void ALL_EVENT_FIELDS_PROJECTED;
+const EVENT_FIELD_PROJECTIONS = {
+  sourceHash: "shutter.source.hash",
+  processingTokenHash: "shutter.processing_token.hash",
+  routeClass: "shutter.route_class",
+  cacheOutcome: "shutter.cache.outcome",
+  kind: "shutter.rendition.kind",
+  executionCycle: "shutter.execution.cycle",
+  attemptNumber: "shutter.attempt.number",
+  durationMs: "shutter.duration_ms",
+  outcome: "shutter.outcome",
+  failureCode: "shutter.failure.code",
+  count: "shutter.count",
+  requestId: "request.id",
+  httpMethod: "http.request.method",
+  httpRoute: "http.route",
+  httpStatusCode: "http.response.status_code",
+  errorType: "error.type",
+} satisfies Record<OptionalOperationalEventField, string>;
 
 function projectEvent(event: OperationalEvent): {
   stdout: Record<string, string | number>;
@@ -95,11 +86,11 @@ function projectEvent(event: OperationalEvent): {
 } {
   const stdout: Record<string, string | number> = { event: event.event };
   const attributes: LogAttributes = { "event.name": event.event };
-  for (const [field, attribute] of EVENT_FIELD_PROJECTIONS) {
+  for (const field of Object.keys(EVENT_FIELD_PROJECTIONS) as OptionalOperationalEventField[]) {
     const value = event[field];
     if (value !== undefined) {
       stdout[field] = value;
-      attributes[attribute] = value;
+      attributes[EVENT_FIELD_PROJECTIONS[field]] = value;
     }
   }
   return { stdout, attributes };
