@@ -1,8 +1,8 @@
-# Control logging with Parseable
+# Control logging with OpenObserve
 
 Shutter Control writes every operational event to JSON stdout and, when
-configured, sends the same allowlisted event to Parseable with OTLP/HTTP JSON.
-Railway logs are the fallback if Parseable is unavailable. OTLP delivery uses an
+configured, sends the same allowlisted event to OpenObserve with OTLP/HTTP JSON.
+Railway logs are the fallback if OpenObserve is unavailable. OTLP delivery uses an
 in-memory batch queue, so a forced process kill can lose the final batch.
 
 Pino supplies the stdout envelope: stable JSON serialization, numeric levels,
@@ -10,36 +10,24 @@ timestamps, and a testable destination stream. It is not trusted to redact
 events. The shared protocol sanitizer drops invalid or unknown fields first, and
 one declarative projection table then produces both the Pino and OTLP records.
 
-## Parseable resources
+## OpenObserve resources
 
-Provision these resources in the existing Parseable deployment before enabling
-the Control exporter:
+Use the `default` organization and `default` log stream:
 
-1. Create a dynamic-schema dataset named `shutter-logs`.
-2. Set and read back this retention policy:
+1. Send one event to create the `default` stream if it does not exist.
+2. Open **Streams → default → Stream Details → Configuration**, set
+   **Data Retention in days** to `30`, save it, and read the value back.
+3. Use a dedicated OpenObserve credential for Control and retain it only in the
+   secret manager. OpenObserve OSS does not provide scoped RBAC, so a dedicated
+   account isolates rotation but does not create an ingest-only authorization
+   boundary. Enterprise deployments should grant only the permissions needed for
+   log ingestion.
 
-   ```json
-   [
-     {
-       "duration": "30d",
-       "action": "delete",
-       "description": "Delete Shutter logs after 30 days"
-     }
-   ]
-   ```
-
-3. Create a native user named `shutter-ingestor` and a role with only the
-   `ingester` privilege on the `shutter-logs` dataset. Do not grant query, dataset
-   management, or administrator privileges.
-4. Retain the generated password in the secret manager. Verify that this user
-   can ingest into `shutter-logs` but cannot query or change the dataset.
-
-Parseable v2.8.0 expects all three of these request headers:
+OpenObserve expects both of these request headers:
 
 ```text
 Authorization: Basic <base64(username:password)>
-X-P-Stream: shutter-logs
-X-P-Log-Source: otel-logs
+stream-name: default
 ```
 
 ## Control configuration
@@ -53,7 +41,7 @@ from starting.
 Railway IaC fixes the non-secret values and preserves the authorization bundle:
 
 ```text
-OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://parseable.traydr.dev/v1/logs
+OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://openobserve.traydr.dev/api/default/v1/logs
 OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json
 OTEL_EXPORTER_OTLP_LOGS_TIMEOUT=5000
 OTEL_EXPORTER_OTLP_LOGS_HEADERS=<sealed Railway variable>
@@ -64,26 +52,31 @@ percent-encoded representation below. Percent-encode the space following
 `Basic` and any Base64 padding characters.
 
 ```text
-Authorization=Basic%20<percent-encoded-base64>,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs
+Authorization=Basic%20<percent-encoded-base64>,stream-name=default
 ```
 
 Never paste the resolved value into the repository, command output, a ticket,
 or a log query. `.railway/railway.ts` must retain it as `preserve()`.
 
 When the endpoint is absent, Control continues with stdout-only logging. Invalid
-Parseable configuration also falls back to stdout and emits one sanitized
+OpenObserve configuration also falls back to stdout and emits one sanitized
 `control.telemetry.configuration_failed` event.
 
 The exporter accepts only the normalized exact endpoint
-`https://parseable.traydr.dev/v1/logs`. It rejects hostname aliases, query
+`https://openobserve.traydr.dev/api/default/v1/logs`. It rejects hostname aliases, query
 parameters, URL credentials, alternate paths, and any header bundle other than
-the Parseable Basic authorization, `shutter-logs` stream, and `otel-logs` source.
+the OpenObserve Basic authorization and `default` stream.
 Exporter timeouts are capped at five seconds even if the environment requests a
 larger value, preserving the shutdown flush allowance.
 
+The OpenTelemetry Collector configuration uses
+`https://openobserve.traydr.dev/api/default` because the Collector appends
+`/v1/logs`. Control uses the signal-specific endpoint above, which is used as-is
+and must therefore include `/v1/logs`.
+
 ## Event schema
 
-The OTLP body is the stable event name. Parseable columns include:
+The OTLP body is the stable event name. OpenObserve fields include:
 
 | Column | Meaning |
 | --- | --- |
@@ -107,30 +100,30 @@ Capabilities, locators, presigned URLs, authorization values, cookies, request
 and response bodies, query strings, raw Source IDs, command lines, stderr, error
 messages, and stacks are forbidden.
 
-## Useful Parseable queries
+## Useful OpenObserve queries
 
-Run these in the Parseable query editor and adjust the time range there:
+Select the `default` log stream, enable SQL mode, and adjust the time range:
 
 ```sql
-SELECT p_timestamp, "event.name", "shutter.failure.code", "request.id"
-FROM "shutter-logs"
+SELECT _timestamp, "event.name", "shutter.failure.code", "request.id"
+FROM "default"
 WHERE "service.name" = 'shutter-control'
-  AND p_log_category = 'ERROR'
-ORDER BY p_timestamp DESC;
+  AND severity_text = 'ERROR'
+ORDER BY _timestamp DESC;
 ```
 
 ```sql
-SELECT p_timestamp, "http.route", "http.response.status_code",
+SELECT _timestamp, "http.route", "http.response.status_code",
        "shutter.duration_ms", "request.id"
-FROM "shutter-logs"
+FROM "default"
 WHERE "service.name" = 'shutter-control'
   AND "http.response.status_code" >= 500
-ORDER BY p_timestamp DESC;
+ORDER BY _timestamp DESC;
 ```
 
 ```sql
 SELECT "event.name", count(*) AS failures
-FROM "shutter-logs"
+FROM "default"
 WHERE "event.name" IN (
   'control.job.failed',
   'control.dispatch.failed',
@@ -144,7 +137,7 @@ ORDER BY failures DESC;
 ```sql
 SELECT "http.route",
        approx_percentile_cont("shutter.duration_ms", 0.95) AS p95_ms
-FROM "shutter-logs"
+FROM "default"
 WHERE "event.name" = 'control.http.completed'
 GROUP BY "http.route"
 ORDER BY p95_ms DESC;
@@ -160,7 +153,7 @@ ORDER BY p95_ms DESC;
 5. Send a safe unauthenticated request to a known Control route. `/healthz` is
    deliberately excluded from request logging.
 6. Confirm the response has a server-generated `X-Request-Id`.
-7. Find the matching `control.http.completed` record in Parseable and structured
+7. Find the matching `control.http.completed` record in OpenObserve and structured
    Railway stdout.
 8. Confirm service, environment, route template, status, severity, and duration.
 9. Search the record for credentials, URLs, raw paths, query strings, Source IDs,
@@ -168,9 +161,9 @@ ORDER BY p95_ms DESC;
 
 ## Credential rotation
 
-Create a second dataset-scoped ingester, replace the sealed Railway header value,
-deploy and verify ingestion, then revoke the old user. Do not reuse the Parseable
-administrator account as an overlap credential.
+Create a replacement OpenObserve credential, replace the sealed Railway header
+value, deploy and verify ingestion, then revoke the old credential. On OpenObserve
+OSS, remember that the replacement account is not constrained by scoped RBAC.
 
 ## Failure and rollback
 
@@ -179,7 +172,7 @@ rate-limits `control.telemetry.export_failed` diagnostics to one per minute.
 
 For exporter rollback, remove `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` and redeploy;
 stdout logging continues. For full rollback, deploy the previous Control revision
-and revoke the ingester only if the integration is abandoned. Leave the dataset
+and revoke the credential only if the integration is abandoned. Leave the stream
 for diagnosis and its normal 30-day expiry.
 
 Introduce an OpenTelemetry Collector when more Shutter services export logs,

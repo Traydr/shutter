@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { createControlLogger, operationalErrorType } from "./logging.js";
 
 interface ReceivedRequest {
+  method: string | undefined;
+  url: string | undefined;
   headers: Record<string, string | string[] | undefined>;
   body: Record<string, unknown>;
 }
@@ -45,13 +47,15 @@ describe("ControlLogger", () => {
     expect(output).not.toContain("Bearer secret");
   });
 
-  it("exports the redacted event as OTLP JSON with Parseable headers", async () => {
+  it("exports the redacted event as OTLP JSON with OpenObserve headers", async () => {
     const received: ReceivedRequest[] = [];
     const server = createServer((request, response) => {
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer) => chunks.push(chunk));
       request.on("end", () => {
         received.push({
+          method: request.method,
+          url: request.url,
           headers: request.headers,
           body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
         });
@@ -61,7 +65,7 @@ describe("ControlLogger", () => {
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const { port } = server.address() as AddressInfo;
-    const endpoint = `http://127.0.0.1:${port}/v1/logs`;
+    const endpoint = `http://127.0.0.1:${port}/api/default/v1/logs`;
     const stdout = new Writable({ write: (_chunk, _encoding, callback) => callback() });
     const logger = createControlLogger(
       {
@@ -73,7 +77,7 @@ describe("ControlLogger", () => {
         RAILWAY_DEPLOYMENT_ID: "deployment-1",
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: endpoint,
         OTEL_EXPORTER_OTLP_LOGS_HEADERS:
-          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs",
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,stream-name=default",
         OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: "5000",
       },
       { stdout, packageVersion: "0.1.0", allowedOtlpEndpoints: [endpoint] },
@@ -98,11 +102,14 @@ describe("ControlLogger", () => {
     }
 
     expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      method: "POST",
+      url: "/api/default/v1/logs",
+    });
     expect(received[0]?.headers).toMatchObject({
       authorization: "Basic dXNlcjpwYXNzd29yZA==",
       "content-type": "application/json",
-      "x-p-log-source": "otel-logs",
-      "x-p-stream": "shutter-logs",
+      "stream-name": "default",
     });
     expect(received[0]?.body).toMatchObject({
       resourceLogs: [
@@ -146,7 +153,7 @@ describe("ControlLogger", () => {
     });
   });
 
-  it("falls back to stdout once when Parseable configuration is invalid", async () => {
+  it("falls back to stdout once when OpenObserve configuration is invalid", async () => {
     let output = "";
     const stdout = new Writable({
       write(chunk, _encoding, callback) {
@@ -156,7 +163,7 @@ describe("ControlLogger", () => {
     });
     const logger = createControlLogger(
       {
-        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://parseable.traydr.dev/v1/logs",
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://openobserve.traydr.dev/api/default/v1/logs",
         OTEL_EXPORTER_OTLP_LOGS_HEADERS: "Authorization=secret-value",
       },
       { stdout },
@@ -177,10 +184,10 @@ describe("ControlLogger", () => {
     });
     expect(records[1]).toMatchObject({ event: "control.service.started" });
     expect(output).not.toContain("secret-value");
-    expect(output).not.toContain("parseable.traydr.dev");
+    expect(output).not.toContain("openobserve.traydr.dev");
   });
 
-  it("refuses to send Parseable credentials to an unapproved endpoint", async () => {
+  it("refuses to send OpenObserve credentials to an unapproved endpoint", async () => {
     let requests = 0;
     const server = createServer((request, response) => {
       request.resume();
@@ -204,7 +211,7 @@ describe("ControlLogger", () => {
       {
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: endpoint,
         OTEL_EXPORTER_OTLP_LOGS_HEADERS:
-          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs",
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,stream-name=default",
       },
       { stdout },
     );
@@ -223,7 +230,7 @@ describe("ControlLogger", () => {
     expect(output).not.toContain("dXNlcjpwYXNzd29yZA");
   });
 
-  it("refuses a trailing-dot alias of the approved Parseable hostname", async () => {
+  it("refuses a trailing-dot alias of the approved OpenObserve hostname", async () => {
     let output = "";
     const stdout = new Writable({
       write(chunk, _encoding, callback) {
@@ -233,9 +240,9 @@ describe("ControlLogger", () => {
     });
     const logger = createControlLogger(
       {
-        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://parseable.traydr.dev./v1/logs",
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://openobserve.traydr.dev./api/default/v1/logs",
         OTEL_EXPORTER_OTLP_LOGS_HEADERS:
-          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs",
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,stream-name=default",
       },
       { stdout },
     );
@@ -243,7 +250,7 @@ describe("ControlLogger", () => {
     await logger.shutdown();
 
     expect(output).toContain("control.telemetry.configuration_failed");
-    expect(output).not.toContain("parseable.traydr.dev.");
+    expect(output).not.toContain("openobserve.traydr.dev.");
   });
 
   it("normalizes thrown values without retaining messages or unsafe names", () => {
@@ -281,7 +288,7 @@ describe("ControlLogger", () => {
       {
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: endpoint,
         OTEL_EXPORTER_OTLP_LOGS_HEADERS:
-          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs",
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,stream-name=default",
         OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: "100",
       },
       {

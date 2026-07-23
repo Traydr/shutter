@@ -40,7 +40,7 @@ rollback, and final cleanup.
 
 - Every Control operational event is emitted as structured JSON to stdout.
 - When its OTLP endpoint is configured, Control also exports the same allowlisted
-  event to the Parseable `shutter-logs` dataset. Export failure never blocks request
+  event to the OpenObserve `default` log stream. Export failure never blocks request
   processing or weakens authorization behavior.
 - Every non-health Control request returns a server-generated `X-Request-Id` and
   emits one `control.http.completed` event containing only that ID, method,
@@ -49,7 +49,7 @@ rollback, and final cleanup.
 - Capabilities, locators, presigned URLs, credentials, headers, cookies, bodies,
   query strings, raw paths, raw Source IDs, command lines, stderr, error messages,
   and stacks are forbidden from structured events.
-- Parseable retains the `shutter-logs` dataset for 30 days. Its Control credential has
-  dataset-scoped ingestion authority only.
+- OpenObserve retains the `default` log stream for 30 days. The Control credential
+  is stored only as a sealed Railway variable.
 - Railway stdout is the fallback because direct OTLP batching is memory-only and
   a forced process kill can lose the final batch.

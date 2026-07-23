@@ -1,23 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { readOtlpLogsConfig } from "./logging-config.js";
 
-const ENDPOINT = "https://parseable.traydr.dev/v1/logs";
-const HEADERS =
-  "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs";
+const ENDPOINT = "https://openobserve.traydr.dev/api/default/v1/logs";
+const HEADERS = "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,stream-name=default";
 
 describe("Control OTLP logging configuration", () => {
-  it("accepts only the shutter-logs dataset without exporter-owned headers", () => {
+  it("accepts only the default OpenObserve stream without exporter-owned headers", () => {
     expect(
       readOtlpLogsConfig({
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ENDPOINT,
         OTEL_EXPORTER_OTLP_LOGS_HEADERS: HEADERS,
       })?.headers,
-    ).toMatchObject({ "X-P-Stream": "shutter-logs" });
+    ).toMatchObject({ "stream-name": "default" });
 
     expect(() =>
       readOtlpLogsConfig({
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://openobserve.traydr.dev/api/default",
+        OTEL_EXPORTER_OTLP_LOGS_HEADERS: HEADERS,
+      }),
+    ).toThrow();
+    expect(() =>
+      readOtlpLogsConfig({
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ENDPOINT,
-        OTEL_EXPORTER_OTLP_LOGS_HEADERS: HEADERS.replace("shutter-logs", "shutter"),
+        OTEL_EXPORTER_OTLP_LOGS_HEADERS: HEADERS.replace("default", "shutter"),
       }),
     ).toThrow();
     expect(() =>

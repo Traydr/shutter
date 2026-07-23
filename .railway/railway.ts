@@ -102,7 +102,7 @@ export default defineRailway(() => {
       IMGPROXY_SALT: preserve(),
       IMGPROXY_SECRET: preserve(),
       NODE_ENV: "production",
-      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://parseable.traydr.dev/v1/logs",
+      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://openobserve.traydr.dev/api/default/v1/logs",
       OTEL_EXPORTER_OTLP_LOGS_HEADERS: preserve(),
       OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/json",
       OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: "5000",

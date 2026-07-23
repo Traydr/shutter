@@ -22,8 +22,8 @@ export interface OtlpLogsConfig {
   timeoutMillis: number;
 }
 
-export const PARSEABLE_OTLP_LOGS_ENDPOINT = "https://parseable.traydr.dev/v1/logs";
-export const PARSEABLE_LOGS_DATASET = "shutter-logs";
+export const OPENOBSERVE_OTLP_LOGS_ENDPOINT = "https://openobserve.traydr.dev/api/default/v1/logs";
+export const OPENOBSERVE_LOG_STREAM = "default";
 const MAX_OTLP_EXPORT_TIMEOUT_MILLIS = 5_000;
 
 function parseHeaders(value: string | undefined): Record<string, string> {
@@ -63,17 +63,16 @@ function normalizedEndpoint(value: string): string {
   return endpoint.href;
 }
 
-function validateParseableHeaders(headers: Readonly<Record<string, string>>): void {
+function validateOpenObserveHeaders(headers: Readonly<Record<string, string>>): void {
   const normalized = new Map(
     Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]),
   );
   if (
-    normalized.size !== 3 ||
-    normalized.get("x-p-stream") !== PARSEABLE_LOGS_DATASET ||
-    normalized.get("x-p-log-source") !== "otel-logs" ||
+    normalized.size !== 2 ||
+    normalized.get("stream-name") !== OPENOBSERVE_LOG_STREAM ||
     !/^Basic [A-Za-z0-9+/]+={0,2}$/u.test(normalized.get("authorization") ?? "")
   ) {
-    throw new Error("incomplete Parseable headers");
+    throw new Error("incomplete OpenObserve headers");
   }
 }
 
@@ -88,7 +87,7 @@ function timeoutMillis(environment: ControlLoggingEnvironment): number {
 
 export function readOtlpLogsConfig(
   environment: ControlLoggingEnvironment,
-  allowedEndpoints: readonly string[] = [PARSEABLE_OTLP_LOGS_ENDPOINT],
+  allowedEndpoints: readonly string[] = [OPENOBSERVE_OTLP_LOGS_ENDPOINT],
 ): OtlpLogsConfig | undefined {
   const configuredEndpoint = environment.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
   if (configuredEndpoint === undefined) return undefined;
@@ -104,6 +103,6 @@ export function readOtlpLogsConfig(
   if (!allowed.has(endpoint)) throw new Error("unapproved OTLP endpoint");
 
   const headers = parseHeaders(environment.OTEL_EXPORTER_OTLP_LOGS_HEADERS);
-  validateParseableHeaders(headers);
+  validateOpenObserveHeaders(headers);
   return { endpoint, headers, timeoutMillis: timeoutMillis(environment) };
 }

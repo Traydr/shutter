@@ -48,9 +48,9 @@ untrusted direct access. The exact public canonical-URL routing remains subject
 to an implementation spike.
 
 Shutter Control emits allowlisted operational events as structured JSON to
-Railway stdout and directly to the shared Parseable `shutter-logs` dataset over
-OTLP/HTTP JSON. The direct exporter is pinned to the exact Parseable ingest URL
-and requires the complete dataset-scoped header bundle before it can start.
+Railway stdout and directly to the OpenObserve `default` log stream over
+OTLP/HTTP JSON. The direct exporter is pinned to the exact OpenObserve ingest URL
+and requires the complete authorization and stream header bundle before it can start.
 Resource attributes identify the service, deployment environment, version,
 replica, and region. Control also emits one completion event for each
 non-health HTTP request using a server-generated request ID and the matched Hono
