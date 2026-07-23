@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { emitOperationalEvent, operationalEvent } from "./observability.js";
+import {
+  emitOperationalEvent,
+  operationalEvent,
+  sanitizeOperationalEvent,
+} from "./observability.js";
 
 describe("operational events", () => {
   it("emits only allowlisted redacted fields", async () => {
@@ -83,5 +87,34 @@ describe("operational events", () => {
     });
     expect(JSON.stringify(info.mock.calls)).not.toContain("secret");
     info.mockRestore();
+  });
+
+  it("rejects concrete HTTP paths while retaining known static and template routes", () => {
+    const base = {
+      event: "control.http.completed",
+      outcome: "ready",
+    } as const;
+
+    expect(
+      sanitizeOperationalEvent({
+        ...base,
+        httpRoute: "/v1/spaces/acme/sources/private-source/previews/video",
+      }),
+    ).toEqual(base);
+    expect(
+      sanitizeOperationalEvent({
+        ...base,
+        httpRoute: "/internal/v1/spike/rendition",
+      }),
+    ).toEqual({ ...base, httpRoute: "/internal/v1/spike/rendition" });
+    expect(
+      sanitizeOperationalEvent({
+        ...base,
+        httpRoute: "/v1/spaces/:spaceId/sources/:sourceId/previews/:kind",
+      }),
+    ).toEqual({
+      ...base,
+      httpRoute: "/v1/spaces/:spaceId/sources/:sourceId/previews/:kind",
+    });
   });
 });

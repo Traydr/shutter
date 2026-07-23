@@ -72,6 +72,8 @@ The exporter accepts only the normalized exact endpoint
 `https://parseable.traydr.dev/v1/logs`. It rejects hostname aliases, query
 parameters, URL credentials, alternate paths, and any header bundle other than
 the Parseable Basic authorization, `shutter` stream, and `otel-logs` source.
+Exporter timeouts are capped at five seconds even if the environment requests a
+larger value, preserving the shutdown flush allowance.
 
 ## Event schema
 

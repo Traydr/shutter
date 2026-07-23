@@ -7,6 +7,7 @@ export interface OtlpLogsConfig {
 }
 
 export const PARSEABLE_OTLP_LOGS_ENDPOINT = "https://parseable.traydr.dev/v1/logs";
+const MAX_OTLP_EXPORT_TIMEOUT_MILLIS = 5_000;
 
 function parseHeaders(value: string | undefined): Record<string, string> {
   if (value === undefined || value.trim() === "") throw new Error("missing OTLP headers");
@@ -61,11 +62,11 @@ function validateParseableHeaders(headers: Readonly<Record<string, string>>): vo
 
 function timeoutMillis(environment: ControlLoggingEnvironment): number {
   const value = environment.OTEL_EXPORTER_OTLP_LOGS_TIMEOUT;
-  if (value === undefined) return 5_000;
+  if (value === undefined) return MAX_OTLP_EXPORT_TIMEOUT_MILLIS;
   if (!/^[1-9]\d*$/u.test(value)) throw new Error("invalid OTLP timeout");
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) throw new Error("invalid OTLP timeout");
-  return parsed;
+  return Math.min(parsed, MAX_OTLP_EXPORT_TIMEOUT_MILLIS);
 }
 
 export function readOtlpLogsConfig(

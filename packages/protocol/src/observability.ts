@@ -67,7 +67,33 @@ const ERROR_TYPE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
 const HASH = /^[A-Za-z0-9_-]{43}$/u;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const HTTP_METHOD = /^[A-Z]{1,16}$/u;
-const HTTP_ROUTE = /^\/[A-Za-z0-9_./:*-]{0,255}$/u;
+const HTTP_ROUTE_TEMPLATE =
+  /^\/(?:[A-Za-z0-9_.-]+|:[A-Za-z][A-Za-z0-9_]*|\*)(?:\/(?:[A-Za-z0-9_.-]+|:[A-Za-z][A-Za-z0-9_]*|\*))*$/u;
+const HTTP_ROUTE_PARAMETER = /^:[A-Za-z][A-Za-z0-9_]*$/u;
+const STATIC_HTTP_ROUTES = new Set([
+  "/healthz",
+  "/internal/v1/master-rendition",
+  "/internal/v1/spike/rendition",
+]);
+
+type OptionalOperationalEventField = Exclude<keyof OperationalEvent, "event">;
+type FieldSanitizers = {
+  [Field in OptionalOperationalEventField]-?: (
+    value: unknown,
+  ) => OperationalEvent[Field] | undefined;
+};
+
+function oneOf<const Values extends readonly string[]>(
+  ...values: Values
+): (value: unknown) => Values[number] | undefined {
+  const allowed = new Set<string>(values);
+  return (value) =>
+    typeof value === "string" && allowed.has(value) ? (value as Values[number]) : undefined;
+}
+
+function matching(pattern: RegExp): (value: unknown) => string | undefined {
+  return (value) => (typeof value === "string" && pattern.test(value) ? value : undefined);
+}
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -76,6 +102,43 @@ function isNonNegativeInteger(value: unknown): value is number {
 function isNonNegativeNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
+
+function safeHttpRoute(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  if (value === "<unmatched>" || STATIC_HTTP_ROUTES.has(value)) return value;
+  if (!HTTP_ROUTE_TEMPLATE.test(value)) return undefined;
+  return value
+    .slice(1)
+    .split("/")
+    .some((segment) => segment === "*" || HTTP_ROUTE_PARAMETER.test(segment))
+    ? value
+    : undefined;
+}
+
+const FIELD_SANITIZERS = {
+  sourceHash: matching(HASH),
+  processingTokenHash: matching(HASH),
+  routeClass: oneOf("public", "private"),
+  cacheOutcome: oneOf("edge-hit", "r2-hit", "origin"),
+  kind: oneOf("video", "pdf"),
+  executionCycle: (value) => (isNonNegativeInteger(value) ? value : undefined),
+  attemptNumber: (value) => (isNonNegativeInteger(value) ? value : undefined),
+  durationMs: (value) => (isNonNegativeNumber(value) ? value : undefined),
+  outcome: oneOf("accepted", "ready", "failed", "idle", "busy"),
+  failureCode: (value) =>
+    typeof value === "string" && FAILURE_CODES.has(value)
+      ? (value as NonNullable<OperationalEventFields["failureCode"]>)
+      : undefined,
+  count: (value) => (isNonNegativeInteger(value) ? value : undefined),
+  requestId: matching(REQUEST_ID),
+  httpMethod: matching(HTTP_METHOD),
+  httpRoute: safeHttpRoute,
+  httpStatusCode: (value) =>
+    typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599
+      ? value
+      : undefined,
+  errorType: matching(ERROR_TYPE),
+} satisfies FieldSanitizers;
 
 export function operationalErrorType(error: unknown): string {
   if (!(error instanceof Error)) return "NonErrorThrown";
@@ -94,57 +157,15 @@ export function sanitizeOperationalEvent(event: OperationalEvent): OperationalEv
     };
   }
 
-  const sanitized: OperationalEvent = { event: eventName as OperationalEventName };
-  if (typeof candidate.sourceHash === "string" && HASH.test(candidate.sourceHash))
-    sanitized.sourceHash = candidate.sourceHash;
-  if (typeof candidate.processingTokenHash === "string" && HASH.test(candidate.processingTokenHash))
-    sanitized.processingTokenHash = candidate.processingTokenHash;
-  if (candidate.routeClass === "public" || candidate.routeClass === "private")
-    sanitized.routeClass = candidate.routeClass;
-  if (
-    candidate.cacheOutcome === "edge-hit" ||
-    candidate.cacheOutcome === "r2-hit" ||
-    candidate.cacheOutcome === "origin"
-  )
-    sanitized.cacheOutcome = candidate.cacheOutcome;
-  if (candidate.kind === "video" || candidate.kind === "pdf") sanitized.kind = candidate.kind;
-  if (isNonNegativeInteger(candidate.executionCycle))
-    sanitized.executionCycle = candidate.executionCycle;
-  if (isNonNegativeInteger(candidate.attemptNumber))
-    sanitized.attemptNumber = candidate.attemptNumber;
-  if (isNonNegativeNumber(candidate.durationMs)) sanitized.durationMs = candidate.durationMs;
-  if (
-    candidate.outcome === "accepted" ||
-    candidate.outcome === "ready" ||
-    candidate.outcome === "failed" ||
-    candidate.outcome === "idle" ||
-    candidate.outcome === "busy"
-  )
-    sanitized.outcome = candidate.outcome;
-  if (typeof candidate.failureCode === "string" && FAILURE_CODES.has(candidate.failureCode))
-    sanitized.failureCode = candidate.failureCode as NonNullable<
-      OperationalEventFields["failureCode"]
-    >;
-  if (isNonNegativeInteger(candidate.count)) sanitized.count = candidate.count;
-  if (typeof candidate.requestId === "string" && REQUEST_ID.test(candidate.requestId))
-    sanitized.requestId = candidate.requestId;
-  if (typeof candidate.httpMethod === "string" && HTTP_METHOD.test(candidate.httpMethod))
-    sanitized.httpMethod = candidate.httpMethod;
-  if (
-    typeof candidate.httpRoute === "string" &&
-    (candidate.httpRoute === "<unmatched>" || HTTP_ROUTE.test(candidate.httpRoute))
-  )
-    sanitized.httpRoute = candidate.httpRoute;
-  if (
-    typeof candidate.httpStatusCode === "number" &&
-    Number.isInteger(candidate.httpStatusCode) &&
-    candidate.httpStatusCode >= 100 &&
-    candidate.httpStatusCode <= 599
-  )
-    sanitized.httpStatusCode = candidate.httpStatusCode;
-  if (typeof candidate.errorType === "string" && ERROR_TYPE.test(candidate.errorType))
-    sanitized.errorType = candidate.errorType;
-  return sanitized;
+  const sanitizedFields: Partial<Record<OptionalOperationalEventField, string | number>> = {};
+  for (const field of Object.keys(FIELD_SANITIZERS) as OptionalOperationalEventField[]) {
+    const sanitized = FIELD_SANITIZERS[field](candidate[field]);
+    if (sanitized !== undefined) sanitizedFields[field] = sanitized;
+  }
+  return {
+    event: eventName as OperationalEventName,
+    ...sanitizedFields,
+  } as OperationalEvent;
 }
 
 export async function operationalEvent(input: {
