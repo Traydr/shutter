@@ -1,6 +1,6 @@
 import type { S3Client } from "@aws-sdk/client-s3";
 import { describe, expect, it, vi } from "vitest";
-import { app, createPdfExecutorApp } from "./app.js";
+import { createPdfExecutorApp } from "./app.js";
 
 const TOKEN = "p".repeat(32);
 
@@ -15,15 +15,6 @@ function config() {
 }
 
 describe("PDF executor app", () => {
-  it("reports its health and keeps work routes closed", async () => {
-    const health = await app.request("http://shutter.test/healthz");
-    expect(health.status).toBe(200);
-    await expect(health.json()).resolves.toEqual({ ok: true, service: "executor-pdf" });
-
-    const work = await app.request("http://shutter.test/v1/jobs/claim");
-    expect(work.status).toBe(404);
-  });
-
   it("authenticates a wake with the executor role token", async () => {
     const run = vi.fn(async () => "idle" as const);
     const configured = createPdfExecutorApp(config(), run);

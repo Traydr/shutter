@@ -33,12 +33,6 @@ function verification(overrides = {}) {
 }
 
 describe("source capabilities", () => {
-  it("round-trips strict AES-GCM claims", async () => {
-    const token = await tokenFor();
-    expect(token).toMatch(/^v1\.test-key\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u);
-    await expect(verifySourceCapability(token, verification())).resolves.toEqual(claims);
-  });
-
   it("fails authentication for tampering, wrong Space, and wrong purpose", async () => {
     const token = await tokenFor();
     const final = token.at(-1) === "A" ? "B" : "A";

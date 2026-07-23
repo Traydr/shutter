@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getSpacePolicy, SPACES } from "./index.js";
 
 describe("Space policies", () => {
-  it("locks Ernesta to its reviewed public quality and UploadThing policy", () => {
+  it("locks reviewed Space policies and ignores unknown names", () => {
     expect(SPACES.ernesta).toMatchObject({
       id: "ernesta",
       routeClass: "public",
@@ -14,9 +14,6 @@ describe("Space policies", () => {
       ],
     });
     expect(SPACES.ernesta.resolvers[0]?.allowedProjectIds).toEqual(["8w0z32yftd", "rrsku8h9ue"]);
-  });
-
-  it("locks Pane View to its reviewed private source origins", () => {
     expect(SPACES["pane-view"]).toEqual({
       id: "pane-view",
       routeClass: "private",
@@ -30,9 +27,6 @@ describe("Space policies", () => {
       ],
       resolvers: [],
     });
-  });
-
-  it("does not return inherited or unknown Space names", () => {
     expect(getSpacePolicy("toString")).toBeUndefined();
     expect(getSpacePolicy("unknown")).toBeUndefined();
   });

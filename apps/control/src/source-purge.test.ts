@@ -100,32 +100,32 @@ describe("Source Purge", () => {
     );
   });
 
-  it("stops before cache-tag purge when object deletion partially fails", async () => {
-    const send = vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
-      command instanceof ListObjectsV2Command
-        ? { Contents: [{ Key: "object" }], IsTruncated: false }
-        : { Errors: [{ Key: "object", Code: "InternalError" }] },
+  it("stops before later purge stages when an earlier stage fails", async () => {
+    const deleteFails = createPurge(
+      vi.fn(),
+      vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
+        command instanceof ListObjectsV2Command
+          ? { Contents: [{ Key: "object" }], IsTruncated: false }
+          : { Errors: [{ Key: "object", Code: "InternalError" }] },
+      ),
     );
-    const fetch = vi.fn();
-    const sourcePurge = createPurge(fetch, send);
-    await expect(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" })).rejects.toThrow(
+    await expect(deleteFails.purge({ spaceId: "pane-view", sourceId: "source" })).rejects.toThrow(
       "rendition deletion failed",
     );
-    expect(fetch).not.toHaveBeenCalled();
-  });
 
-  it("stops before zone purge when Worker cache purge fails", async () => {
-    const send = vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
-      command instanceof ListObjectsV2Command
-        ? { Contents: [], IsTruncated: false }
-        : { Errors: [] },
+    const workerFetch = vi.fn(async () => new Response(null, { status: 503 }));
+    const workerFails = createPurge(
+      workerFetch,
+      vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
+        command instanceof ListObjectsV2Command
+          ? { Contents: [], IsTruncated: false }
+          : { Errors: [] },
+      ),
     );
-    const fetch = vi.fn(async () => new Response(null, { status: 503 }));
-    const sourcePurge = createPurge(fetch, send);
-    await expect(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" })).rejects.toThrow(
+    await expect(workerFails.purge({ spaceId: "pane-view", sourceId: "source" })).rejects.toThrow(
       "worker cache purge failed",
     );
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(workerFetch).toHaveBeenCalledTimes(1);
   });
 
   it("retries safely after a Cloudflare failure", async () => {

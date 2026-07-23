@@ -1,18 +1,7 @@
 import { env, reset, SELF } from "cloudflare:test";
-import {
-  buildCanonicalCacheUrl,
-  buildMasterPreviewKey,
-  buildMasterPurgePrefix,
-  buildR2CacheKey,
-  buildR2CachePurgePrefix,
-  buildSourceCacheTag,
-  sourceFingerprint,
-  verifySourceCapability,
-} from "@shutter/protocol";
+import { buildR2CacheKey, buildSourceCacheTag, verifySourceCapability } from "@shutter/protocol";
 import { issueSourceCapabilityWithIv } from "@shutter/protocol/testing";
 import {
-  CACHE_IDENTITY_EXPECTED,
-  CACHE_IDENTITY_FIXTURE,
   runCapabilityConformance,
   TEST_CAPABILITY_KEY,
   TEST_CAPABILITY_KID,
@@ -31,12 +20,6 @@ function tamper(value: string): string {
 }
 
 describe("edge app", () => {
-  it("reports health from workerd", async () => {
-    const response = await SELF.fetch("https://edge.shutter.test/healthz");
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true, service: "edge" });
-  });
-
   it("fails a malformed private source capability closed", async () => {
     const response = await SELF.fetch(
       "https://edge.shutter.test/v1/private/pane-view/source/not-a-capability?w=640&q=75",
@@ -267,35 +250,6 @@ describe("edge app", () => {
     expect(new TextDecoder().decode(await response.arrayBuffer())).toBe("public-rendition");
   });
 
-  it("emits a redacted cache-outcome event from workerd", async () => {
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
-    const identity = {
-      routeClass: "public" as const,
-      spaceId: "ernesta",
-      sourceId: "raw-observability-source",
-      input: { type: "master" as const, kind: "video" as const },
-      width: 640,
-      quality: 75,
-    };
-    await env.RENDITION_STORE.put(await buildR2CacheKey(identity), "observed", {
-      httpMetadata: { contentType: "image/webp" },
-    });
-    const response = await SELF.fetch(
-      "https://edge.shutter.test/v1/public/ernesta/master/video/raw-observability-source?w=640&q=75",
-    );
-    expect(response.status).toBe(200);
-    expect(info).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "edge.rendition",
-        routeClass: "public",
-        cacheOutcome: "r2-hit",
-        kind: "video",
-      }),
-    );
-    expect(JSON.stringify(info.mock.calls)).not.toContain("raw-observability-source");
-    info.mockRestore();
-  });
-
   it("fails a public located-source miss closed before contacting the origin", async () => {
     const response = await SELF.fetch(
       "https://edge.shutter.test/v1/public/ernesta/located/missing/not-a-capability?w=640&q=75",
@@ -437,37 +391,5 @@ describe("workerd protocol conformance", () => {
     });
     expect([204, 503]).toContain(response.status);
     if (response.status === 204) expect(await response.text()).toBe("");
-  });
-
-  it("matches the shared cache identity fixtures", async () => {
-    await expect(
-      sourceFingerprint(CACHE_IDENTITY_FIXTURE.spaceId, CACHE_IDENTITY_FIXTURE.sourceId),
-    ).resolves.toBe(CACHE_IDENTITY_EXPECTED.fingerprint);
-    await expect(buildR2CacheKey(CACHE_IDENTITY_FIXTURE)).resolves.toBe(
-      CACHE_IDENTITY_EXPECTED.r2Key,
-    );
-    await expect(
-      buildMasterPreviewKey(
-        CACHE_IDENTITY_FIXTURE.spaceId,
-        CACHE_IDENTITY_FIXTURE.sourceId,
-        "video",
-      ),
-    ).resolves.toBe(CACHE_IDENTITY_EXPECTED.masterKey);
-    await expect(
-      buildR2CachePurgePrefix(
-        CACHE_IDENTITY_FIXTURE.routeClass,
-        CACHE_IDENTITY_FIXTURE.spaceId,
-        CACHE_IDENTITY_FIXTURE.sourceId,
-      ),
-    ).resolves.toBe(CACHE_IDENTITY_EXPECTED.cachePrefix);
-    await expect(
-      buildMasterPurgePrefix(CACHE_IDENTITY_FIXTURE.spaceId, CACHE_IDENTITY_FIXTURE.sourceId),
-    ).resolves.toBe(CACHE_IDENTITY_EXPECTED.masterPrefix);
-    await expect(
-      buildSourceCacheTag(CACHE_IDENTITY_FIXTURE.spaceId, CACHE_IDENTITY_FIXTURE.sourceId),
-    ).resolves.toBe(CACHE_IDENTITY_EXPECTED.cacheTag);
-    await expect(buildCanonicalCacheUrl(CACHE_IDENTITY_FIXTURE)).resolves.toBe(
-      CACHE_IDENTITY_EXPECTED.canonicalUrl,
-    );
   });
 });

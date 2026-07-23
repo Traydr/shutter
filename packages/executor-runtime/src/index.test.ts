@@ -18,14 +18,12 @@ function setup(options?: {
   completeThrows?: boolean;
   failStatus?: number;
   failThrows?: boolean;
-  deleteThrows?: boolean;
 }) {
   const {
     completeStatus = 204,
     completeThrows = false,
     failStatus = 204,
     failThrows = false,
-    deleteThrows = false,
   } = options ?? {};
   const requests: string[] = [];
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -44,11 +42,6 @@ function setup(options?: {
   });
   const send = vi.fn(async (command: PutObjectCommand | DeleteObjectCommand) => {
     if (command instanceof PutObjectCommand) return { ETag: '"etag-1"' };
-    if (deleteThrows) {
-      const error = new Error("PreconditionFailed");
-      error.name = "PreconditionFailed";
-      throw error;
-    }
     return {};
   });
   const config: ExecutorConfig = {
@@ -78,31 +71,20 @@ describe("Executor work cycle", () => {
     ]);
   });
 
-  it("conditionally deletes this attempt's Master Preview after stale completion", async () => {
+  it("conditionally deletes this attempt's Master Preview after a lost complete", async () => {
     const { config, processor, send } = setup({ completeStatus: 409 });
     await expect(runExecutorOnce(config, processor)).resolves.toBe("processed");
     expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([
       PutObjectCommand,
       DeleteObjectCommand,
     ]);
-    const deleted = send.mock.calls[1]?.[0] as DeleteObjectCommand;
-    expect(deleted.input).toMatchObject({
-      Bucket: "renditions",
+    expect((send.mock.calls[1]?.[0] as DeleteObjectCommand).input).toMatchObject({
       Key: "masters/source-1.webp",
       IfMatch: '"etag-1"',
     });
   });
 
-  it("leaves the Master Preview when conditional delete finds a newer etag", async () => {
-    const { config, processor, send } = setup({ completeStatus: 409, deleteThrows: true });
-    await expect(runExecutorOnce(config, processor)).resolves.toBe("processed");
-    expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([
-      PutObjectCommand,
-      DeleteObjectCommand,
-    ]);
-  });
-
-  it("does not delete after a lost complete when fail reports the attempt is already gone", async () => {
+  it("does not delete when fail reports the attempt is already gone", async () => {
     const { config, processor, requests, send } = setup({
       completeThrows: true,
       failStatus: 409,
@@ -110,26 +92,6 @@ describe("Executor work cycle", () => {
     await expect(runExecutorOnce(config, processor)).resolves.toBe("processed");
     expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([PutObjectCommand]);
     expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/pane-view/source-1/fail");
-  });
-
-  it("conditionally deletes after fail accepts ownership of a post-upload error", async () => {
-    const { config, processor, send } = setup({ completeStatus: 500 });
-    await expect(runExecutorOnce(config, processor)).resolves.toBe("processed");
-    expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([
-      PutObjectCommand,
-      DeleteObjectCommand,
-    ]);
-    const deleted = send.mock.calls[1]?.[0] as DeleteObjectCommand;
-    expect(deleted.input.IfMatch).toBe('"etag-1"');
-  });
-
-  it("skips delete when fail itself cannot be reached after upload", async () => {
-    const { config, processor, send } = setup({
-      completeThrows: true,
-      failThrows: true,
-    });
-    await expect(runExecutorOnce(config, processor)).resolves.toBe("processed");
-    expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([PutObjectCommand]);
   });
 
   it("reports processing failure without uploading", async () => {

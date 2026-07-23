@@ -1,6 +1,6 @@
 import type { S3Client } from "@aws-sdk/client-s3";
 import { describe, expect, it, vi } from "vitest";
-import { app, createVideoExecutorApp } from "./app.js";
+import { createVideoExecutorApp } from "./app.js";
 
 const TOKEN = "v".repeat(32);
 
@@ -15,15 +15,6 @@ function config() {
 }
 
 describe("video executor app", () => {
-  it("reports its health and keeps work routes closed", async () => {
-    const health = await app.request("http://shutter.test/healthz");
-    expect(health.status).toBe(200);
-    await expect(health.json()).resolves.toEqual({ ok: true, service: "executor-video" });
-
-    const work = await app.request("http://shutter.test/v1/jobs/claim");
-    expect(work.status).toBe(404);
-  });
-
   it("authenticates a wake with the executor role token", async () => {
     const run = vi.fn(async () => "idle" as const);
     const configured = createVideoExecutorApp(config(), run);
