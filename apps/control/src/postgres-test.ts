@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Pool } from "pg";
+import { env } from "./env/server.js";
 import { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 
 export interface PostgresTestLifecycle {
@@ -10,7 +11,7 @@ export interface PostgresTestLifecycle {
 }
 
 export async function createPostgresTestLifecycle(): Promise<PostgresTestLifecycle> {
-  const adminUrl = process.env.TEST_POSTGRES_URL;
+  const adminUrl = env.TEST_POSTGRES_URL;
   if (adminUrl === undefined) throw new Error("TEST_POSTGRES_URL is not configured");
 
   const database = `shutter_test_${randomUUID().replaceAll("-", "")}`;

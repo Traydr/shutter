@@ -3,9 +3,31 @@ import { readOtlpLogsConfig } from "./logging-config.js";
 
 const ENDPOINT = "https://parseable.traydr.dev/v1/logs";
 const HEADERS =
-  "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter,X-P-Log-Source=otel-logs";
+  "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs";
 
 describe("Control OTLP logging configuration", () => {
+  it("accepts only the shutter-logs dataset without exporter-owned headers", () => {
+    expect(
+      readOtlpLogsConfig({
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ENDPOINT,
+        OTEL_EXPORTER_OTLP_LOGS_HEADERS: HEADERS,
+      })?.headers,
+    ).toMatchObject({ "X-P-Stream": "shutter-logs" });
+
+    expect(() =>
+      readOtlpLogsConfig({
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ENDPOINT,
+        OTEL_EXPORTER_OTLP_LOGS_HEADERS: HEADERS.replace("shutter-logs", "shutter"),
+      }),
+    ).toThrow();
+    expect(() =>
+      readOtlpLogsConfig({
+        OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ENDPOINT,
+        OTEL_EXPORTER_OTLP_LOGS_HEADERS: `${HEADERS},Content-Type=application/json`,
+      }),
+    ).toThrow();
+  });
+
   it("clamps a configured exporter timeout to the shutdown flush allowance", () => {
     const config = readOtlpLogsConfig({
       OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ENDPOINT,

@@ -15,7 +15,7 @@ one declarative projection table then produces both the Pino and OTLP records.
 Provision these resources in the existing Parseable deployment before enabling
 the Control exporter:
 
-1. Create a dynamic-schema dataset named `shutter`.
+1. Create a dynamic-schema dataset named `shutter-logs`.
 2. Set and read back this retention policy:
 
    ```json
@@ -29,20 +29,26 @@ the Control exporter:
    ```
 
 3. Create a native user named `shutter-ingestor` and a role with only the
-   `ingester` privilege on the `shutter` dataset. Do not grant query, dataset
+   `ingester` privilege on the `shutter-logs` dataset. Do not grant query, dataset
    management, or administrator privileges.
 4. Retain the generated password in the secret manager. Verify that this user
-   can ingest into `shutter` but cannot query or change the dataset.
+   can ingest into `shutter-logs` but cannot query or change the dataset.
 
 Parseable v2.8.0 expects all three of these request headers:
 
 ```text
 Authorization: Basic <base64(username:password)>
-X-P-Stream: shutter
+X-P-Stream: shutter-logs
 X-P-Log-Source: otel-logs
 ```
 
 ## Control configuration
+
+Control reads its environment through the typed T3 Env contract in
+`apps/control/src/env/server.ts`; production modules do not read `process.env`
+directly. The OTLP values remain optional raw strings at that boundary so the
+logger can reject malformed telemetry configuration without preventing Control
+from starting.
 
 Railway IaC fixes the non-secret values and preserves the authorization bundle:
 
@@ -58,7 +64,7 @@ percent-encoded representation below. Percent-encode the space following
 `Basic` and any Base64 padding characters.
 
 ```text
-Authorization=Basic%20<percent-encoded-base64>,X-P-Stream=shutter,X-P-Log-Source=otel-logs
+Authorization=Basic%20<percent-encoded-base64>,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs
 ```
 
 Never paste the resolved value into the repository, command output, a ticket,
@@ -71,7 +77,7 @@ Parseable configuration also falls back to stdout and emits one sanitized
 The exporter accepts only the normalized exact endpoint
 `https://parseable.traydr.dev/v1/logs`. It rejects hostname aliases, query
 parameters, URL credentials, alternate paths, and any header bundle other than
-the Parseable Basic authorization, `shutter` stream, and `otel-logs` source.
+the Parseable Basic authorization, `shutter-logs` stream, and `otel-logs` source.
 Exporter timeouts are capped at five seconds even if the environment requests a
 larger value, preserving the shutdown flush allowance.
 
@@ -107,7 +113,7 @@ Run these in the Parseable query editor and adjust the time range there:
 
 ```sql
 SELECT p_timestamp, "event.name", "shutter.failure.code", "request.id"
-FROM "shutter"
+FROM "shutter-logs"
 WHERE "service.name" = 'shutter-control'
   AND p_log_category = 'ERROR'
 ORDER BY p_timestamp DESC;
@@ -116,7 +122,7 @@ ORDER BY p_timestamp DESC;
 ```sql
 SELECT p_timestamp, "http.route", "http.response.status_code",
        "shutter.duration_ms", "request.id"
-FROM "shutter"
+FROM "shutter-logs"
 WHERE "service.name" = 'shutter-control'
   AND "http.response.status_code" >= 500
 ORDER BY p_timestamp DESC;
@@ -124,7 +130,7 @@ ORDER BY p_timestamp DESC;
 
 ```sql
 SELECT "event.name", count(*) AS failures
-FROM "shutter"
+FROM "shutter-logs"
 WHERE "event.name" IN (
   'control.job.failed',
   'control.dispatch.failed',
@@ -138,7 +144,7 @@ ORDER BY failures DESC;
 ```sql
 SELECT "http.route",
        approx_percentile_cont("shutter.duration_ms", 0.95) AS p95_ms
-FROM "shutter"
+FROM "shutter-logs"
 WHERE "event.name" = 'control.http.completed'
 GROUP BY "http.route"
 ORDER BY p95_ms DESC;

@@ -73,7 +73,7 @@ describe("ControlLogger", () => {
         RAILWAY_DEPLOYMENT_ID: "deployment-1",
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: endpoint,
         OTEL_EXPORTER_OTLP_LOGS_HEADERS:
-          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter,X-P-Log-Source=otel-logs",
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs",
         OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: "5000",
       },
       { stdout, packageVersion: "0.1.0", allowedOtlpEndpoints: [endpoint] },
@@ -102,7 +102,7 @@ describe("ControlLogger", () => {
       authorization: "Basic dXNlcjpwYXNzd29yZA==",
       "content-type": "application/json",
       "x-p-log-source": "otel-logs",
-      "x-p-stream": "shutter",
+      "x-p-stream": "shutter-logs",
     });
     expect(received[0]?.body).toMatchObject({
       resourceLogs: [
@@ -204,7 +204,7 @@ describe("ControlLogger", () => {
       {
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: endpoint,
         OTEL_EXPORTER_OTLP_LOGS_HEADERS:
-          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter,X-P-Log-Source=otel-logs",
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs",
       },
       { stdout },
     );
@@ -235,7 +235,7 @@ describe("ControlLogger", () => {
       {
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://parseable.traydr.dev./v1/logs",
         OTEL_EXPORTER_OTLP_LOGS_HEADERS:
-          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter,X-P-Log-Source=otel-logs",
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs",
       },
       { stdout },
     );
@@ -281,7 +281,7 @@ describe("ControlLogger", () => {
       {
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: endpoint,
         OTEL_EXPORTER_OTLP_LOGS_HEADERS:
-          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter,X-P-Log-Source=otel-logs",
+          "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,X-P-Stream=shutter-logs,X-P-Log-Source=otel-logs",
         OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: "100",
       },
       {

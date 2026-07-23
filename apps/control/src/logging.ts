@@ -8,6 +8,7 @@ import {
 } from "@opentelemetry/sdk-logs";
 import { type OperationalEvent, sanitizeOperationalEvent } from "@shutter/protocol";
 import pino, { type DestinationStream, type Logger } from "pino";
+import { env } from "./env/server.js";
 import { type ControlLoggingEnvironment, readOtlpLogsConfig } from "./logging-config.js";
 
 export { operationalErrorType } from "@shutter/protocol";
@@ -192,6 +193,6 @@ export function createControlLogger(
   };
 }
 
-export const controlLogger = createControlLogger(process.env, {
-  packageVersion: process.env.npm_package_version ?? "0.1.0",
+export const controlLogger = createControlLogger(env, {
+  packageVersion: env.npm_package_version ?? "0.1.0",
 });

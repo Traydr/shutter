@@ -12,6 +12,7 @@ import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
 import { Pool } from "pg";
+import { env } from "./env/server.js";
 import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
 import { type ControlLogger, controlLogger, operationalErrorType } from "./logging.js";
@@ -341,10 +342,8 @@ function parseCapabilityKeys(
 }
 
 async function dispatchExecutor(logger: ControlLogger, kind: "video" | "pdf"): Promise<void> {
-  const baseUrl =
-    kind === "video" ? process.env.VIDEO_EXECUTOR_BASE_URL : process.env.PDF_EXECUTOR_BASE_URL;
-  const token =
-    kind === "video" ? process.env.VIDEO_EXECUTOR_TOKEN : process.env.PDF_EXECUTOR_TOKEN;
+  const baseUrl = kind === "video" ? env.VIDEO_EXECUTOR_BASE_URL : env.PDF_EXECUTOR_BASE_URL;
+  const token = kind === "video" ? env.VIDEO_EXECUTOR_TOKEN : env.PDF_EXECUTOR_TOKEN;
   if (baseUrl === undefined || token === undefined) {
     throw new Error(`${kind} executor dispatch is not configured`);
   }
@@ -366,52 +365,49 @@ async function dispatchExecutor(logger: ControlLogger, kind: "video" | "pdf"): P
   });
 }
 
-const databaseUrl = process.env.DATABASE_URL;
+const databaseUrl = env.DATABASE_URL;
 const jobPool = databaseUrl === undefined ? undefined : new Pool({ connectionString: databaseUrl });
 const renditionJobLifecycle =
   jobPool === undefined ? undefined : new PostgresRenditionJobLifecycle(jobPool);
 const masterStore =
-  process.env.S3_ENDPOINT &&
-  process.env.S3_BUCKET &&
-  process.env.S3_ACCESS_KEY_ID &&
-  process.env.S3_SECRET_ACCESS_KEY
+  env.S3_ENDPOINT && env.S3_BUCKET && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY
     ? createMasterStore({
-        endpoint: process.env.S3_ENDPOINT,
-        region: process.env.S3_REGION ?? "auto",
-        bucket: process.env.S3_BUCKET,
-        accessKeyId: process.env.S3_ACCESS_KEY_ID,
-        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+        endpoint: env.S3_ENDPOINT,
+        region: env.S3_REGION,
+        bucket: env.S3_BUCKET,
+        accessKeyId: env.S3_ACCESS_KEY_ID,
+        secretAccessKey: env.S3_SECRET_ACCESS_KEY,
       })
     : undefined;
 const renditionS3 =
-  process.env.S3_ENDPOINT && process.env.S3_ACCESS_KEY_ID && process.env.S3_SECRET_ACCESS_KEY
+  env.S3_ENDPOINT && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY
     ? new S3Client({
-        endpoint: process.env.S3_ENDPOINT,
-        region: process.env.S3_REGION ?? "auto",
+        endpoint: env.S3_ENDPOINT,
+        region: env.S3_REGION,
         forcePathStyle: true,
         credentials: {
-          accessKeyId: process.env.S3_ACCESS_KEY_ID,
-          secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+          accessKeyId: env.S3_ACCESS_KEY_ID,
+          secretAccessKey: env.S3_SECRET_ACCESS_KEY,
         },
       })
     : undefined;
 const sourcePurge =
   renditionS3 &&
   renditionJobLifecycle &&
-  process.env.S3_BUCKET &&
-  process.env.CLOUDFLARE_ZONE_ID &&
-  process.env.CLOUDFLARE_CACHE_PURGE_TOKEN &&
-  process.env.EDGE_BASE_URL &&
-  process.env.ORIGIN_AUTH_TOKEN
+  env.S3_BUCKET &&
+  env.CLOUDFLARE_ZONE_ID &&
+  env.CLOUDFLARE_CACHE_PURGE_TOKEN &&
+  env.EDGE_BASE_URL &&
+  env.ORIGIN_AUTH_TOKEN
     ? createSourcePurge({
         logger: controlLogger,
         lifecycle: renditionJobLifecycle,
         s3: renditionS3,
-        bucket: process.env.S3_BUCKET,
-        cloudflareZoneId: process.env.CLOUDFLARE_ZONE_ID,
-        cloudflareApiToken: process.env.CLOUDFLARE_CACHE_PURGE_TOKEN,
-        edgeBaseUrl: process.env.EDGE_BASE_URL,
-        edgeAuthToken: process.env.ORIGIN_AUTH_TOKEN,
+        bucket: env.S3_BUCKET,
+        cloudflareZoneId: env.CLOUDFLARE_ZONE_ID,
+        cloudflareApiToken: env.CLOUDFLARE_CACHE_PURGE_TOKEN,
+        edgeBaseUrl: env.EDGE_BASE_URL,
+        edgeAuthToken: env.ORIGIN_AUTH_TOKEN,
         fetch: globalThis.fetch,
       })
     : undefined;
@@ -422,10 +418,10 @@ export const jobApiRuntime: JobApiRuntime | undefined =
     : {
         lifecycle: renditionJobLifecycle,
         now: () => new Date(),
-        spaceApiTokens: () => parseStringRegistry(process.env.SPACE_API_TOKENS),
-        capabilityKeys: () => parseCapabilityKeys(process.env.CAPABILITY_KEYS),
+        spaceApiTokens: () => parseStringRegistry(env.SPACE_API_TOKENS),
+        capabilityKeys: () => parseCapabilityKeys(env.CAPABILITY_KEYS),
         executorToken: (kind) =>
-          kind === "video" ? process.env.VIDEO_EXECUTOR_TOKEN : process.env.PDF_EXECUTOR_TOKEN,
+          kind === "video" ? env.VIDEO_EXECUTOR_TOKEN : env.PDF_EXECUTOR_TOKEN,
         dispatch: (kind) => dispatchExecutor(controlLogger, kind),
         logger: controlLogger,
         ...(sourcePurge === undefined ? {} : { sourcePurge }),
@@ -433,12 +429,12 @@ export const jobApiRuntime: JobApiRuntime | undefined =
 
 export const app = createControlApp({
   logger: controlLogger,
-  originAuthToken: () => process.env.ORIGIN_AUTH_TOKEN,
+  originAuthToken: () => env.ORIGIN_AUTH_TOKEN,
   imgproxyConfig: () => {
-    const baseUrl = process.env.IMGPROXY_BASE_URL;
-    const key = process.env.IMGPROXY_KEY;
-    const salt = process.env.IMGPROXY_SALT;
-    const secret = process.env.IMGPROXY_SECRET;
+    const baseUrl = env.IMGPROXY_BASE_URL;
+    const key = env.IMGPROXY_KEY;
+    const salt = env.IMGPROXY_SALT;
+    const secret = env.IMGPROXY_SECRET;
     return baseUrl && key && salt && secret ? { baseUrl, key, salt, secret } : undefined;
   },
   fetch: globalThis.fetch,

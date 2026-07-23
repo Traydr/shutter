@@ -1,4 +1,20 @@
-export type ControlLoggingEnvironment = Readonly<Record<string, string | undefined>>;
+import type { ServerEnv } from "./env/server.js";
+
+type ControlLoggingEnvironmentKey =
+  | "NODE_ENV"
+  | "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
+  | "OTEL_EXPORTER_OTLP_LOGS_HEADERS"
+  | "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL"
+  | "OTEL_EXPORTER_OTLP_LOGS_TIMEOUT"
+  | "RAILWAY_DEPLOYMENT_ID"
+  | "RAILWAY_ENVIRONMENT_NAME"
+  | "RAILWAY_GIT_COMMIT_SHA"
+  | "RAILWAY_REPLICA_ID"
+  | "RAILWAY_REPLICA_REGION";
+
+export type ControlLoggingEnvironment = Readonly<
+  Partial<Pick<ServerEnv, ControlLoggingEnvironmentKey>>
+>;
 
 export interface OtlpLogsConfig {
   endpoint: string;
@@ -7,6 +23,7 @@ export interface OtlpLogsConfig {
 }
 
 export const PARSEABLE_OTLP_LOGS_ENDPOINT = "https://parseable.traydr.dev/v1/logs";
+export const PARSEABLE_LOGS_DATASET = "shutter-logs";
 const MAX_OTLP_EXPORT_TIMEOUT_MILLIS = 5_000;
 
 function parseHeaders(value: string | undefined): Record<string, string> {
@@ -52,7 +69,7 @@ function validateParseableHeaders(headers: Readonly<Record<string, string>>): vo
   );
   if (
     normalized.size !== 3 ||
-    normalized.get("x-p-stream") !== "shutter" ||
+    normalized.get("x-p-stream") !== PARSEABLE_LOGS_DATASET ||
     normalized.get("x-p-log-source") !== "otel-logs" ||
     !/^Basic [A-Za-z0-9+/]+={0,2}$/u.test(normalized.get("authorization") ?? "")
   ) {
