@@ -5,7 +5,7 @@ describe("operational events", () => {
   it("hashes identifiers, drops junk fields, and rejects concrete HTTP paths", async () => {
     const event = await operationalEvent({
       event: "executor.completed",
-      spaceId: "pane-view",
+      spaceId: "demo-private",
       sourceId: "raw-source-id",
       processingToken: "raw-processing-token",
       fields: { kind: "video", executionCycle: 2, attemptNumber: 3, durationMs: 42 },

@@ -27,7 +27,7 @@ dependency for authorization-aware private caching. If the CDN returns, its
 documented behavior should be re-evaluated with a spike before using it even for
 public canonical rendition URLs.
 
-The current Latch Works Railway configuration declares the Pane View service and
+The current Railway configuration declares the application service and
 its custom domain but no Railway CDN resource or setting. Production image
 delivery remains explicitly configured for Bunny.
 

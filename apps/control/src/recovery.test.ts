@@ -14,7 +14,7 @@ async function submit(
 ) {
   await lifecycle.submit(
     {
-      spaceId: "pane-view",
+      spaceId: "demo-private",
       sourceId,
       kind,
       sourceCapability: "opaque-capability",
@@ -85,7 +85,7 @@ describe("job recovery sweep", () => {
       dispatchFailures: 1,
     });
     expect(
-      await lifecycle.read({ spaceId: "pane-view", sourceId: "video-1", kind: "video" }),
+      await lifecycle.read({ spaceId: "demo-private", sourceId: "video-1", kind: "video" }),
     ).toMatchObject({ status: "pending" });
     expect(emit).toHaveBeenCalledWith(
       "error",

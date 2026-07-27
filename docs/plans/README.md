@@ -12,7 +12,7 @@ foundation roadmap and plan 0002 records current v1 progress.
 
 | Plan | Purpose | Priority | Effort | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| [0001 — Foundation](./0001-shutter-foundation.md) | Deliver focused image, video-poster, and PDF-preview infrastructure and migrate Ernesta then Pane View. | — | — | — | ACTIVE ROADMAP |
+| [0001 — Foundation](./0001-shutter-foundation.md) | Deliver focused image, video-poster, and PDF-preview infrastructure and migrate the public application then the private application. | — | — | — | ACTIVE ROADMAP |
 | [0002 — V1 completion](./0002-shutter-v1-completion.md) | Record the agreed completion order and milestone status. | — | — | 0001 | ACTIVE TRACKER |
 | [0003 — Complete master delivery](./0003-complete-master-delivery.md) | Reconcile the Rendition Store and implement first-request public/private master delivery. | P1 | L | — | DONE |
 | [0004 — Source Purge](./0004-implement-source-purge.md) | Implement authenticated, idempotent cleanup across jobs, objects, and cache tags. | P1 | L | 0003 | DONE |
@@ -27,7 +27,7 @@ Status values for executable plans: `TODO`, `IN PROGRESS`, `DONE`,
   reading Master Previews. Plan 0004 must delete from that same store.
 - Plan 0005 verifies completed delivery and purge behavior, so it follows both
   functional plans.
-- After plan 0005, continue with Pane View private still-image integration,
+- After plan 0005, continue with private application still-image integration,
   video posters, and PDF previews as phases 7–9 of plan 0001. Consumer
   repositories are outside this workspace; obtain their paths and explicit
   write authorization before changing them.
@@ -47,7 +47,7 @@ Railway IaC remains an operator-reviewed action.
 - Durable job submission, polling, claims, heartbeats, completion, retries,
   one-job executor wakes, and the five-minute recovery sweep.
 - Video and PDF processors and Railway serverless executor configuration.
-- Ernesta's Shutter/Unpic integration and the custom Worker domain.
+- The public application's Shutter/Unpic integration and the custom Worker domain.
 
 ## Operating boundaries
 

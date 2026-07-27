@@ -35,8 +35,8 @@ package-default breakpoint generation.
 
 | Space | Permitted | Default |
 | --- | --- | --- |
-| Ernesta | `30`, `50`, `75` | `75` |
-| Pane View | `30`, `75`, `80` | `75` |
+| `demo-public` | `30`, `50`, `75` | `75` |
+| `demo-private` | `30`, `75`, `80` | `75` |
 
 Unsupported quality values normalize to the nearest permitted value. Equal
 distance resolves upward. Master Preview materialization is fixed at quality

@@ -100,7 +100,7 @@ the resulting plan.
 **Out of scope**:
 
 - Source Purge (plan 0004)
-- Pane View or Ernesta changes
+- Consuming application changes
 - Public exposure of Master Preview objects
 - Caller-selected transformations or output formats
 - Deploying or applying infrastructure

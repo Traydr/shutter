@@ -35,6 +35,7 @@ const server = {
 
   // These stay as raw optional strings so logging configuration errors remain
   // non-fatal and are reported through the stdout-only diagnostic path.
+  OTEL_EXPORTER_OTLP_LOGS_ALLOWED_ENDPOINTS: z.string().optional(),
   OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: z.string().optional(),
   OTEL_EXPORTER_OTLP_LOGS_HEADERS: z.string().optional(),
   OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: z.string().optional(),

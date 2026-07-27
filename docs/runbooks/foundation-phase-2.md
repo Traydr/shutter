@@ -26,9 +26,9 @@ provider evidence required to close Phase 2.
 
 ## Railway
 
-1. Confirm the reviewed imgproxy and Space allowlists remain limited to Ernesta
-   UploadThing projects `8w0z32yftd` and `rrsku8h9ue`, Pane View origins
-   `https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/`, and the exact
+1. Confirm the reviewed imgproxy and Space allowlists remain limited to the public Space's
+   UploadThing projects `demo-project-1` and `demo-project-2`, the private Space's origins
+   `https://objects.example.com/demo-private-bucket/`, and the exact
    R2 S3 endpoint used for short-lived Master Preview reads.
 2. Preview `.railway/railway.ts` with `railway config plan`. Review every
    resource and variable change.
@@ -63,7 +63,7 @@ provider evidence required to close Phase 2.
 - Workers analytics show AES-GCM plus the private cache-hit path below 10 ms CPU
   on representative gallery traffic.
 - A 301-request burst inside 10 seconds triggers the configured rate-limit rule,
-  while representative Ernesta and Pane View gallery loads stay below it.
+  while representative gallery loads stay below it.
 
 Record account IDs, deployment URLs, secret values, and Source Locators only in
 the provider secret stores or the private operational record—not in this repo.

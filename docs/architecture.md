@@ -101,8 +101,7 @@ job identity, cycle, attempt number, and processing token.
 The Source Capability column is cleared when a job becomes ready or terminal;
 reactivation supplies a new valid capability. Source Purge deletes the job row.
 
-Workspace packages are internal and are not published to npm in v1. Ernesta and
-Pane View each keep a thin local Shutter adapter for capability creation, Unpic
+Workspace packages are internal and are not published to npm in v1. Each consuming application keeps a thin local Shutter adapter for capability creation, Unpic
 URL transformation, and job API calls. Shutter owns versioned protocol fixtures
 for capability encryption, URL construction, width and quality normalization,
 and API payloads; each consumer runs those fixtures as conformance tests. URLs
@@ -158,7 +157,7 @@ public or private route class, Source Resolvers and HTTPS origin allowlist,
 rendition policy, and cache lifetimes. Cloudflare and Railway secret stores hold
 API tokens, capability keys, origin credentials, and their key identifiers.
 
-The initial configuration contains only Ernesta and Pane View. A Space addition
+The initial configuration contains only the two demo Spaces. A Space addition
 or policy change is a reviewed code change followed by deployment. Persisted
 Rendition Jobs record only the stable `space_id`; secret values and a copy of the
 full Space configuration are never stored with a job. Deployments must retain
@@ -176,7 +175,7 @@ needed for execution, but those operational records do not form a media catalog.
 Every source request separates an immutable application-issued Source ID from a
 replaceable Source Locator. The Source ID drives cache keys, job idempotency,
 Rendition Store keys, and Source Purge. A Source Locator supplies only the
-current fetch path. Pane View can therefore keep the same SHA-256 Source ID while
+current fetch path. A private Space can therefore keep the same SHA-256 Source ID while
 moving its locator from a Railway presigned GET URL to an R2 presigned GET URL.
 
 Publicly derivable sources use trusted Space-configured Source Resolvers. The v1
@@ -344,7 +343,7 @@ forming a second cache-key dimension.
 The v1 canonical widths are `320, 640, 750, 828, 960, 1080, 1280, 1668, 1920,
 2048, 2560, 3200, 3840`; Unpic's 24px background placeholder is a separate
 low-resolution request and an exact canonical exception outside that responsive
-ladder. Ernesta permits qualities `30, 50, 75` and Pane View
+ladder. Demo Public permits qualities `30, 50, 75` and Demo Private
 permits `30, 75, 80`, both defaulting to `75`. Master Preview encoding remains
 fixed at quality `90`. Width normalizes upward and imgproxy never enlarges a
 smaller source.

@@ -38,14 +38,22 @@ directly. The OTLP values remain optional raw strings at that boundary so the
 logger can reject malformed telemetry configuration without preventing Control
 from starting.
 
-Railway IaC fixes the non-secret values and preserves the authorization bundle:
+Railway IaC fixes the non-secret values and preserves the deployment-specific
+endpoint, its approved-endpoint allowlist, and the authorization bundle:
 
 ```text
-OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=https://openobserve.traydr.dev/api/default/v1/logs
+OTEL_EXPORTER_OTLP_LOGS_ENDPOINT=<preserved Railway variable>
+OTEL_EXPORTER_OTLP_LOGS_ALLOWED_ENDPOINTS=<preserved Railway variable>
 OTEL_EXPORTER_OTLP_LOGS_PROTOCOL=http/json
 OTEL_EXPORTER_OTLP_LOGS_TIMEOUT=5000
 OTEL_EXPORTER_OTLP_LOGS_HEADERS=<sealed Railway variable>
 ```
+
+`OTEL_EXPORTER_OTLP_LOGS_ALLOWED_ENDPOINTS` is a comma-separated allowlist that
+the configured endpoint must match exactly after normalization. Keeping it in a
+second variable is deliberate: redirecting exports then requires changing two
+independently preserved values rather than one. An absent or empty allowlist
+approves nothing and Control stays on stdout-only logging.
 
 Set `OTEL_EXPORTER_OTLP_LOGS_HEADERS` in Railway to the standard comma-separated,
 percent-encoded representation below. Percent-encode the space following
@@ -62,15 +70,15 @@ When the endpoint is absent, Control continues with stdout-only logging. Invalid
 OpenObserve configuration also falls back to stdout and emits one sanitized
 `control.telemetry.configuration_failed` event.
 
-The exporter accepts only the normalized exact endpoint
-`https://openobserve.traydr.dev/api/default/v1/logs`. It rejects hostname aliases, query
+The exporter accepts only a normalized exact match against
+`OTEL_EXPORTER_OTLP_LOGS_ALLOWED_ENDPOINTS`. It rejects hostname aliases, query
 parameters, URL credentials, alternate paths, and any header bundle other than
 the OpenObserve Basic authorization and `default` stream.
 Exporter timeouts are capped at five seconds even if the environment requests a
 larger value, preserving the shutdown flush allowance.
 
 The OpenTelemetry Collector configuration uses
-`https://openobserve.traydr.dev/api/default` because the Collector appends
+`https://otel-collector.example.com/api/default` because the Collector appends
 `/v1/logs`. Control uses the signal-specific endpoint above, which is used as-is
 and must therefore include `/v1/logs`.
 

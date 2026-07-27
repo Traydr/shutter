@@ -1,7 +1,7 @@
 # Shutter
 
-Shutter is a private rendition service shared by applications that retain
-ownership of uploads, source storage, media records, and end-user authorization.
+Shutter is a rendition service shared by applications that retain ownership of
+uploads, source storage, media records, and end-user authorization.
 
 ## Language
 

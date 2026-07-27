@@ -17,11 +17,11 @@ function spikeUrl(): string {
   const url = new URL("http://shutter.test/internal/v1/spike/rendition");
   url.searchParams.set(
     "key",
-    "cache/v1/private/pane-view/N9NjtQwUp8dMa1ZiHnNJoAhg7-DZ-KOSehNDho5dYKs/source/w640-q75.webp",
+    "cache/v1/private/demo-private/gMNnP86xbOKzyOCG34XyJJ5czSTAojiMAnH4AQSdh9s/source/w640-q75.webp",
   );
   url.searchParams.set(
     "source",
-    "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/test.jpg",
+    "https://objects.example.com/demo-private-bucket/originals/test.jpg",
   );
   url.searchParams.set("w", "640");
   url.searchParams.set("q", "75");
@@ -86,7 +86,7 @@ describe("control app", () => {
       fetch,
     });
     const missingSource = await control.request(
-      "http://shutter.test/internal/v1/spike/rendition?key=cache/v1/private/pane-view/fp/source/w640-q75.webp&w=640&q=75",
+      "http://shutter.test/internal/v1/spike/rendition?key=cache/v1/private/demo-private/fp/source/w640-q75.webp&w=640&q=75",
       { headers: { authorization: `Bearer ${TOKEN}` } },
     );
 
@@ -124,7 +124,7 @@ describe("control app", () => {
     });
     const url = "http://shutter.test/internal/v1/master-rendition";
     const body = JSON.stringify({
-      spaceId: "pane-view",
+      spaceId: "demo-private",
       sourceId: "source/one",
       kind: "video",
       w: 640,
@@ -149,7 +149,7 @@ describe("control app", () => {
     });
     expect(response.status).toBe(200);
     expect(presignGet).toHaveBeenCalledWith(
-      await buildMasterPreviewKey("pane-view", "source/one", "video"),
+      await buildMasterPreviewKey("demo-private", "source/one", "video"),
     );
     expect(fetch).toHaveBeenCalledOnce();
   });
@@ -167,7 +167,13 @@ describe("control app", () => {
     const response = await control.request("http://shutter.test/internal/v1/master-rendition", {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify({ spaceId: "pane-view", sourceId: "one", kind: "pdf", w: 640, q: 75 }),
+      body: JSON.stringify({
+        spaceId: "demo-private",
+        sourceId: "one",
+        kind: "pdf",
+        w: 640,
+        q: 75,
+      }),
     });
     expect(response.status).toBe(502);
     expect(JSON.stringify(error.mock.calls)).not.toContain(signed);

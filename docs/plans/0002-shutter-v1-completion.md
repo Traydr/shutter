@@ -15,7 +15,7 @@ the foundation phase.
    Cloudflare cache tags.
 4. Add recovery, redacted observability, end-to-end tests, and operational
    hardening.
-5. Integrate Pane View private images, video posters, and PDF previews.
+5. Integrate the private application's images, video posters, and PDF previews.
 
 ## Milestone 1: executor dispatch
 
@@ -90,7 +90,7 @@ Exit criteria: missed dispatch, delayed retry, expired lease, duplicate wake,
 temporary upstream failure, stale completion, and attempt exhaustion all
 converge without a second logical job or Master Preview.
 
-## Milestone 5: Pane View integrations
+## Milestone 5: private application integrations
 
 Integrate private still images first, then video posters and PDF previews. Keep
 each provider switch independent and operator-controlled.

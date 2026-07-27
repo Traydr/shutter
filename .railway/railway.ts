@@ -38,8 +38,10 @@ export default defineRailway(() => {
     healthcheckTimeout: 30,
     networking: { privateNetworkEndpoint: "shutter-imgproxy" },
     env: {
-      IMGPROXY_ALLOWED_SOURCES:
-        "https://8w0z32yftd.ufs.sh/f/,https://rrsku8h9ue.ufs.sh/f/,https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/,https://d786e753d574eb02fb154ecf8015eb86.r2.cloudflarestorage.com/",
+      // The comma-separated allowlist of source origins imgproxy may fetch from.
+      // Deployment-specific: it names the application-owned upload buckets plus
+      // the Rendition Store, so it is preserved rather than committed.
+      IMGPROXY_ALLOWED_SOURCES: preserve(),
       IMGPROXY_ALLOW_LINK_LOCAL_SOURCE_ADDRESSES: "false",
       IMGPROXY_ALLOW_LOOPBACK_SOURCE_ADDRESSES: "false",
       IMGPROXY_ALLOW_PRIVATE_SOURCE_ADDRESSES: "false",
@@ -102,7 +104,8 @@ export default defineRailway(() => {
       IMGPROXY_SALT: preserve(),
       IMGPROXY_SECRET: preserve(),
       NODE_ENV: "production",
-      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: "https://openobserve.traydr.dev/api/default/v1/logs",
+      OTEL_EXPORTER_OTLP_LOGS_ALLOWED_ENDPOINTS: preserve(),
+      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: preserve(),
       OTEL_EXPORTER_OTLP_LOGS_HEADERS: preserve(),
       OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: "http/json",
       OTEL_EXPORTER_OTLP_LOGS_TIMEOUT: "5000",

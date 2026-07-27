@@ -16,11 +16,11 @@ async function capability(): Promise<string> {
   const seconds = Math.floor(NOW.getTime() / 1_000);
   return issueSourceCapability(
     {
-      space_id: "pane-view",
+      space_id: "demo-private",
       source_id: "source-1",
       purpose: "preview_job",
       kind: "video",
-      locator: "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/source-1.mp4",
+      locator: "https://objects.example.com/demo-private-bucket/originals/source-1.mp4",
       iat: seconds - 60,
       exp: seconds + 3_600,
     },
@@ -38,8 +38,8 @@ function runtime(
     logger,
     lifecycle,
     now: () => NOW,
-    spaceApiTokens: () => new Map([["pane-view", [SPACE_TOKEN]]]),
-    capabilityKeys: () => new Map([["pane-view", new Map([[KID, KEY]])]]),
+    spaceApiTokens: () => new Map([["demo-private", [SPACE_TOKEN]]]),
+    capabilityKeys: () => new Map([["demo-private", new Map([[KID, KEY]])]]),
     executorToken: (kind: "video" | "pdf") => (kind === "video" ? VIDEO_TOKEN : undefined),
     dispatch,
     ...(sourcePurge === undefined ? {} : { sourcePurge }),
@@ -64,7 +64,7 @@ describe("job API", () => {
   it("submits, polls, claims, and completes one canonical video job", async () => {
     const dispatch = vi.fn(async () => {});
     const app = createJobApi(runtime(lifecycle, dispatch));
-    const resource = "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video";
+    const resource = "http://shutter.test/v1/spaces/demo-private/sources/source-1/previews/video";
     const submitted = await app.request(resource, {
       method: "PUT",
       headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
@@ -83,11 +83,11 @@ describe("job API", () => {
     const work = await claim.json<Record<string, unknown>>();
     expect(work).not.toHaveProperty("sourceCapability");
     expect(work.locator).toBe(
-      "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/source-1.mp4",
+      "https://objects.example.com/demo-private-bucket/originals/source-1.mp4",
     );
 
     const completed = await app.request(
-      "http://shutter.test/internal/v1/executors/video/jobs/pane-view/source-1/complete",
+      "http://shutter.test/internal/v1/executors/video/jobs/demo-private/source-1/complete",
       {
         method: "POST",
         headers: { authorization: `Bearer ${VIDEO_TOKEN}`, "content-type": "application/json" },
@@ -128,7 +128,7 @@ describe("job API", () => {
     expect(unauthorized.status).toBe(401);
 
     const malformed = await app.request(
-      "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video",
+      "http://shutter.test/v1/spaces/demo-private/sources/source-1/previews/video",
       {
         method: "PUT",
         headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
@@ -147,7 +147,7 @@ describe("job API", () => {
       runtime(lifecycle, dispatch, undefined, { emit, async shutdown() {} }),
     );
     const response = await app.request(
-      "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video",
+      "http://shutter.test/v1/spaces/demo-private/sources/source-1/previews/video",
       {
         method: "PUT",
         headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
@@ -163,12 +163,12 @@ describe("job API", () => {
       ),
     );
     expect(
-      await lifecycle.read({ spaceId: "pane-view", sourceId: "source-1", kind: "video" }),
+      await lifecycle.read({ spaceId: "demo-private", sourceId: "source-1", kind: "video" }),
     ).toMatchObject({ status: "pending" });
   });
 
   it("authenticates, repeats, and sanitizes Source Purge", async () => {
-    const identity = { spaceId: "pane-view", sourceId: "source-1", kind: "video" as const };
+    const identity = { spaceId: "demo-private", sourceId: "source-1", kind: "video" as const };
     await lifecycle.submit(
       {
         ...identity,
@@ -179,11 +179,11 @@ describe("job API", () => {
     );
     const purge = vi.fn(async () => {});
     const app = createJobApi(runtime(lifecycle, undefined, { purge }));
-    const url = "http://shutter.test/v1/spaces/pane-view/sources/source-1/purge";
+    const url = "http://shutter.test/v1/spaces/demo-private/sources/source-1/purge";
     expect((await app.request(url, { method: "POST" })).status).toBe(401);
     expect(
       (
-        await app.request("http://shutter.test/v1/spaces/ernesta/sources/source-1/purge", {
+        await app.request("http://shutter.test/v1/spaces/demo-public/sources/source-1/purge", {
           method: "POST",
           headers: { authorization: `Bearer ${SPACE_TOKEN}` },
         })

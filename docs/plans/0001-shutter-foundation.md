@@ -2,8 +2,8 @@
 
 ## Goal
 
-Replace Bunny image optimization and Pane View's current media-derivative path
-with a focused rendition service. Ernesta and Pane View continue to own uploads,
+Replace Bunny image optimization and the private application's current media-derivative path
+with a focused rendition service. Both applications continue to own uploads,
 Source Objects, media records, retention, and end-user authorization. Shutter
 owns only generated Renditions and the operational video/PDF job ledger.
 
@@ -48,7 +48,7 @@ repositories keep thin local adapters and run Shutter-owned conformance fixtures
   apps above.
 - Encode the v1 routes, capability union, width/quality policy, cache keys,
   failure codes, and job representations in `packages/protocol`.
-- Add static Ernesta and Pane View Space policies; put keys and credentials only
+- Add static public and private Space policies; put keys and credentials only
   in Cloudflare and Railway secret stores.
 - Generate Node and workerd-compatible AES-GCM fixtures and URL-normalization
   fixtures. Reject incompatible drift with explicit v1 versions.
@@ -80,7 +80,7 @@ demonstrates that no private byte is returned before capability validation.
 ### 3. Implement on-demand Image Optimization
 
 - Implement all five canonical rendition routes from `rendition-urls.md`.
-- Resolve UploadThing public references through the trusted Ernesta resolver;
+- Resolve UploadThing public references through the trusted public Space resolver;
   reject arbitrary unsigned URLs and unallowlisted projects.
 - Validate typed capabilities, Space route class, Source ID, expiry, purpose,
   locator origin, and source limits.
@@ -131,13 +131,13 @@ Exit criteria: each Executor survives crashes, duplicate wakes, temporary source
 and R2 failures, stale tokens, and deterministic bad input without corrupting
 job or Master Preview identity.
 
-### 6. Migrate Ernesta public images
+### 6. Migrate the public application's images
 
-- Add a local Shutter Unpic adapter using the canonical width ladder and Ernesta
+- Add a local Shutter Unpic adapter using the canonical width ladder and public Space
   quality set. Do not change UploadThing uploads or media records.
 - Map the existing UploadThing key through the public resolver route.
 - Keep browser `width`/`height` layout props but omit height from Shutter URLs.
-- Use ordinary Ernesta deployment configuration to select Bunny or Shutter
+- Use ordinary application deployment configuration to select Bunny or Shutter
   without a data migration. Do not add traffic-splitting or cutover automation
   to Shutter.
 - Compare dimensions, visual quality, bytes, first render, cache behavior, and
@@ -145,9 +145,9 @@ job or Master Preview identity.
 - Leave the timing of the manual switch and removal of Bunny to the operator.
 
 Exit criteria: public cache hits avoid imgproxy, Unpic emits only canonical
-variants, and Ernesta can switch back to Bunny through configuration.
+variants, and the application can switch back to Bunny through configuration.
 
-### 7. Migrate Pane View private still images
+### 7. Migrate the private application's still images
 
 - Add a local adapter that issues `image_source` capabilities only after Pane
   View authorization and refreshes them before their 24-hour expiry.
@@ -157,25 +157,25 @@ variants, and Ernesta can switch back to Bunny through configuration.
   the image URL.
 - Validate `no-store` browser responses, authorization on every Worker request,
   cache reuse across capability renewal, and fail-closed quota behavior.
-- Keep the provider selectable through Pane View deployment configuration until
+- Keep the provider selectable through application deployment configuration until
   the operator performs the manual switch.
 
 Exit criteria: unauthorized, expired, tampered, and wrong-purpose capabilities
 never reach cache bytes; valid renewed capabilities reuse canonical renditions.
 
-### 8. Migrate Pane View video posters
+### 8. Migrate the private application's video posters
 
 - Submit `preview_job` video capabilities through the canonical idempotent URL.
 - Poll using the shared job adapter and construct public or authorized private
   master delivery URLs from ready descriptors.
 - Compare the one-second/fallback frame, dimensions, WebP quality, latency, and
-  failure mapping with Pane View's current video derivative path.
+  failure mapping with the application's current video derivative path.
 - Keep video provider selection independent for the operator-managed switch.
 
 Exit criteria: production-like video jobs recover from missed dispatch and
-transient failure, and Pane View never treats the job ledger as media truth.
+transient failure, and the application never treats the job ledger as media truth.
 
-### 9. Migrate Pane View PDF previews
+### 9. Migrate the private application's PDF previews
 
 - Repeat the video integration for `pdf` with the separate PDF Executor.
 - Compare first-page rendering, dimensions, quality, corrupt input, and

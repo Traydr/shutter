@@ -2,7 +2,7 @@
 
 ## Cursor Cloud specific instructions
 
-Shutter is a private TypeScript pnpm workspace (Node 22, pnpm 11.1). Standard
+Shutter is a TypeScript pnpm workspace (Node 22, pnpm 11.1). Standard
 commands live in the root `package.json` and `README.md`
 (`pnpm install --frozen-lockfile`, `pnpm check` = `lint` + `typecheck` + `test` +
 `build`). The notes below cover only non-obvious caveats discovered while setting
@@ -70,5 +70,5 @@ hex or base64url). Run migrations first with
 `DATABASE_URL=... pnpm --filter @shutter/control db:migrate`. Source Capabilities
 for job submission can be minted with `issueSourceCapability` from
 `@shutter/protocol`; the capability `locator` origin must be allowlisted by the
-target Space (`packages/space-config`). Preconfigured Spaces: `ernesta` (public),
-`pane-view` (private).
+target Space (`packages/space-config`). Preconfigured Spaces: `demo-public` (public),
+`demo-private` (private).

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { type ExecutorConfig, type ExecutorProcessor, runExecutorOnce } from "./index.js";
 
 const claim = {
-  spaceId: "pane-view",
+  spaceId: "demo-private",
   sourceId: "source-1",
   kind: "video",
   locator: "https://example.test/source.mp4",
@@ -67,7 +67,7 @@ describe("Executor work cycle", () => {
     expect(send.mock.calls[0]?.[0]).toBeInstanceOf(PutObjectCommand);
     expect(requests).toEqual([
       "/internal/v1/executors/video/claim",
-      "/internal/v1/executors/video/jobs/pane-view/source-1/complete",
+      "/internal/v1/executors/video/jobs/demo-private/source-1/complete",
     ]);
   });
 
@@ -91,7 +91,7 @@ describe("Executor work cycle", () => {
     });
     await expect(runExecutorOnce(config, processor)).resolves.toBe("processed");
     expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([PutObjectCommand]);
-    expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/pane-view/source-1/fail");
+    expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/demo-private/source-1/fail");
   });
 
   it("reports processing failure without uploading", async () => {
@@ -101,6 +101,6 @@ describe("Executor work cycle", () => {
     });
     await expect(runExecutorOnce(config, processor)).resolves.toBe("processed");
     expect(send).not.toHaveBeenCalled();
-    expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/pane-view/source-1/fail");
+    expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/demo-private/source-1/fail");
   });
 });

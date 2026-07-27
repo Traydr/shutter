@@ -42,7 +42,7 @@ and deliberately sends 301 requests.
 ## Verified configuration inventory (2026-07-12)
 
 - Control contains structurally valid `CAPABILITY_KEYS` and `SPACE_API_TOKENS`
-  entries for `ernesta` and `pane-view`, plus the zone ID and purge token.
+  entries for `demo-public` and `demo-private`, plus the zone ID and purge token.
 - Control and both Executors address the same R2 endpoint and bucket; Executor
   role-token references match Control.
 - Control and imgproxy share the signing key, salt, and bearer secret.
@@ -72,6 +72,6 @@ consumer's previous provider independently; do not weaken capability checks or
 private `no-store` behavior. Keep Shutter jobs and generated objects for
 diagnosis unless application deletion requires Source Purge.
 
-Ernesta public images, Pane View private still images, video posters, and PDF
-previews are separate switches. Removing Bunny or an old Pane View path happens
+Public images, private still images, video posters, and PDF
+previews are separate switches. Removing Bunny or an old application path happens
 only after the operator's chosen observation period.

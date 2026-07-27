@@ -2,6 +2,7 @@ import type { ServerEnv } from "./env/server.js";
 
 type ControlLoggingEnvironmentKey =
   | "NODE_ENV"
+  | "OTEL_EXPORTER_OTLP_LOGS_ALLOWED_ENDPOINTS"
   | "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
   | "OTEL_EXPORTER_OTLP_LOGS_HEADERS"
   | "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL"
@@ -22,7 +23,6 @@ export interface OtlpLogsConfig {
   timeoutMillis: number;
 }
 
-export const OPENOBSERVE_OTLP_LOGS_ENDPOINT = "https://openobserve.traydr.dev/api/default/v1/logs";
 export const OPENOBSERVE_LOG_STREAM = "default";
 const MAX_OTLP_EXPORT_TIMEOUT_MILLIS = 5_000;
 
@@ -85,9 +85,24 @@ function timeoutMillis(environment: ControlLoggingEnvironment): number {
   return Math.min(parsed, MAX_OTLP_EXPORT_TIMEOUT_MILLIS);
 }
 
+// The approved endpoints are deployment configuration rather than a committed
+// constant, but they stay a separate variable from the endpoint itself: pinning
+// only works if redirecting exports requires changing two independently sealed
+// values. An absent or empty allowlist approves nothing and fails closed.
+function approvedEndpoints(environment: ControlLoggingEnvironment): readonly string[] {
+  const value = environment.OTEL_EXPORTER_OTLP_LOGS_ALLOWED_ENDPOINTS;
+  if (value === undefined || value.trim() === "") {
+    throw new Error("missing approved OTLP endpoints");
+  }
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== "");
+}
+
 export function readOtlpLogsConfig(
   environment: ControlLoggingEnvironment,
-  allowedEndpoints: readonly string[] = [OPENOBSERVE_OTLP_LOGS_ENDPOINT],
+  allowedEndpoints: readonly string[] = approvedEndpoints(environment),
 ): OtlpLogsConfig | undefined {
   const configuredEndpoint = environment.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
   if (configuredEndpoint === undefined) return undefined;

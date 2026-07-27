@@ -122,11 +122,11 @@ Executors.
 
 ```json
 {
-  "spaceId": "pane-view",
+  "spaceId": "demo-private",
   "sourceId": "application-issued-source-id",
   "kind": "video",
-  "locator": "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/a.mp4",
-  "outputKey": "masters/v1/pane-view/<fingerprint>/video.webp",
+  "locator": "https://objects.example.com/demo-private-bucket/originals/a.mp4",
+  "outputKey": "masters/v1/demo-private/<fingerprint>/video.webp",
   "processingToken": "opaque-token",
   "executionCycle": 0,
   "attemptNumber": 1

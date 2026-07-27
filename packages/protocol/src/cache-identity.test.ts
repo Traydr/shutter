@@ -3,7 +3,7 @@ import { buildR2CacheKey } from "./cache-identity.js";
 
 const identity = {
   routeClass: "private" as const,
-  spaceId: "pane-view",
+  spaceId: "demo-private",
   sourceId: "source-01",
   input: { type: "source" as const },
   width: 640,

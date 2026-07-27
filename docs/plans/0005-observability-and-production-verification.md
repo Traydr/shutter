@@ -22,8 +22,8 @@
 
 Worker observability is enabled, but application logs are ad hoc and there is
 no end-to-end launch evidence for jobs, master delivery, purge, cache behavior,
-or traffic limits. Operators need correlated, redacted signals before Pane View
-private traffic and materialized previews can migrate.
+or traffic limits. Operators need correlated, redacted signals before private
+traffic and materialized previews can migrate.
 
 ## Current state
 
@@ -153,6 +153,6 @@ State that the operator owns cutover timing.
 
 ## Maintenance notes
 
-After this plan, the next agent should move to Pane View integration in the
+After this plan, the next agent should move to private application integration in the
 order private still images, video posters, then PDF previews. Keep each provider
 switch independent and operator-controlled as specified in roadmap phases 7–9.

@@ -23,8 +23,7 @@ behavior to avoid a plan limit.
   the Worker even when rendition bytes are cached.
 - Mitigation: block for the supported 10-second Free-plan window.
 
-The threshold is validated against representative Ernesta pages and large Pane
-View galleries before production cutover. Cloudflare rate counters are not a
+The threshold is validated against representative public pages and large private galleries before production cutover. Cloudflare rate counters are not a
 global exact budget: they are data-center scoped and enforcement may lag. The
 rule is an abuse and cost guard, not part of authorization correctness.
 
