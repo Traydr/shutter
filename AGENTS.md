@@ -1,74 +1,43 @@
 # AGENTS.md
 
-## Cursor Cloud specific instructions
+Shutter is a TypeScript pnpm workspace (Node 22, pnpm 11.1). Setup, commands,
+configuration, how to run each service, and the repository conventions are in
+**[docs/development.md](./docs/development.md)** — read that first. The domain
+vocabulary is in [CONTEXT.md](./CONTEXT.md); the architecture and its decision
+records are in [docs/architecture.md](./docs/architecture.md) and
+[docs/adr/](./docs/adr/).
 
-Shutter is a TypeScript pnpm workspace (Node 22, pnpm 11.1). Standard
-commands live in the root `package.json` and `README.md`
-(`pnpm install --frozen-lockfile`, `pnpm check` = `lint` + `typecheck` + `test` +
-`build`). The notes below cover only non-obvious caveats discovered while setting
-up the environment.
+## Before you finish
 
-### Node version gotcha (affects edge/vite builds)
+Run `pnpm check` (`lint` + `typecheck` + `test` + `build`). It needs a running
+container runtime for the Control tests; see docs/development.md.
 
-`/exec-daemon/node` is Node **v22.14.0**, which lacks `node:module.registerHooks`
-that `vite` / `@cloudflare/vite-plugin` require. The nvm default is **v22.22.2**
-(satisfies the repo's `>=22.13.0 <23` engine and has `registerHooks`). A snippet
-appended to `~/.bashrc` prepends the nvm Node bin to `PATH`, so **login/interactive
-shells (including tmux `bash -l`) automatically resolve v22.22.2**. If a
-non-login shell picks up v22.14.0 and a build fails with
-`does not provide an export named 'registerHooks'`, prepend the right Node first:
-`export PATH="$(dirname "$(nvm which default)"):$PATH"`.
+## Invariants worth restating
 
-### Node tests require Docker (Postgres testcontainers)
+These are enforced by lint rules or tests, so breaking them fails the build
+rather than showing up in review.
 
-`pnpm test` / `pnpm test:node` start a `postgres:17-alpine` container via
-`@testcontainers/postgresql` (`apps/control/src/postgres-test-global.ts`). Docker
-is installed but the daemon is not auto-started. Start it once per session and
-make the socket usable:
+- The edge Worker runs on Web standards only. No Node imports, no
+  `nodejs_compat` (`scripts/check-edge-boundary.mjs`).
+- Reviewed infrastructure in `.railway/railway.ts`, `apps/edge/wrangler.jsonc`,
+  and the R2 lifecycle rule is guarded by `scripts/check-phase2-config.mjs`.
+  Deployment-specific values stay `preserve()`d, never committed.
+- Control reads configuration only through `apps/control/src/env/server.ts`.
+- Protocol changes are fixture changes. Cross-consumer behavior is pinned in
+  `@shutter/testkit`, and URLs and capabilities carry an explicit `v1`.
+- Logging is allowlisted and redacted. Never add raw paths, queries, headers,
+  bodies, locators, capabilities, Source IDs, or error messages to an event.
+
+## Environment-specific notes
+
+If a sandbox ships an older Node than `.node-version` requires, `vite` and
+`@cloudflare/vite-plugin` fail with `does not provide an export named
+'registerHooks'`. Put a Node that satisfies `>=22.13.0 <23` on `PATH` first.
+
+Where the Docker daemon is not auto-started, start it before `pnpm test:node`
+and make the socket usable by the test process, for example:
 
 ```sh
 sudo dockerd >/tmp/dockerd.log 2>&1 &   # wait until `docker info` succeeds
-sudo chmod 666 /var/run/docker.sock     # allow non-sudo docker (testcontainers)
+sudo chmod 666 /var/run/docker.sock
 ```
-
-Without a running daemon, only `test:node` is affected; lint, typecheck, build,
-and the worker tests do not need Docker.
-
-Cloudflare Workers Builds sets `WORKERS_CI=1` and has no Docker/cgroup support, so
-`pnpm check` / `pnpm test` skip `test:node` there and still run worker tests plus
-the rest of the gate.
-
-### Edge worker local dev is version-blocked (build + tests still work)
-
-`pnpm --filter @shutter/edge dev` (and `wrangler dev`) currently **fail to boot**:
-`apps/edge/wrangler.jsonc` sets `compatibility_date` `2026-07-10`, but the workerd
-bundled by the pinned `@cloudflare/vite-plugin` (miniflare `4.20260701`) and
-`wrangler@4.107.1` only supports dates up to `2026-07-08`/`2026-07-09`. This is a
-runtime-version gap, not a code bug. The edge Worker is still fully validated by:
-
-- `pnpm --filter @shutter/edge build` (vite build → deployable worker), and
-- its 16 worker tests (`pnpm --filter @shutter/edge test`), which run on
-  `vitest-pool-workers`' newer workerd (`1.20260706.1`, which does support
-  `2026-07-10`).
-
-To actually run the edge dev server, a newer `miniflare`/`workerd` (>= `1.20260706`)
-must back the vite plugin / wrangler.
-
-### Running the services (dev mode)
-
-Node services are Hono servers with a `/healthz` endpoint and are **fail-closed**
-(routes return 401/503 until their env is configured). Ports are set via `PORT`.
-
-- `pnpm --filter @shutter/control dev` — Control plane + Rendition Job API.
-- `pnpm --filter @shutter/executor-video dev` / `@shutter/executor-pdf dev`.
-- `pnpm --filter @shutter/edge dev` — see the version caveat above.
-
-To exercise the Control Rendition Job API end-to-end you need Postgres plus these
-env vars (see `apps/control/src/app.ts`): `DATABASE_URL`, `SPACE_API_TOKENS`
-(JSON, tokens must be >= 32 chars), and `CAPABILITY_KEYS` (JSON of 32-byte keys,
-hex or base64url). Run migrations first with
-`DATABASE_URL=... pnpm --filter @shutter/control db:migrate`. Source Capabilities
-for job submission can be minted with `issueSourceCapability` from
-`@shutter/protocol`; the capability `locator` origin must be allowlisted by the
-target Space (`packages/space-config`). Preconfigured Spaces: `demo-public` (public),
-`demo-private` (private).

@@ -97,6 +97,13 @@ the Node and `workerd` test suites, and every application build. The Control
 tests start a throwaway Postgres through testcontainers, so `pnpm test` needs a
 running container runtime (Docker, OrbStack, or Podman).
 
+To run the services, copy `.env.example` to `.env` (and
+`apps/edge/.dev.vars.example` to `apps/edge/.dev.vars`) and fill in what you
+need — everything is fail-closed, so you can enable one capability at a time.
+[docs/development.md](./docs/development.md) covers running each service, the
+conventions the build enforces, and a known version gap that stops the edge dev
+server from booting.
+
 The two Spaces in `packages/space-config` (`demo-public` and `demo-private`) are
 illustrative tenant policies. Deployment-specific values — custom domains, the
 imgproxy source allowlist, storage credentials, and the OTLP endpoint — are not

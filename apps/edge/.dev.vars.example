@@ -1,0 +1,13 @@
+# Copy to .dev.vars for `wrangler dev` / `vite dev`. Wrangler loads this file
+# automatically; it is gitignored. In production these are Worker secrets, and
+# the R2 Rendition Store is a native binding declared in wrangler.jsonc.
+
+# Per-Space capability keys, as JSON of `{ space: { keyId: key } }`. Must match
+# Control's CAPABILITY_KEYS exactly or every private URL fails closed.
+CAPABILITY_KEYS={"demo-private":{"key-2026-07":"0000000000000000000000000000000000000000000000000000000000000000"}}
+
+# Shared credential presented to the Railway origin. Must match Control's value.
+ORIGIN_AUTH_TOKEN=
+
+# Shutter Control, which fronts imgproxy and the Rendition Store.
+ORIGIN_BASE_URL=http://127.0.0.1:3000
