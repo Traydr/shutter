@@ -10,14 +10,14 @@ import {
 } from "./rendition-job-lifecycle.js";
 
 const start = new Date("2026-01-01T00:00:00.000Z");
-const identity = { spaceId: "demo-private", sourceId: "source-1", kind: "video" as const };
+const identity = { spaceId: "pane-view", sourceId: "source-1", kind: "video" as const };
 const input = {
   ...identity,
   sourceCapability: "opaque-capability",
   capabilityExpiresAt: new Date(start.getTime() + 86_400_000),
 };
 const master = {
-  masterKey: "masters/v1/demo-private/source-1/video.webp",
+  masterKey: "masters/v1/pane-view/source-1/video.webp",
   width: 1920,
   height: 1080,
   format: "webp" as const,

@@ -13,12 +13,12 @@ describe("capability key material", () => {
 
     const registry = parseCapabilityKeyRegistry(
       JSON.stringify({
-        "demo-private": {
+        "pane-view": {
           "fixture-key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
         },
       }),
     );
-    expect(registry.get("demo-private")?.get("fixture-key")).toEqual(EXPECTED);
+    expect(registry.get("pane-view")?.get("fixture-key")).toEqual(EXPECTED);
     expect(() => parseCapabilityKeyRegistry("[]")).toThrow("object keyed by Space ID");
   });
 });

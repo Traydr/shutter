@@ -6,43 +6,43 @@ import type { SpacePolicy } from "@shutter/protocol";
 
 // A public space: renditions are addressable without a capability token, and an
 // UploadThing resolver maps opaque project/file references onto source URLs.
-const demoPublic = Object.freeze({
-  id: "demo-public",
+const ernesta = Object.freeze({
+  id: "ernesta",
   routeClass: "public",
   qualities: Object.freeze([30, 50, 75]),
   defaultQuality: 75,
   allowedSourceOrigins: Object.freeze([
-    Object.freeze({ origin: "https://demo-project-1.ufs.sh", pathPrefix: "/f" }),
-    Object.freeze({ origin: "https://demo-project-2.ufs.sh", pathPrefix: "/f" }),
+    Object.freeze({ origin: "https://8w0z32yftd.ufs.sh", pathPrefix: "/f" }),
+    Object.freeze({ origin: "https://rrsku8h9ue.ufs.sh", pathPrefix: "/f" }),
   ]),
   resolvers: Object.freeze([
     Object.freeze({
       id: "uploadthing",
       type: "uploadthing",
-      allowedProjectIds: Object.freeze(["demo-project-1", "demo-project-2"]),
+      allowedProjectIds: Object.freeze(["8w0z32yftd", "rrsku8h9ue"]),
     }),
   ]),
 }) satisfies SpacePolicy;
 
 // A private space: every rendition requires a capability token issued by the
 // owning application, and sources live in one S3-compatible bucket.
-const demoPrivate = Object.freeze({
-  id: "demo-private",
+const paneView = Object.freeze({
+  id: "pane-view",
   routeClass: "private",
   qualities: Object.freeze([30, 75, 80]),
   defaultQuality: 75,
   allowedSourceOrigins: Object.freeze([
     Object.freeze({
-      origin: "https://objects.example.com",
-      pathPrefix: "/demo-private-bucket",
+      origin: "https://t3.storageapi.dev",
+      pathPrefix: "/balanced-wrap-ocyiwwexhao",
     }),
   ]),
   resolvers: Object.freeze([] as const),
 }) satisfies SpacePolicy;
 
 export const SPACES = Object.freeze({
-  "demo-public": demoPublic,
-  "demo-private": demoPrivate,
+  ernesta,
+  "pane-view": paneView,
 });
 
 export type SpaceId = keyof typeof SPACES;
