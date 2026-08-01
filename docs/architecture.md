@@ -357,8 +357,10 @@ the Rendition Store. Unpic and imgproxy then produce normalized responsive image
 sizes from that master through the ordinary image-delivery pipeline rather than
 scheduling size-specific video or PDF work. Each serverless Executor claims and
 completes at most one job per invocation; it
-records a terminal outcome before returning. A recovery sweep re-wakes jobs
-whose initial dispatch was missed.
+records a terminal outcome before returning. Control serializes wake calls
+independently for each Executor kind, and only a completed `200` wake counts as
+successful; a `202` busy response remains a missed dispatch. A recovery sweep
+re-wakes jobs whose initial dispatch was missed.
 
 Postgres stores the submitted Source Capability as its original opaque,
 authenticated-encryption blob, never as a plaintext Source Locator. When the

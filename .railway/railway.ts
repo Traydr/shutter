@@ -16,6 +16,12 @@ const nodePort = 8080;
 const imgproxyPort = 8080;
 const repository = github("Traydr/shutter");
 const workspaceWatchPatterns = ["/package.json", "/pnpm-lock.yaml", "/pnpm-workspace.yaml"];
+const executorWatchPatterns = [
+  "/packages/executor-runtime/**",
+  "/packages/protocol/**",
+  "/packages/space-config/**",
+  ...workspaceWatchPatterns,
+];
 
 export default defineRailway(() => {
   // These preserved values are the S3-compatible credentials for the same
@@ -126,7 +132,7 @@ export default defineRailway(() => {
       builder: "RAILPACK",
       buildEnvironment: "V3",
       buildCommand: "pnpm --filter @shutter/executor-video... build",
-      watchPatterns: ["/apps/executor-video/**", ...workspaceWatchPatterns],
+      watchPatterns: ["/apps/executor-video/**", ...executorWatchPatterns],
     },
     start: "pnpm --filter @shutter/executor-video start",
     replicas: { [region]: 1 },
@@ -150,7 +156,7 @@ export default defineRailway(() => {
       builder: "RAILPACK",
       buildEnvironment: "V3",
       buildCommand: "pnpm --filter @shutter/executor-pdf... build",
-      watchPatterns: ["/apps/executor-pdf/**", ...workspaceWatchPatterns],
+      watchPatterns: ["/apps/executor-pdf/**", ...executorWatchPatterns],
     },
     start: "pnpm --filter @shutter/executor-pdf start",
     replicas: { [region]: 1 },

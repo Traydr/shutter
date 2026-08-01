@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
 import { Pool } from "pg";
 import { env } from "./env/server.js";
+import { createSerializedExecutorDispatch, sendExecutorWake } from "./executor-dispatch.js";
 import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
 import { type ControlLogger, controlLogger, operationalErrorType } from "./logging.js";
@@ -341,7 +342,10 @@ function parseCapabilityKeys(
   return new Map(parseCapabilityKeyRegistry(value));
 }
 
-async function dispatchExecutor(logger: ControlLogger, kind: "video" | "pdf"): Promise<void> {
+async function sendConfiguredExecutorWake(
+  logger: ControlLogger,
+  kind: "video" | "pdf",
+): Promise<void> {
   const baseUrl = kind === "video" ? env.VIDEO_EXECUTOR_BASE_URL : env.PDF_EXECUTOR_BASE_URL;
   const token = kind === "video" ? env.VIDEO_EXECUTOR_TOKEN : env.PDF_EXECUTOR_TOKEN;
   if (baseUrl === undefined || token === undefined) {
@@ -352,18 +356,22 @@ async function dispatchExecutor(logger: ControlLogger, kind: "video" | "pdf"): P
     kind,
     outcome: "accepted",
   });
-  const response = await globalThis.fetch(new URL("/internal/v1/run-once", baseUrl), {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}` },
-    signal: AbortSignal.timeout(EXECUTOR_WAKE_TIMEOUT_MS),
+  await sendExecutorWake({
+    baseUrl,
+    fetch: globalThis.fetch,
+    timeoutMs: EXECUTOR_WAKE_TIMEOUT_MS,
+    token,
   });
-  if (!response.ok) throw new Error(`${kind} executor wake failed with ${response.status}`);
   logger.emit("info", {
     event: "control.executor.delegated",
     kind,
     outcome: "ready",
   });
 }
+
+const dispatchExecutor = createSerializedExecutorDispatch((kind) =>
+  sendConfiguredExecutorWake(controlLogger, kind),
+);
 
 const databaseUrl = env.DATABASE_URL;
 const jobPool = databaseUrl === undefined ? undefined : new Pool({ connectionString: databaseUrl });
@@ -422,7 +430,7 @@ export const jobApiRuntime: JobApiRuntime | undefined =
         capabilityKeys: () => parseCapabilityKeys(env.CAPABILITY_KEYS),
         executorToken: (kind) =>
           kind === "video" ? env.VIDEO_EXECUTOR_TOKEN : env.PDF_EXECUTOR_TOKEN,
-        dispatch: (kind) => dispatchExecutor(controlLogger, kind),
+        dispatch: dispatchExecutor,
         logger: controlLogger,
         ...(sourcePurge === undefined ? {} : { sourcePurge }),
       };
