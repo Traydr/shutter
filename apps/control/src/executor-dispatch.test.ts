@@ -1,5 +1,10 @@
+import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
-import { createSerializedExecutorDispatch, sendExecutorWake } from "./executor-dispatch.js";
+import {
+  createSerializedExecutorDispatch,
+  ExecutorWakeError,
+  sendExecutorWake,
+} from "./executor-dispatch.js";
 
 describe("executor dispatch", () => {
   it("serializes wakes for one Executor kind", async () => {
@@ -19,11 +24,13 @@ describe("executor dispatch", () => {
         active -= 1;
       }
     });
-    const dispatch = createSerializedExecutorDispatch(wake);
+    const dispatch = await Effect.runPromise(
+      createSerializedExecutorDispatch(() => Effect.promise(wake)),
+    );
 
-    const first = dispatch("pdf");
+    const first = Effect.runPromise(dispatch.dispatch("pdf"));
     await vi.waitFor(() => expect(wake).toHaveBeenCalledOnce());
-    const second = dispatch("pdf");
+    const second = Effect.runPromise(dispatch.dispatch("pdf"));
 
     await vi.waitFor(() => expect(finishFirst).toBeTypeOf("function"));
     const callsWhileFirstActive = wake.mock.calls.length;
@@ -37,15 +44,15 @@ describe("executor dispatch", () => {
 
   it("continues the queue after a failed wake", async () => {
     const wake = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("unavailable"))
-      .mockResolvedValueOnce();
-    const dispatch = createSerializedExecutorDispatch(wake);
+      .fn<() => Effect.Effect<void, ExecutorWakeError>>()
+      .mockReturnValueOnce(Effect.fail(new ExecutorWakeError({ reason: "request_failed" })))
+      .mockReturnValueOnce(Effect.void);
+    const dispatch = await Effect.runPromise(createSerializedExecutorDispatch(wake));
 
-    const first = dispatch("video");
-    const second = dispatch("video");
+    const first = Effect.runPromise(dispatch.dispatch("video"));
+    const second = Effect.runPromise(dispatch.dispatch("video"));
 
-    await expect(first).rejects.toThrow("unavailable");
+    await expect(first).rejects.toMatchObject({ reason: "request_failed" });
     await expect(second).resolves.toBeUndefined();
     expect(wake).toHaveBeenCalledTimes(2);
   });
@@ -59,9 +66,14 @@ describe("executor dispatch", () => {
       await Promise.resolve();
       active -= 1;
     });
-    const dispatch = createSerializedExecutorDispatch(wake);
+    const dispatch = await Effect.runPromise(
+      createSerializedExecutorDispatch(() => Effect.promise(wake)),
+    );
 
-    await Promise.all([dispatch("video"), dispatch("pdf")]);
+    await Promise.all([
+      Effect.runPromise(dispatch.dispatch("video")),
+      Effect.runPromise(dispatch.dispatch("pdf")),
+    ]);
 
     expect(maximumActive).toBe(2);
   });
@@ -70,12 +82,31 @@ describe("executor dispatch", () => {
     const fetch = vi.fn(async () => Response.json({ result: "busy" }, { status: 202 }));
 
     await expect(
+      Effect.runPromise(
+        sendExecutorWake({
+          baseUrl: "http://executor.test",
+          fetch,
+          timeoutMs: 1_000,
+          token: "x".repeat(32),
+        }),
+      ),
+    ).rejects.toMatchObject({ reason: "unexpected_status", status: 202 });
+  });
+
+  it("retries only a cold-start 502", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 502 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+    await Effect.runPromise(
       sendExecutorWake({
         baseUrl: "http://executor.test",
         fetch,
         timeoutMs: 1_000,
         token: "x".repeat(32),
       }),
-    ).rejects.toThrow("executor wake did not complete (202)");
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });

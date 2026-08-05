@@ -1,17 +1,22 @@
-import { fileURLToPath } from "node:url";
-import { drizzle } from "drizzle-orm/node-postgres";
-import { migrate } from "drizzle-orm/node-postgres/migrator";
-import { Pool } from "pg";
-import { env } from "./env/server.js";
+import { NodeRuntime, NodeServices } from "@effect/platform-node";
+import { PgClient, PgMigrator } from "@effect/sql-pg";
+import { Config, Effect, Layer, Redacted, Schema } from "effect";
+import renditionJobs from "../migrations/0001_rendition_jobs.js";
 
-const databaseUrl = env.DATABASE_URL;
-if (databaseUrl === undefined) throw new Error("DATABASE_URL is required");
-
-const pool = new Pool({ connectionString: databaseUrl, max: 1 });
-try {
-  await migrate(drizzle(pool), {
-    migrationsFolder: fileURLToPath(new URL("../drizzle", import.meta.url)),
+const program = Effect.gen(function* () {
+  yield* PgMigrator.run({
+    loader: PgMigrator.fromRecord({ "0001_rendition_jobs": renditionJobs }),
   });
-} finally {
-  await pool.end();
-}
+}).pipe(
+  Effect.provide(
+    Layer.unwrap(
+      Config.schema(Schema.URLFromString, "DATABASE_URL").pipe(
+        Effect.map((url) => PgClient.layer({ url: Redacted.make(url.href) })),
+      ),
+    ),
+  ),
+  Effect.provide(NodeServices.layer),
+  Effect.scoped,
+);
+
+NodeRuntime.runMain(program);

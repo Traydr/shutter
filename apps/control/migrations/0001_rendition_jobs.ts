@@ -1,4 +1,9 @@
-CREATE TABLE "rendition_jobs" (
+import { Effect } from "effect";
+import { SqlClient } from "effect/unstable/sql";
+
+export default Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql.unsafe(`CREATE TABLE IF NOT EXISTS "rendition_jobs" (
 	"space_id" text NOT NULL,
 	"source_id" text NOT NULL,
 	"kind" text NOT NULL,
@@ -23,6 +28,8 @@ CREATE TABLE "rendition_jobs" (
 	CONSTRAINT "rendition_jobs_kind_check" CHECK ("rendition_jobs"."kind" in ('video', 'pdf')),
 	CONSTRAINT "rendition_jobs_status_check" CHECK ("rendition_jobs"."status" in ('pending', 'processing', 'ready', 'failed')),
 	CONSTRAINT "rendition_jobs_counter_check" CHECK ("rendition_jobs"."execution_cycle" >= 0 and "rendition_jobs"."attempt_number" >= 0)
-);
---> statement-breakpoint
-CREATE INDEX "rendition_jobs_claim_idx" ON "rendition_jobs" USING btree ("kind","status","next_attempt_at");
+);`);
+  yield* sql.unsafe(
+    `CREATE INDEX IF NOT EXISTS "rendition_jobs_claim_idx" ON "rendition_jobs" USING btree ("kind","status","next_attempt_at");`,
+  );
+});

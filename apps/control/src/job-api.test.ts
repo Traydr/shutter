@@ -2,20 +2,20 @@ import { issueSourceCapability } from "@shutter/protocol";
 import { Effect } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createJobApi } from "./job-api.js";
-import type { ControlLogger } from "./logging.js";
+import type { ControlLoggerShape } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
-import type { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
+import type { RenditionJobLifecycleShape } from "./rendition-job-lifecycle.js";
+import type { SourcePurgeShape } from "./source-purge.js";
 
 const KEY = Uint8Array.from({ length: 32 }, (_, index) => index);
 const KID = "test-key";
 const SPACE_TOKEN = "s".repeat(32);
 const VIDEO_TOKEN = "v".repeat(32);
 const NOW = new Date("2026-07-11T00:00:00Z");
-const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
+const NOOP_LOGGER: ControlLoggerShape = { emit: () => Effect.void };
 
 async function capability(): Promise<string> {
   const seconds = Math.floor(NOW.getTime() / 1_000);
-  // TODO(effect-phase-2): Remove this adapter when Control tests run Effect natively.
   return Effect.runPromise(
     issueSourceCapability(
       {
@@ -33,10 +33,10 @@ async function capability(): Promise<string> {
 }
 
 function runtime(
-  lifecycle: PostgresRenditionJobLifecycle,
-  dispatch = vi.fn(async () => {}),
-  sourcePurge?: { purge(source: { spaceId: string; sourceId: string }): Promise<void> },
-  logger: ControlLogger = NOOP_LOGGER,
+  lifecycle: RenditionJobLifecycleShape,
+  dispatch = vi.fn(() => Effect.void),
+  sourcePurge?: SourcePurgeShape,
+  logger: ControlLoggerShape = NOOP_LOGGER,
 ) {
   return {
     logger,
@@ -52,7 +52,7 @@ function runtime(
 
 describe("job API", () => {
   let test: PostgresTestLifecycle;
-  let lifecycle: PostgresRenditionJobLifecycle;
+  let lifecycle: RenditionJobLifecycleShape;
 
   beforeAll(async () => {
     test = await createPostgresTestLifecycle();
@@ -66,7 +66,7 @@ describe("job API", () => {
   });
 
   it("submits, polls, claims, and completes one canonical video job", async () => {
-    const dispatch = vi.fn(async () => {});
+    const dispatch = vi.fn(() => Effect.void);
     const app = createJobApi(runtime(lifecycle, dispatch));
     const resource = "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video";
     const submitted = await app.request(resource, {
@@ -143,13 +143,9 @@ describe("job API", () => {
   });
 
   it("keeps a durable submission accepted when its initial dispatch fails", async () => {
-    const dispatch = vi.fn(async () => {
-      throw new Error("executor unavailable");
-    });
-    const emit = vi.fn<ControlLogger["emit"]>();
-    const app = createJobApi(
-      runtime(lifecycle, dispatch, undefined, { emit, async shutdown() {} }),
-    );
+    const dispatch = vi.fn(() => Effect.fail({ reason: "executor unavailable" } as never));
+    const emit = vi.fn<ControlLoggerShape["emit"]>(() => Effect.void);
+    const app = createJobApi(runtime(lifecycle, dispatch, undefined, { emit }));
     const response = await app.request(
       "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video",
       {
@@ -167,21 +163,25 @@ describe("job API", () => {
       ),
     );
     expect(
-      await lifecycle.read({ spaceId: "pane-view", sourceId: "source-1", kind: "video" }),
+      await Effect.runPromise(
+        lifecycle.read({ spaceId: "pane-view", sourceId: "source-1", kind: "video" }),
+      ),
     ).toMatchObject({ status: "pending" });
   });
 
   it("authenticates, repeats, and sanitizes Source Purge", async () => {
     const identity = { spaceId: "pane-view", sourceId: "source-1", kind: "video" as const };
-    await lifecycle.submit(
-      {
-        ...identity,
-        sourceCapability: "opaque",
-        capabilityExpiresAt: new Date(NOW.getTime() + 3_600_000),
-      },
-      NOW,
+    await Effect.runPromise(
+      lifecycle.submit(
+        {
+          ...identity,
+          sourceCapability: "opaque",
+          capabilityExpiresAt: new Date(NOW.getTime() + 3_600_000),
+        },
+        NOW,
+      ),
     );
-    const purge = vi.fn(async () => {});
+    const purge = vi.fn(() => Effect.void);
     const app = createJobApi(runtime(lifecycle, undefined, { purge }));
     const url = "http://shutter.test/v1/spaces/pane-view/sources/source-1/purge";
     expect((await app.request(url, { method: "POST" })).status).toBe(401);
@@ -204,7 +204,7 @@ describe("job API", () => {
 
     const failing = createJobApi(
       runtime(lifecycle, undefined, {
-        purge: async () => Promise.reject(new Error("secret detail")),
+        purge: () => Effect.fail(new Error("secret detail")),
       }),
     );
     const failed = await failing.request(url, {

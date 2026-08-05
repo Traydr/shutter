@@ -1,41 +1,70 @@
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { Pool } from "pg";
-import { env } from "./env/server.js";
-import { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
+import { PgClient } from "@effect/sql-pg";
+import { Effect, Layer, ManagedRuntime, Redacted } from "effect";
+import renditionJobsMigration from "../migrations/0001_rendition_jobs.js";
+import {
+  RenditionJobLifecycle,
+  type RenditionJobLifecycleShape,
+} from "./rendition-job-lifecycle.js";
+
+interface RawQueryResult<A> {
+  readonly rows: ReadonlyArray<A>;
+  readonly rowCount: number | null;
+}
+
+export interface PostgresTestPool {
+  query<A extends object = Record<string, unknown>>(
+    statement: string,
+    params?: ReadonlyArray<unknown>,
+  ): Promise<RawQueryResult<A>>;
+}
 
 export interface PostgresTestLifecycle {
-  lifecycle: PostgresRenditionJobLifecycle;
-  pool: Pool;
+  lifecycle: RenditionJobLifecycleShape;
+  pool: PostgresTestPool;
   close(): Promise<void>;
 }
 
+function pgLayer(url: string, maxConnections: number) {
+  return PgClient.layer({ url: Redacted.make(url), maxConnections });
+}
+
 export async function createPostgresTestLifecycle(): Promise<PostgresTestLifecycle> {
-  const adminUrl = env.TEST_POSTGRES_URL;
+  const adminUrl = process.env.TEST_POSTGRES_URL;
   if (adminUrl === undefined) throw new Error("TEST_POSTGRES_URL is not configured");
 
   const database = `shutter_test_${randomUUID().replaceAll("-", "")}`;
-  const admin = new Pool({ connectionString: adminUrl, max: 1 });
+  const admin = ManagedRuntime.make(pgLayer(adminUrl, 1));
   try {
-    await admin.query(`create database ${database}`);
+    await admin.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* PgClient.PgClient;
+        yield* sql.unsafe(`create database ${database}`);
+      }),
+    );
   } finally {
-    await admin.end();
+    await admin.dispose();
   }
 
   const databaseUrl = new URL(adminUrl);
   databaseUrl.pathname = `/${database}`;
-  const pool = new Pool({ connectionString: databaseUrl.toString(), max: 8 });
-  const migration = await readFile(
-    new URL("../drizzle/0000_wooden_nicolaos.sql", import.meta.url),
-    "utf8",
+  const runtime = ManagedRuntime.make(
+    RenditionJobLifecycle.layer.pipe(Layer.provideMerge(pgLayer(databaseUrl.toString(), 8))),
   );
-  for (const statement of migration.split("--> statement-breakpoint")) {
-    if (statement.trim().length > 0) await pool.query(statement);
-  }
+  await runtime.runPromise(renditionJobsMigration);
+  const lifecycle = await runtime.runPromise(RenditionJobLifecycle);
 
   return {
-    lifecycle: new PostgresRenditionJobLifecycle(pool),
-    pool,
-    close: () => pool.end(),
+    lifecycle,
+    pool: {
+      query: (statement, params) =>
+        runtime.runPromise(
+          Effect.gen(function* () {
+            const sql = yield* PgClient.PgClient;
+            return (yield* sql.unsafe(statement, params).raw) as RawQueryResult<never>;
+          }),
+        ),
+    },
+    close: () => runtime.dispose(),
   };
 }

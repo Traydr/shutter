@@ -4,11 +4,11 @@
     "composite": true,
     "lib": ["ES2022", "DOM", "ESNext.Disposable"],
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "skipLibCheck": true,
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "migrations/**/*.ts"],
   "exclude": ["src/**/*.test.ts"]
 }

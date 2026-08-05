@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { PgClient } from "@effect/sql-pg";
 import type {
   JobFailureCode,
   JobStatus,
@@ -6,7 +7,8 @@ import type {
   RenditionKind,
 } from "@shutter/protocol";
 import { createFailedJobRepresentation } from "@shutter/protocol/jobs";
-import type { Pool, PoolClient, QueryResultRow } from "pg";
+import { Context, Effect, Layer } from "effect";
+import { ConnectionError, SqlError } from "effect/unstable/sql/SqlError";
 
 export const MAX_ATTEMPTS = 5;
 export const RETRY_DELAYS_SECONDS = [60, 300, 1_800, 7_200] as const;
@@ -87,32 +89,42 @@ export interface MaintenanceResult {
   runnableKinds: readonly RenditionKind[];
 }
 
-export interface RenditionJobLifecycle {
-  submit(input: SubmitJobInput, now: Date): Promise<SubmissionResult>;
-  read(identity: JobIdentity): Promise<RenditionJobView | undefined>;
-  claim(kind: RenditionKind, now: Date): Promise<ClaimedJob | undefined>;
+export interface RenditionJobLifecycleShape {
+  submit(input: SubmitJobInput, now: Date): Effect.Effect<SubmissionResult, SqlError>;
+  read(identity: JobIdentity): Effect.Effect<RenditionJobView | undefined, SqlError>;
+  claim(kind: RenditionKind, now: Date): Effect.Effect<ClaimedJob | undefined, SqlError>;
   heartbeat(
     identity: JobIdentity,
     processingToken: string,
     now: Date,
-  ): Promise<AttemptMutationResult>;
+  ): Effect.Effect<AttemptMutationResult, SqlError>;
   complete(
     identity: JobIdentity,
     processingToken: string,
     completion: MasterCompletion,
     now: Date,
-  ): Promise<AttemptMutationResult>;
+  ): Effect.Effect<AttemptMutationResult, SqlError>;
   fail(
     identity: JobIdentity,
     processingToken: string,
     failure: { retryable: boolean; code?: JobFailureCode },
     now: Date,
-  ): Promise<FailureResult>;
-  maintain(now: Date, limit: number): Promise<MaintenanceResult>;
-  withInvalidatedSource<T>(
+  ): Effect.Effect<FailureResult, SqlError>;
+  maintain(now: Date, limit: number): Effect.Effect<MaintenanceResult, SqlError>;
+  withInvalidatedSource<A, E, R>(
     source: SourceIdentity,
-    whileExclusive: () => Promise<T>,
-  ): Promise<{ invalidatedJobs: number; value: T }>;
+    whileExclusive: Effect.Effect<A, E, R>,
+  ): Effect.Effect<{ invalidatedJobs: number; value: A }, SqlError | E, R>;
+}
+
+export class RenditionJobLifecycle extends Context.Service<
+  RenditionJobLifecycle,
+  RenditionJobLifecycleShape
+>()("@shutter/control/RenditionJobLifecycle") {
+  static readonly layer = Layer.effect(
+    RenditionJobLifecycle,
+    Effect.map(PgClient.PgClient, makeRenditionJobLifecycle),
+  );
 }
 
 function jobRepresentation(record: JobRecord): RenditionJobRepresentation {
@@ -153,7 +165,7 @@ function jobView(record: JobRecord): RenditionJobView {
   };
 }
 
-interface JobRow extends QueryResultRow {
+interface JobRow {
   space_id: string;
   source_id: string;
   kind: RenditionKind;
@@ -172,6 +184,10 @@ interface JobRow extends QueryResultRow {
   master_format: "webp" | null;
   object_etag: string | null;
   failure_code: JobFailureCode | null;
+}
+
+interface RawQueryResult {
+  readonly rowCount: number | null;
 }
 
 function fromRow(row: JobRow): JobRecord {
@@ -197,29 +213,14 @@ function fromRow(row: JobRow): JobRecord {
   };
 }
 
-async function transaction<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-    const result = await work(client);
-    await client.query("commit");
-    return result;
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
 function retryDeadline(input: SubmitJobInput, now: Date): Date {
   return new Date(
     Math.min(input.capabilityExpiresAt.getTime(), now.getTime() + JOB_RETRY_WINDOW_SECONDS * 1_000),
   );
 }
 
-async function lockSource(client: PoolClient, spaceId: string, sourceId: string): Promise<void> {
-  await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [
+function lockSource(sql: PgClient.PgClient, spaceId: string, sourceId: string) {
+  return sql.unsafe(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [
     postgresSourceLockKey(spaceId, sourceId),
   ]);
 }
@@ -228,76 +229,79 @@ export function postgresSourceLockKey(spaceId: string, sourceId: string): string
   return JSON.stringify([spaceId, sourceId]);
 }
 
-export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
-  readonly #pool: Pool;
-
-  constructor(pool: Pool) {
-    this.#pool = pool;
-  }
-
-  async submit(input: SubmitJobInput, now: Date): Promise<SubmissionResult> {
-    return transaction(this.#pool, async (client) => {
-      await lockSource(client, input.spaceId, input.sourceId);
-      const deadline = retryDeadline(input, now);
-      const inserted = await client.query<JobRow>(
-        `insert into rendition_jobs
+export function makeRenditionJobLifecycle(sql: PgClient.PgClient): RenditionJobLifecycleShape {
+  return RenditionJobLifecycle.of({
+    submit(input, now) {
+      return sql.withTransaction(
+        Effect.gen(function* () {
+          yield* lockSource(sql, input.spaceId, input.sourceId);
+          const deadline = retryDeadline(input, now);
+          const inserted = yield* sql.unsafe<JobRow>(
+            `insert into rendition_jobs
           (space_id, source_id, kind, status, source_capability, retry_deadline_at, next_attempt_at, updated_at)
          values ($1, $2, $3, 'pending', $4, $5, $6, $6)
          on conflict do nothing returning *`,
-        [input.spaceId, input.sourceId, input.kind, input.sourceCapability, deadline, now],
-      );
-      if (inserted.rows[0] !== undefined) {
-        return { disposition: "created", job: jobView(fromRow(inserted.rows[0])) };
-      }
+            [input.spaceId, input.sourceId, input.kind, input.sourceCapability, deadline, now],
+          );
+          if (inserted[0] !== undefined) {
+            return { disposition: "created", job: jobView(fromRow(inserted[0])) } as const;
+          }
 
-      const existing = await client.query<JobRow>(
-        `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3 for update`,
-        [input.spaceId, input.sourceId, input.kind],
-      );
-      const current = existing.rows[0];
-      if (current === undefined) throw new Error("job disappeared during submission");
-      if (
-        current.status !== "failed" ||
-        (current.failure_code !== "source_expired" && current.failure_code !== "attempts_exhausted")
-      ) {
-        return { disposition: "existing", job: jobView(fromRow(current)) };
-      }
-      const reactivated = await client.query<JobRow>(
-        `update rendition_jobs set
+          const existing = yield* sql.unsafe<JobRow>(
+            `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3 for update`,
+            [input.spaceId, input.sourceId, input.kind],
+          );
+          const current = existing[0];
+          if (current === undefined) {
+            return yield* Effect.die(new Error("job disappeared during submission"));
+          }
+          if (
+            current.status !== "failed" ||
+            (current.failure_code !== "source_expired" &&
+              current.failure_code !== "attempts_exhausted")
+          ) {
+            return { disposition: "existing", job: jobView(fromRow(current)) } as const;
+          }
+          const reactivated = yield* sql.unsafe<JobRow>(
+            `update rendition_jobs set
           status = 'pending', source_capability = $4, execution_cycle = execution_cycle + 1,
           attempt_number = 0, retry_deadline_at = $5, next_attempt_at = $6,
           processing_token = null, lease_expires_at = null, heartbeat_at = null,
           failure_code = null, updated_at = $6
          where space_id = $1 and source_id = $2 and kind = $3 returning *`,
-        [input.spaceId, input.sourceId, input.kind, input.sourceCapability, deadline, now],
+            [input.spaceId, input.sourceId, input.kind, input.sourceCapability, deadline, now],
+          );
+          return {
+            disposition: "reactivated",
+            job: jobView(fromRow(reactivated[0] as JobRow)),
+          } as const;
+        }),
       );
-      return {
-        disposition: "reactivated",
-        job: jobView(fromRow(reactivated.rows[0] as JobRow)),
-      };
-    });
-  }
+    },
 
-  async read(identity: JobIdentity): Promise<RenditionJobView | undefined> {
-    const result = await this.#pool.query<JobRow>(
-      `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3`,
-      [identity.spaceId, identity.sourceId, identity.kind],
-    );
-    return result.rows[0] === undefined ? undefined : jobView(fromRow(result.rows[0]));
-  }
+    read(identity) {
+      return Effect.map(
+        sql.unsafe<JobRow>(
+          `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3`,
+          [identity.spaceId, identity.sourceId, identity.kind],
+        ),
+        (result) => (result[0] === undefined ? undefined : jobView(fromRow(result[0]))),
+      );
+    },
 
-  async claim(kind: RenditionKind, now: Date): Promise<ClaimedJob | undefined> {
-    const token = randomUUID();
-    const lease = new Date(now.getTime() + PROCESSING_LEASE_SECONDS * 1_000);
-    return transaction(this.#pool, async (client) => {
-      await client.query(
-        `update rendition_jobs set status = 'failed', source_capability = null,
+    claim(kind, now) {
+      const token = randomUUID();
+      const lease = new Date(now.getTime() + PROCESSING_LEASE_SECONDS * 1_000);
+      return sql.withTransaction(
+        Effect.gen(function* () {
+          yield* sql.unsafe(
+            `update rendition_jobs set status = 'failed', source_capability = null,
           failure_code = 'source_expired', next_attempt_at = null, updated_at = $1
          where status = 'pending' and retry_deadline_at <= $1`,
-        [now],
-      );
-      const result = await client.query<JobRow>(
-        `with candidate as (
+            [now],
+          );
+          const result = yield* sql.unsafe<JobRow>(
+            `with candidate as (
           select space_id, source_id, kind from rendition_jobs
           where kind = $1 and status = 'pending' and retry_deadline_at > $2
             and (next_attempt_at is null or next_attempt_at <= $2)
@@ -310,177 +314,196 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
         where jobs.space_id = candidate.space_id and jobs.source_id = candidate.source_id
           and jobs.kind = candidate.kind
         returning jobs.*`,
-        [kind, now, token, lease],
+            [kind, now, token, lease],
+          );
+          const row = result[0];
+          if (row === undefined || row.source_capability === null) return undefined;
+          return {
+            spaceId: row.space_id,
+            sourceId: row.source_id,
+            kind: row.kind,
+            sourceCapability: row.source_capability,
+            processingToken: token,
+            executionCycle: row.execution_cycle,
+            attemptNumber: row.attempt_number,
+          };
+        }),
       );
-      const row = result.rows[0];
-      if (row === undefined || row.source_capability === null) return undefined;
-      return {
-        spaceId: row.space_id,
-        sourceId: row.source_id,
-        kind: row.kind,
-        sourceCapability: row.source_capability,
-        processingToken: token,
-        executionCycle: row.execution_cycle,
-        attemptNumber: row.attempt_number,
-      };
-    });
-  }
+    },
 
-  async heartbeat(
-    identity: JobIdentity,
-    processingToken: string,
-    now: Date,
-  ): Promise<AttemptMutationResult> {
-    const lease = new Date(now.getTime() + PROCESSING_LEASE_SECONDS * 1_000);
-    const result = await this.#pool.query(
-      `update rendition_jobs set heartbeat_at = $5, lease_expires_at = $6, updated_at = $5
+    heartbeat(identity, processingToken, now) {
+      const lease = new Date(now.getTime() + PROCESSING_LEASE_SECONDS * 1_000);
+      return Effect.map(
+        sql.unsafe(
+          `update rendition_jobs set heartbeat_at = $5, lease_expires_at = $6, updated_at = $5
        where space_id = $1 and source_id = $2 and kind = $3
          and status = 'processing' and processing_token = $4`,
-      [identity.spaceId, identity.sourceId, identity.kind, processingToken, now, lease],
-    );
-    return { outcome: result.rowCount === 1 ? "accepted" : "stale_attempt" };
-  }
+          [identity.spaceId, identity.sourceId, identity.kind, processingToken, now, lease],
+        ).raw,
+        (result) => ({
+          outcome: (result as RawQueryResult).rowCount === 1 ? "accepted" : "stale_attempt",
+        }),
+      );
+    },
 
-  async complete(
-    identity: JobIdentity,
-    processingToken: string,
-    completion: MasterCompletion,
-    now: Date,
-  ): Promise<AttemptMutationResult> {
-    return transaction(this.#pool, async (client) => {
-      await lockSource(client, identity.spaceId, identity.sourceId);
-      const result = await client.query(
-        `update rendition_jobs set status = 'ready', source_capability = null,
+    complete(identity, processingToken, completion, now) {
+      return sql.withTransaction(
+        Effect.gen(function* () {
+          yield* lockSource(sql, identity.spaceId, identity.sourceId);
+          const result = (yield* sql.unsafe(
+            `update rendition_jobs set status = 'ready', source_capability = null,
         processing_token = null, lease_expires_at = null, heartbeat_at = null,
         master_key = $5, master_width = $6, master_height = $7, master_format = $8,
         object_etag = $9, failure_code = null, updated_at = $10
        where space_id = $1 and source_id = $2 and kind = $3
          and status = 'processing' and processing_token = $4`,
-        [
-          identity.spaceId,
-          identity.sourceId,
-          identity.kind,
-          processingToken,
-          completion.masterKey,
-          completion.width,
-          completion.height,
-          completion.format,
-          completion.objectEtag,
-          now,
-        ],
+            [
+              identity.spaceId,
+              identity.sourceId,
+              identity.kind,
+              processingToken,
+              completion.masterKey,
+              completion.width,
+              completion.height,
+              completion.format,
+              completion.objectEtag,
+              now,
+            ],
+          ).raw) as RawQueryResult;
+          return { outcome: result.rowCount === 1 ? "accepted" : "stale_attempt" } as const;
+        }),
       );
-      return { outcome: result.rowCount === 1 ? "accepted" : "stale_attempt" };
-    });
-  }
+    },
 
-  async fail(
-    identity: JobIdentity,
-    processingToken: string,
-    failure: { retryable: boolean; code?: JobFailureCode },
-    now: Date,
-  ): Promise<FailureResult> {
-    return transaction(this.#pool, async (client) => {
-      const selected = await client.query<JobRow>(
-        `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3
+    fail(identity, processingToken, failure, now) {
+      return sql.withTransaction(
+        Effect.gen(function* () {
+          const selected = yield* sql.unsafe<JobRow>(
+            `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3
           and status = 'processing' and processing_token = $4 for update`,
-        [identity.spaceId, identity.sourceId, identity.kind, processingToken],
-      );
-      const row = selected.rows[0];
-      if (row === undefined) return { outcome: "stale_attempt" };
-      const delay = RETRY_DELAYS_SECONDS[row.attempt_number - 1];
-      if (failure.retryable && delay !== undefined && row.retry_deadline_at > now) {
-        const nextAttempt = new Date(now.getTime() + delay * 1_000);
-        if (nextAttempt < row.retry_deadline_at) {
-          await client.query(
-            `update rendition_jobs set status = 'pending', processing_token = null,
+            [identity.spaceId, identity.sourceId, identity.kind, processingToken],
+          );
+          const row = selected[0];
+          if (row === undefined) return { outcome: "stale_attempt" } as const;
+          const delay = RETRY_DELAYS_SECONDS[row.attempt_number - 1];
+          if (failure.retryable && delay !== undefined && row.retry_deadline_at > now) {
+            const nextAttempt = new Date(now.getTime() + delay * 1_000);
+            if (nextAttempt < row.retry_deadline_at) {
+              yield* sql.unsafe(
+                `update rendition_jobs set status = 'pending', processing_token = null,
               lease_expires_at = null, heartbeat_at = null, next_attempt_at = $5, updated_at = $6
              where space_id = $1 and source_id = $2 and kind = $3 and processing_token = $4`,
-            [identity.spaceId, identity.sourceId, identity.kind, processingToken, nextAttempt, now],
-          );
-          return { outcome: "retry_scheduled" };
-        }
-      }
-      const code = failure.retryable
-        ? "attempts_exhausted"
-        : (failure.code ?? "internal_invariant");
-      await client.query(
-        `update rendition_jobs set status = 'failed', source_capability = null,
+                [
+                  identity.spaceId,
+                  identity.sourceId,
+                  identity.kind,
+                  processingToken,
+                  nextAttempt,
+                  now,
+                ],
+              );
+              return { outcome: "retry_scheduled" } as const;
+            }
+          }
+          const code = failure.retryable
+            ? "attempts_exhausted"
+            : (failure.code ?? "internal_invariant");
+          yield* sql.unsafe(
+            `update rendition_jobs set status = 'failed', source_capability = null,
           processing_token = null, lease_expires_at = null, heartbeat_at = null,
           next_attempt_at = null, failure_code = $5, updated_at = $6
          where space_id = $1 and source_id = $2 and kind = $3 and processing_token = $4`,
-        [identity.spaceId, identity.sourceId, identity.kind, processingToken, code, now],
+            [identity.spaceId, identity.sourceId, identity.kind, processingToken, code, now],
+          );
+          return { outcome: "terminal" } as const;
+        }),
       );
-      return { outcome: "terminal" };
-    });
-  }
+    },
 
-  async maintain(now: Date, limit: number): Promise<MaintenanceResult> {
-    return transaction(this.#pool, async (client) => {
-      const expired = await client.query(
-        `update rendition_jobs set status = 'failed', source_capability = null,
+    maintain(now, limit) {
+      return sql.withTransaction(
+        Effect.gen(function* () {
+          const expired = (yield* sql.unsafe(
+            `update rendition_jobs set status = 'failed', source_capability = null,
           next_attempt_at = null, failure_code = 'source_expired', updated_at = $1
          where status = 'pending' and retry_deadline_at <= $1`,
-        [now],
-      );
-      const recovered = await client.query(
-        `update rendition_jobs set status = case when attempt_number >= $2 then 'failed' else 'pending' end,
+            [now],
+          ).raw) as RawQueryResult;
+          const recovered = (yield* sql.unsafe(
+            `update rendition_jobs set status = case when attempt_number >= $2 then 'failed' else 'pending' end,
           source_capability = case when attempt_number >= $2 then null else source_capability end,
           processing_token = null, lease_expires_at = null, heartbeat_at = null,
           next_attempt_at = case when attempt_number >= $2 then null else $1 end,
           failure_code = case when attempt_number >= $2 then 'attempts_exhausted' else null end,
           updated_at = $1
          where status = 'processing' and lease_expires_at <= $1`,
-        [now, MAX_ATTEMPTS],
-      );
-      const runnable = await client.query<Pick<JobRow, "kind">>(
-        `select kind from rendition_jobs
+            [now, MAX_ATTEMPTS],
+          ).raw) as RawQueryResult;
+          const runnable = yield* sql.unsafe<Pick<JobRow, "kind">>(
+            `select kind from rendition_jobs
          where status = 'pending' and retry_deadline_at > $1
            and (next_attempt_at is null or next_attempt_at <= $1)
          order by retry_deadline_at, created_at
          limit $2`,
-        [now, limit],
+            [now, limit],
+          );
+          return {
+            expiredPendingJobs: expired.rowCount ?? 0,
+            recoveredLeases: recovered.rowCount ?? 0,
+            runnableKinds: runnable.map((row) => row.kind),
+          };
+        }),
       );
-      return {
-        expiredPendingJobs: expired.rowCount ?? 0,
-        recoveredLeases: recovered.rowCount ?? 0,
-        runnableKinds: runnable.rows.map((row) => row.kind),
-      };
-    });
-  }
+    },
 
-  async withInvalidatedSource<T>(
-    source: SourceIdentity,
-    whileExclusive: () => Promise<T>,
-  ): Promise<{ invalidatedJobs: number; value: T }> {
-    const client = await this.#pool.connect();
-    const lockKey = postgresSourceLockKey(source.spaceId, source.sourceId);
-    let locked = false;
-    try {
-      await client.query(`select pg_advisory_lock(hashtextextended($1, 0))`, [lockKey]);
-      locked = true;
-      await client.query("begin");
-      let invalidatedJobs: number;
-      try {
-        const deleted = await client.query(
-          `delete from rendition_jobs where space_id = $1 and source_id = $2`,
-          [source.spaceId, source.sourceId],
-        );
-        invalidatedJobs = deleted.rowCount ?? 0;
-        await client.query("commit");
-      } catch (error) {
-        await client.query("rollback");
-        throw error;
-      }
-      const value = await whileExclusive();
-      return { invalidatedJobs, value };
-    } finally {
-      try {
-        if (locked) {
-          await client.query(`select pg_advisory_unlock(hashtextextended($1, 0))`, [lockKey]);
-        }
-      } finally {
-        client.release();
-      }
-    }
-  }
+    withInvalidatedSource(source, whileExclusive) {
+      const lockKey = postgresSourceLockKey(source.spaceId, source.sourceId);
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const connection = yield* sql.reserve;
+          yield* Effect.acquireRelease(
+            connection.executeRaw(`select pg_advisory_lock(hashtextextended($1, 0))`, [lockKey]),
+            () =>
+              connection
+                .executeRaw(`select pg_advisory_unlock(hashtextextended($1, 0))`, [lockKey])
+                .pipe(Effect.orDie),
+          );
+          const invalidatedJobs = yield* sql.withTransaction(
+            Effect.map(
+              sql.unsafe(`delete from rendition_jobs where space_id = $1 and source_id = $2`, [
+                source.spaceId,
+                source.sourceId,
+              ]).raw,
+              (result) => (result as RawQueryResult).rowCount ?? 0,
+            ),
+          );
+          const value = yield* whileExclusive;
+          return { invalidatedJobs, value };
+        }),
+      );
+    },
+  });
+}
+
+export function unavailableRenditionJobLifecycle(): RenditionJobLifecycleShape {
+  const unavailable = () =>
+    Effect.fail(
+      new SqlError({
+        reason: new ConnectionError({
+          cause: new Error("DATABASE_URL is not configured"),
+          message: "Control database is not configured",
+          operation: "connect",
+        }),
+      }),
+    );
+  return RenditionJobLifecycle.of({
+    submit: unavailable,
+    read: unavailable,
+    claim: unavailable,
+    heartbeat: unavailable,
+    complete: unavailable,
+    fail: unavailable,
+    maintain: unavailable,
+    withInvalidatedSource: unavailable,
+  }) as RenditionJobLifecycleShape;
 }

@@ -1,32 +1,35 @@
+import { Effect } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ControlLogger } from "./logging.js";
+import type { ControlLoggerShape } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import { runRecoverySweep } from "./recovery.js";
-import type { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
+import type { RenditionJobLifecycleShape } from "./rendition-job-lifecycle.js";
 
 const start = new Date("2026-07-12T00:00:00Z");
-const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
+const NOOP_LOGGER: ControlLoggerShape = { emit: () => Effect.void };
 
 async function submit(
-  lifecycle: PostgresRenditionJobLifecycle,
+  lifecycle: RenditionJobLifecycleShape,
   sourceId: string,
   kind: "video" | "pdf",
 ) {
-  await lifecycle.submit(
-    {
-      spaceId: "pane-view",
-      sourceId,
-      kind,
-      sourceCapability: "opaque-capability",
-      capabilityExpiresAt: new Date(start.getTime() + 86_400_000),
-    },
-    start,
+  await Effect.runPromise(
+    lifecycle.submit(
+      {
+        spaceId: "pane-view",
+        sourceId,
+        kind,
+        sourceCapability: "opaque-capability",
+        capabilityExpiresAt: new Date(start.getTime() + 86_400_000),
+      },
+      start,
+    ),
   );
 }
 
 describe("job recovery sweep", () => {
   let test: PostgresTestLifecycle;
-  let lifecycle: PostgresRenditionJobLifecycle;
+  let lifecycle: RenditionJobLifecycleShape;
 
   beforeAll(async () => {
     test = await createPostgresTestLifecycle();
@@ -43,14 +46,11 @@ describe("job recovery sweep", () => {
     await submit(lifecycle, "video-1", "video");
     await submit(lifecycle, "video-2", "video");
     await submit(lifecycle, "pdf-1", "pdf");
-    const dispatch = vi.fn(async () => {});
+    const dispatch = vi.fn(() => Effect.void);
 
-    const result = await runRecoverySweep({
-      logger: NOOP_LOGGER,
-      lifecycle,
-      now: () => start,
-      dispatch,
-    });
+    const result = await Effect.runPromise(
+      runRecoverySweep({ logger: NOOP_LOGGER, lifecycle, now: () => start, dispatch }),
+    );
 
     expect(result).toEqual({
       expiredPendingJobs: 0,
@@ -64,19 +64,14 @@ describe("job recovery sweep", () => {
 
   it("recovers expired leases before redispatch and contains dispatch failure", async () => {
     await submit(lifecycle, "video-1", "video");
-    await lifecycle.claim("video", start);
+    await Effect.runPromise(lifecycle.claim("video", start));
     const afterLease = new Date(start.getTime() + 16 * 60 * 1_000);
-    const dispatch = vi.fn(async () => {
-      throw new Error("executor unavailable");
-    });
-    const emit = vi.fn<ControlLogger["emit"]>();
+    const dispatch = vi.fn(() => Effect.fail({ reason: "executor unavailable" } as never));
+    const emit = vi.fn<ControlLoggerShape["emit"]>(() => Effect.void);
 
-    const result = await runRecoverySweep({
-      logger: { emit, async shutdown() {} },
-      lifecycle,
-      now: () => afterLease,
-      dispatch,
-    });
+    const result = await Effect.runPromise(
+      runRecoverySweep({ logger: { emit }, lifecycle, now: () => afterLease, dispatch }),
+    );
 
     expect(result).toEqual({
       expiredPendingJobs: 0,
@@ -85,7 +80,9 @@ describe("job recovery sweep", () => {
       dispatchFailures: 1,
     });
     expect(
-      await lifecycle.read({ spaceId: "pane-view", sourceId: "video-1", kind: "video" }),
+      await Effect.runPromise(
+        lifecycle.read({ spaceId: "pane-view", sourceId: "video-1", kind: "video" }),
+      ),
     ).toMatchObject({ status: "pending" });
     expect(emit).toHaveBeenCalledWith(
       "error",

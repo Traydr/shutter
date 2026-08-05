@@ -4,8 +4,6 @@ import {
   CONTROL_HTTP_ROUTES,
   type ExecutorCompleteRequest,
   type ExecutorFailRequest,
-  type ExecutorHeartbeatRequest,
-  isProtocolError,
   operationalEvent,
   type RenditionJobRepresentation,
   type RenditionKind,
@@ -19,32 +17,28 @@ import {
   parsePreviewJobSubmission,
 } from "@shutter/protocol/jobs";
 import { getSpacePolicy } from "@shutter/space-config";
-import { Effect } from "effect";
-import { Hono } from "hono";
-import { type ControlLogger, operationalErrorType } from "./logging.js";
+import { Cause, Effect } from "effect";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import type { ExecutorDispatchShape } from "./executor-dispatch.js";
+import { type ControlLoggerShape, operationalErrorType } from "./logging.js";
 import type {
   JobIdentity,
   MasterCompletion,
-  RenditionJobLifecycle,
+  RenditionJobLifecycleShape,
 } from "./rendition-job-lifecycle.js";
-import type { SourcePurge } from "./source-purge.js";
+import type { SourcePurgeShape } from "./source-purge.js";
 
 type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
 
-function runProtocolEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
-  // TODO(effect-phase-2): Remove this adapter when Control runs Effect natively.
-  return Effect.runPromise(effect);
-}
-
 export interface JobApiRuntime {
-  logger: ControlLogger;
-  lifecycle: RenditionJobLifecycle;
+  logger: ControlLoggerShape;
+  lifecycle: RenditionJobLifecycleShape;
   now(): Date;
   spaceApiTokens(): ReadonlyMap<string, readonly string[]>;
   capabilityKeys(): KeyRegistry;
   executorToken(kind: RenditionKind): string | undefined;
-  dispatch(kind: RenditionKind): Promise<void>;
-  sourcePurge?: SourcePurge;
+  dispatch: ExecutorDispatchShape["dispatch"];
+  sourcePurge?: SourcePurgeShape;
 }
 
 function digest(value: string): Uint8Array {
@@ -63,20 +57,18 @@ function tokenMatches(actual: string | undefined, expected: readonly string[]): 
   });
 }
 
-function kind(value: string): RenditionKind | undefined {
+function kind(value: string | undefined): RenditionKind | undefined {
   return value === "video" || value === "pdf" ? value : undefined;
 }
 
-function identityFromRoute(context: {
-  req: { param(name: string): string };
-}): JobIdentity | undefined {
-  const parsedKind = kind(context.req.param("kind"));
-  if (parsedKind === undefined) return undefined;
-  return {
-    spaceId: context.req.param("spaceId"),
-    sourceId: context.req.param("sourceId"),
-    kind: parsedKind,
-  };
+function identityFromRoute(
+  params: Readonly<Record<string, string | undefined>>,
+): JobIdentity | undefined {
+  const parsedKind = kind(params.kind);
+  const spaceId = params.spaceId;
+  const sourceId = params.sourceId;
+  if (parsedKind === undefined || spaceId === undefined || sourceId === undefined) return undefined;
+  return { spaceId, sourceId, kind: parsedKind };
 }
 
 function authorizedSpace(
@@ -87,237 +79,272 @@ function authorizedSpace(
   return tokenMatches(bearer(authorization), runtime.spaceApiTokens().get(spaceId) ?? []);
 }
 
-function activeResponse(body: RenditionJobRepresentation, location: string): Response {
+function activeResponse(body: RenditionJobRepresentation, location: string) {
   const active = body.status === "pending" || body.status === "processing";
-  return Response.json(body, {
+  return HttpServerResponse.jsonUnsafe(body, {
     status: active ? 202 : 200,
     ...(active ? { headers: { location, "retry-after": "5" } } : {}),
   });
 }
 
-function requestFailure(status: number, code: string): Response {
-  return Response.json(
+function requestFailure(status: number, code: string) {
+  return HttpServerResponse.jsonUnsafe(
     { error: { code } },
     { status, headers: { "cache-control": "private, no-store" } },
   );
 }
 
-async function strictJson(request: Request): Promise<unknown> {
-  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
-    throw new SubmissionError({
-      code: "submission_invalid",
-      message: "request must use application/json",
-    });
-  }
-  return request.json();
+function strictJson(request: HttpServerRequest.HttpServerRequest) {
+  return Effect.gen(function* () {
+    if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
+      return yield* new SubmissionError({
+        code: "submission_invalid",
+        message: "request must use application/json",
+      });
+    }
+    return yield* request.json.pipe(
+      Effect.mapError(
+        () =>
+          new SubmissionError({
+            code: "request_invalid",
+            message: "request body must be valid JSON",
+          }),
+      ),
+    );
+  });
 }
 
-export function createJobApi(runtime: JobApiRuntime): Hono {
-  const api = new Hono();
+function safeJobHandler<E, R>(
+  runtime: JobApiRuntime,
+  effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>,
+) {
+  return effect.pipe(
+    Effect.catchCause((cause) =>
+      runtime.logger
+        .emit("error", {
+          event: "control.service.failed",
+          outcome: "failed",
+          failureCode: "service_unavailable",
+          errorType: operationalErrorType(Cause.squash(cause)),
+        })
+        .pipe(Effect.as(requestFailure(503, "service_unavailable"))),
+    ),
+  );
+}
 
-  api.post(CONTROL_HTTP_ROUTES.sourcePurge, async (context) => {
-    const spaceId = context.req.param("spaceId");
-    const sourceId = context.req.param("sourceId");
-    if (getSpacePolicy(spaceId) === undefined) return requestFailure(404, "not_found");
-    if (!authorizedSpace(runtime, spaceId, context.req.header("authorization"))) {
+export function createJobRoutes(runtime: JobApiRuntime) {
+  const sourcePurge = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const params = yield* HttpRouter.params;
+    const spaceId = params.spaceId;
+    const sourceId = params.sourceId;
+    if (spaceId === undefined || sourceId === undefined || getSpacePolicy(spaceId) === undefined) {
+      return requestFailure(404, "not_found");
+    }
+    if (!authorizedSpace(runtime, spaceId, request.headers.authorization)) {
       return requestFailure(401, "unauthorized");
     }
-    const sourcePurge = runtime.sourcePurge;
-    if (sourcePurge === undefined) return requestFailure(503, "service_unavailable");
-    try {
-      await sourcePurge.purge({ spaceId, sourceId });
-      return new Response(null, { status: 204 });
-    } catch {
-      return requestFailure(503, "service_unavailable");
-    }
+    if (runtime.sourcePurge === undefined) return requestFailure(503, "service_unavailable");
+    return yield* runtime.sourcePurge.purge({ spaceId, sourceId }).pipe(
+      Effect.as(HttpServerResponse.empty()),
+      Effect.catch(() => Effect.succeed(requestFailure(503, "service_unavailable"))),
+    );
   });
 
-  api.put(CONTROL_HTTP_ROUTES.previewJob, async (context) => {
-    const identity = identityFromRoute(context);
+  const submit = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const params = yield* HttpRouter.params;
+    const identity = identityFromRoute(params);
     if (identity === undefined) return requestFailure(404, "not_found");
     const policy = getSpacePolicy(identity.spaceId);
     if (policy === undefined) return requestFailure(404, "not_found");
-    if (!authorizedSpace(runtime, identity.spaceId, context.req.header("authorization"))) {
+    if (!authorizedSpace(runtime, identity.spaceId, request.headers.authorization)) {
       return requestFailure(401, "unauthorized");
     }
-    try {
-      const submission = await runProtocolEffect(
-        parsePreviewJobSubmission(await strictJson(context.req.raw)),
+
+    const parsed = yield* Effect.gen(function* () {
+      const submission = yield* strictJson(request).pipe(
+        Effect.flatMap((body) => parsePreviewJobSubmission(body)),
       );
       const now = runtime.now();
-      const claims = await runProtocolEffect(
-        verifySourceCapability(submission.sourceCapability, {
-          spaceId: identity.spaceId,
-          expectedPurpose: "preview_job",
-          expectedSourceId: identity.sourceId,
-          expectedKind: identity.kind,
-          keys: runtime.capabilityKeys().get(identity.spaceId) ?? new Map(),
-          now: Math.floor(now.getTime() / 1_000),
-          allowedSourceOrigins: policy.allowedSourceOrigins,
-        }),
-      );
-      const submissionResult = await runtime.lifecycle.submit(
-        {
-          ...identity,
-          sourceCapability: submission.sourceCapability,
-          capabilityExpiresAt: new Date(claims.exp * 1_000),
-        },
-        now,
-      );
-      const record = submissionResult.job;
-      runtime.logger.emit(
-        "info",
-        await runProtocolEffect(
+      const claims = yield* verifySourceCapability(submission.sourceCapability, {
+        spaceId: identity.spaceId,
+        expectedPurpose: "preview_job",
+        expectedSourceId: identity.sourceId,
+        expectedKind: identity.kind,
+        keys: runtime.capabilityKeys().get(identity.spaceId) ?? new Map(),
+        now: Math.floor(now.getTime() / 1_000),
+        allowedSourceOrigins: policy.allowedSourceOrigins,
+      });
+      return { submission, now, claims };
+    }).pipe(
+      Effect.map((value) => ({ _tag: "Success" as const, value })),
+      Effect.catch((error) => Effect.succeed({ _tag: "Failure" as const, error })),
+    );
+    if (parsed._tag === "Failure") return requestFailure(400, parsed.error.code);
+
+    const { submission, now, claims } = parsed.value;
+    const submissionResult = yield* runtime.lifecycle.submit(
+      {
+        ...identity,
+        sourceCapability: submission.sourceCapability,
+        capabilityExpiresAt: new Date(claims.exp * 1_000),
+      },
+      now,
+    );
+    const record = submissionResult.job;
+    const event = yield* operationalEvent({
+      event: "control.job.submitted",
+      spaceId: record.spaceId,
+      sourceId: record.sourceId,
+      fields: {
+        kind: record.kind,
+        executionCycle: record.executionCycle,
+        attemptNumber: record.attemptNumber,
+        outcome: "accepted",
+      },
+    });
+    yield* runtime.logger.emit("info", event);
+    if (record.status === "pending") {
+      const dispatch = runtime.dispatch(record.kind).pipe(
+        Effect.tapCause(() =>
           operationalEvent({
-            event: "control.job.submitted",
+            event: "control.dispatch.failed",
             spaceId: record.spaceId,
             sourceId: record.sourceId,
             fields: {
               kind: record.kind,
-              executionCycle: record.executionCycle,
-              attemptNumber: record.attemptNumber,
-              outcome: "accepted",
+              outcome: "failed",
+              failureCode: "service_unavailable",
             },
-          }),
+          }).pipe(Effect.flatMap((failureEvent) => runtime.logger.emit("error", failureEvent))),
         ),
       );
-      if (record.status === "pending") {
-        void runtime.dispatch(record.kind).catch(() => {
-          void runProtocolEffect(
-            operationalEvent({
-              event: "control.dispatch.failed",
-              spaceId: record.spaceId,
-              sourceId: record.sourceId,
-              fields: { kind: record.kind, outcome: "failed", failureCode: "service_unavailable" },
-            }),
-          ).then((event) => runtime.logger.emit("error", event));
-        });
-      }
-      return activeResponse(record.representation, new URL(context.req.url).pathname);
-    } catch (error) {
-      if (isProtocolError(error)) return requestFailure(400, error.code);
-      runtime.logger.emit("error", {
-        event: "control.service.failed",
-        outcome: "failed",
-        failureCode: "service_unavailable",
-        errorType: operationalErrorType(error),
-      });
-      return requestFailure(503, "service_unavailable");
+      yield* Effect.forkDetach(dispatch);
     }
+    return activeResponse(record.representation, new URL(request.originalUrl).pathname);
   });
 
-  api.get(CONTROL_HTTP_ROUTES.previewJob, async (context) => {
-    const identity = identityFromRoute(context);
+  const read = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const params = yield* HttpRouter.params;
+    const identity = identityFromRoute(params);
     if (identity === undefined) return requestFailure(404, "not_found");
-    if (!authorizedSpace(runtime, identity.spaceId, context.req.header("authorization"))) {
+    if (!authorizedSpace(runtime, identity.spaceId, request.headers.authorization)) {
       return requestFailure(401, "unauthorized");
     }
-    const record = await runtime.lifecycle.read(identity);
+    const record = yield* runtime.lifecycle.read(identity);
     if (record === undefined) return requestFailure(404, "not_found");
-    return activeResponse(record.representation, new URL(context.req.url).pathname);
+    return activeResponse(record.representation, new URL(request.originalUrl).pathname);
   });
 
-  api.post(CONTROL_HTTP_ROUTES.executorClaim, async (context) => {
-    const parsedKind = kind(context.req.param("kind"));
+  const claim = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const params = yield* HttpRouter.params;
+    const parsedKind = kind(params.kind);
     if (
       parsedKind === undefined ||
-      !tokenMatches(bearer(context.req.header("authorization")), [
+      !tokenMatches(bearer(request.headers.authorization), [
         runtime.executorToken(parsedKind) ?? "",
       ])
     ) {
       return requestFailure(401, "unauthorized");
     }
     const now = runtime.now();
-    const claim = await runtime.lifecycle.claim(parsedKind, now);
-    if (claim === undefined) return new Response(null, { status: 204 });
-    const policy = getSpacePolicy(claim.spaceId);
+    const claimed = yield* runtime.lifecycle.claim(parsedKind, now);
+    if (claimed === undefined) return HttpServerResponse.empty();
+    const policy = getSpacePolicy(claimed.spaceId);
     if (policy === undefined) {
-      await runtime.lifecycle.fail(
-        claim,
-        claim.processingToken,
+      yield* runtime.lifecycle.fail(
+        claimed,
+        claimed.processingToken,
         { retryable: false, code: "configuration_error" },
         now,
       );
       return requestFailure(503, "configuration_error");
     }
-    try {
-      const claims = await runProtocolEffect(
-        verifySourceCapability(claim.sourceCapability, {
-          spaceId: claim.spaceId,
-          expectedPurpose: "preview_job",
-          expectedSourceId: claim.sourceId,
-          expectedKind: claim.kind,
-          keys: runtime.capabilityKeys().get(claim.spaceId) ?? new Map(),
-          now: Math.floor(now.getTime() / 1_000),
-          allowedSourceOrigins: policy.allowedSourceOrigins,
-        }),
-      );
-      return context.json({
-        spaceId: claim.spaceId,
-        sourceId: claim.sourceId,
-        kind: claim.kind,
-        locator: claims.locator,
-        outputKey: await buildMasterPreviewKey(claim.spaceId, claim.sourceId, claim.kind),
-        processingToken: claim.processingToken,
-        executionCycle: claim.executionCycle,
-        attemptNumber: claim.attemptNumber,
-      });
-    } catch (error) {
+    const verified = yield* verifySourceCapability(claimed.sourceCapability, {
+      spaceId: claimed.spaceId,
+      expectedPurpose: "preview_job",
+      expectedSourceId: claimed.sourceId,
+      expectedKind: claimed.kind,
+      keys: runtime.capabilityKeys().get(claimed.spaceId) ?? new Map(),
+      now: Math.floor(now.getTime() / 1_000),
+      allowedSourceOrigins: policy.allowedSourceOrigins,
+    }).pipe(
+      Effect.map((claims) => ({ _tag: "Success" as const, claims })),
+      Effect.catch((error) => Effect.succeed({ _tag: "Failure" as const, error })),
+    );
+    if (verified._tag === "Failure") {
       const code =
-        isProtocolError(error) && error.code === "capability_expired"
-          ? "source_expired"
-          : "internal_invariant";
-      await runtime.lifecycle.fail(claim, claim.processingToken, { retryable: false, code }, now);
+        verified.error.code === "capability_expired" ? "source_expired" : "internal_invariant";
+      yield* runtime.lifecycle.fail(
+        claimed,
+        claimed.processingToken,
+        { retryable: false, code },
+        now,
+      );
       return requestFailure(409, code);
     }
+    return HttpServerResponse.jsonUnsafe({
+      spaceId: claimed.spaceId,
+      sourceId: claimed.sourceId,
+      kind: claimed.kind,
+      locator: verified.claims.locator,
+      outputKey: yield* Effect.promise(() =>
+        buildMasterPreviewKey(claimed.spaceId, claimed.sourceId, claimed.kind),
+      ),
+      processingToken: claimed.processingToken,
+      executionCycle: claimed.executionCycle,
+      attemptNumber: claimed.attemptNumber,
+    });
   });
 
-  api.post(CONTROL_HTTP_ROUTES.executorHeartbeat, async (context) => {
-    const identity = identityFromRoute(context);
+  const heartbeat = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const identity = identityFromRoute(yield* HttpRouter.params);
     if (
       identity === undefined ||
-      !tokenMatches(bearer(context.req.header("authorization")), [
+      !tokenMatches(bearer(request.headers.authorization), [
         runtime.executorToken(identity.kind) ?? "",
       ])
-    ) {
+    )
       return requestFailure(401, "unauthorized");
-    }
-    let body: ExecutorHeartbeatRequest;
-    try {
-      body = await runProtocolEffect(
-        parseExecutorHeartbeatRequest(await strictJson(context.req.raw)),
-      );
-    } catch {
-      return requestFailure(400, "request_invalid");
-    }
-    const result = await runtime.lifecycle.heartbeat(identity, body.processingToken, runtime.now());
+    const parsed = yield* strictJson(request).pipe(
+      Effect.flatMap((body) => parseExecutorHeartbeatRequest(body)),
+      Effect.map((body) => ({ _tag: "Success" as const, body })),
+      Effect.catch(() => Effect.succeed({ _tag: "Failure" as const })),
+    );
+    if (parsed._tag === "Failure") return requestFailure(400, "request_invalid");
+    const result = yield* runtime.lifecycle.heartbeat(
+      identity,
+      parsed.body.processingToken,
+      runtime.now(),
+    );
     return result.outcome === "accepted"
-      ? new Response(null, { status: 204 })
+      ? HttpServerResponse.empty()
       : requestFailure(409, "stale_attempt");
   });
 
-  api.post(CONTROL_HTTP_ROUTES.executorComplete, async (context) => {
-    const identity = identityFromRoute(context);
+  const complete = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const identity = identityFromRoute(yield* HttpRouter.params);
     if (
       identity === undefined ||
-      !tokenMatches(bearer(context.req.header("authorization")), [
+      !tokenMatches(bearer(request.headers.authorization), [
         runtime.executorToken(identity.kind) ?? "",
       ])
-    ) {
+    )
       return requestFailure(401, "unauthorized");
-    }
-    let body: ExecutorCompleteRequest;
-    try {
-      body = await runProtocolEffect(
-        parseExecutorCompleteRequest(await strictJson(context.req.raw)),
-      );
-    } catch {
-      return requestFailure(400, "request_invalid");
-    }
-    const expectedKey = await buildMasterPreviewKey(
-      identity.spaceId,
-      identity.sourceId,
-      identity.kind,
+    const parsed = yield* strictJson(request).pipe(
+      Effect.flatMap((body) => parseExecutorCompleteRequest(body)),
+      Effect.map((body) => ({ _tag: "Success" as const, body })),
+      Effect.catch(() => Effect.succeed({ _tag: "Failure" as const })),
+    );
+    if (parsed._tag === "Failure") return requestFailure(400, "request_invalid");
+    const body: ExecutorCompleteRequest = parsed.body;
+    const expectedKey = yield* Effect.promise(() =>
+      buildMasterPreviewKey(identity.spaceId, identity.sourceId, identity.kind),
     );
     if (body.masterKey !== expectedKey) return requestFailure(400, "request_invalid");
     const completion: MasterCompletion = {
@@ -327,79 +354,94 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       format: "webp",
       objectEtag: body.objectEtag,
     };
-    const result = await runtime.lifecycle.complete(
+    const result = yield* runtime.lifecycle.complete(
       identity,
       body.processingToken,
       completion,
       runtime.now(),
     );
-    runtime.logger.emit(
-      result.outcome === "accepted" ? "info" : "error",
-      await runProtocolEffect(
-        operationalEvent({
-          event:
-            result.outcome === "accepted" ? "control.job.completed" : "executor.stale_completion",
-          spaceId: identity.spaceId,
-          sourceId: identity.sourceId,
-          processingToken: body.processingToken,
-          fields: {
-            kind: identity.kind,
-            outcome: result.outcome === "accepted" ? "ready" : "failed",
-            ...(result.outcome === "accepted" ? {} : { failureCode: "stale_attempt" }),
-          },
-        }),
-      ),
-    );
+    const event = yield* operationalEvent({
+      event: result.outcome === "accepted" ? "control.job.completed" : "executor.stale_completion",
+      spaceId: identity.spaceId,
+      sourceId: identity.sourceId,
+      processingToken: body.processingToken,
+      fields: {
+        kind: identity.kind,
+        outcome: result.outcome === "accepted" ? "ready" : "failed",
+        ...(result.outcome === "accepted" ? {} : { failureCode: "stale_attempt" }),
+      },
+    });
+    yield* runtime.logger.emit(result.outcome === "accepted" ? "info" : "error", event);
     return result.outcome === "accepted"
-      ? new Response(null, { status: 204 })
+      ? HttpServerResponse.empty()
       : requestFailure(409, "stale_attempt");
   });
 
-  api.post(CONTROL_HTTP_ROUTES.executorFail, async (context) => {
-    const identity = identityFromRoute(context);
+  const fail = Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const identity = identityFromRoute(yield* HttpRouter.params);
     if (
       identity === undefined ||
-      !tokenMatches(bearer(context.req.header("authorization")), [
+      !tokenMatches(bearer(request.headers.authorization), [
         runtime.executorToken(identity.kind) ?? "",
       ])
-    ) {
+    )
       return requestFailure(401, "unauthorized");
-    }
-    let body: ExecutorFailRequest;
-    try {
-      body = await runProtocolEffect(parseExecutorFailRequest(await strictJson(context.req.raw)));
-    } catch {
-      return requestFailure(400, "request_invalid");
-    }
-    const result = await runtime.lifecycle.fail(
+    const parsed = yield* strictJson(request).pipe(
+      Effect.flatMap((body) => parseExecutorFailRequest(body)),
+      Effect.map((body) => ({ _tag: "Success" as const, body })),
+      Effect.catch(() => Effect.succeed({ _tag: "Failure" as const })),
+    );
+    if (parsed._tag === "Failure") return requestFailure(400, "request_invalid");
+    const body: ExecutorFailRequest = parsed.body;
+    const result = yield* runtime.lifecycle.fail(
       identity,
       body.processingToken,
-      {
-        retryable: body.retryable,
-        ...(body.code === undefined ? {} : { code: body.code }),
-      },
+      { retryable: body.retryable, ...(body.code === undefined ? {} : { code: body.code }) },
       runtime.now(),
     );
-    runtime.logger.emit(
-      result.outcome === "stale_attempt" ? "error" : "info",
-      await runProtocolEffect(
-        operationalEvent({
-          event: "control.job.failed",
-          spaceId: identity.spaceId,
-          sourceId: identity.sourceId,
-          processingToken: body.processingToken,
-          fields: {
-            kind: identity.kind,
-            outcome: "failed",
-            ...(body.code === undefined ? {} : { failureCode: body.code }),
-          },
-        }),
-      ),
-    );
+    const event = yield* operationalEvent({
+      event: "control.job.failed",
+      spaceId: identity.spaceId,
+      sourceId: identity.sourceId,
+      processingToken: body.processingToken,
+      fields: {
+        kind: identity.kind,
+        outcome: "failed",
+        ...(body.code === undefined ? {} : { failureCode: body.code }),
+      },
+    });
+    yield* runtime.logger.emit(result.outcome === "stale_attempt" ? "error" : "info", event);
     return result.outcome === "stale_attempt"
       ? requestFailure(409, "stale_attempt")
-      : new Response(null, { status: 204 });
+      : HttpServerResponse.empty();
   });
 
-  return api;
+  return HttpRouter.addAll([
+    HttpRouter.route("POST", CONTROL_HTTP_ROUTES.sourcePurge, safeJobHandler(runtime, sourcePurge)),
+    HttpRouter.route("PUT", CONTROL_HTTP_ROUTES.previewJob, safeJobHandler(runtime, submit)),
+    HttpRouter.route("GET", CONTROL_HTTP_ROUTES.previewJob, safeJobHandler(runtime, read)),
+    HttpRouter.route("POST", CONTROL_HTTP_ROUTES.executorClaim, safeJobHandler(runtime, claim)),
+    HttpRouter.route(
+      "POST",
+      CONTROL_HTTP_ROUTES.executorHeartbeat,
+      safeJobHandler(runtime, heartbeat),
+    ),
+    HttpRouter.route(
+      "POST",
+      CONTROL_HTTP_ROUTES.executorComplete,
+      safeJobHandler(runtime, complete),
+    ),
+    HttpRouter.route("POST", CONTROL_HTTP_ROUTES.executorFail, safeJobHandler(runtime, fail)),
+  ]);
+}
+
+export function createJobApi(runtime: JobApiRuntime) {
+  const web = HttpRouter.toWebHandler(createJobRoutes(runtime), { disableLogger: true });
+  return {
+    request(input: string | URL | Request, init?: RequestInit) {
+      return web.handler(input instanceof Request ? input : new Request(input, init));
+    },
+    dispose: web.dispose,
+  };
 }

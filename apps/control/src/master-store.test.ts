@@ -10,9 +10,13 @@ describe("master store", () => {
       accessKeyId: "test-access-key",
       secretAccessKey: "test-secret-key",
     });
-    const signed = new URL(await store.presignGet("masters/v1/space/fingerprint/video.webp"));
+    const signed = new URL(
+      await Effect.runPromise(store.presignGet("masters/v1/space/fingerprint/video.webp")),
+    );
     expect(signed.pathname).toBe("/shutter-renditions/masters/v1/space/fingerprint/video.webp");
     expect(signed.searchParams.get("X-Amz-Expires")).toBe(String(MASTER_READ_EXPIRY_SECONDS));
     expect(signed.searchParams.get("X-Amz-Signature")).toMatch(/^[a-f0-9]{64}$/u);
   });
 });
+
+import { Effect } from "effect";

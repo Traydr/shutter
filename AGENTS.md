@@ -29,7 +29,8 @@ rather than showing up in review.
 - Reviewed infrastructure in `.railway/railway.ts`, `apps/edge/wrangler.jsonc`,
   and the R2 lifecycle rule is guarded by `scripts/check-phase2-config.mjs`.
   Deployment-specific values stay `preserve()`d, never committed.
-- Control reads configuration only through `apps/control/src/env/server.ts`.
+- Control reads configuration only through the `ControlConfig` service in
+  `apps/control/src/env/server.ts`.
 - Protocol changes are fixture changes. Cross-consumer behavior is pinned in
   `@shutter/testkit`, and URLs and capabilities carry an explicit `v1`.
 - Logging is allowlisted and redacted. Never add raw paths, queries, headers,

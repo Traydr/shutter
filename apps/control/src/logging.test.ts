@@ -1,8 +1,10 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Writable } from "node:stream";
+import { Effect, ManagedRuntime } from "effect";
 import { describe, expect, it } from "vitest";
-import { createControlLogger, operationalErrorType } from "./logging.js";
+import { loadControlConfig } from "./env/server.js";
+import { ControlLogger, makeControlLoggingLayer, operationalErrorType } from "./logging.js";
 
 function capturingStdout(): { stdout: Writable; read: () => string } {
   let output = "";
@@ -32,24 +34,27 @@ describe("ControlLogger", () => {
     const { port } = server.address() as AddressInfo;
     const endpoint = `http://127.0.0.1:${port}/v1/logs`;
     const { stdout, read } = capturingStdout();
-    const logger = createControlLogger(
-      {
+    const config = await Effect.runPromise(
+      loadControlConfig({
         OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: endpoint,
         OTEL_EXPORTER_OTLP_LOGS_HEADERS:
           "Authorization=Basic%20dXNlcjpwYXNzd29yZA%3D%3D,stream-name=default",
-      },
-      { stdout },
+      }),
     );
+    const runtime = ManagedRuntime.make(makeControlLoggingLayer(config, { stdout }));
+    const logger = await runtime.runPromise(ControlLogger);
 
     try {
-      logger.emit("info", {
-        event: "control.job.completed",
-        kind: "video",
-        outcome: "ready",
-        locator: "https://secret.example/source?token=value",
-        authorization: "Bearer secret",
-      } as never);
-      await logger.shutdown();
+      await runtime.runPromise(
+        logger.emit("info", {
+          event: "control.job.completed",
+          kind: "video",
+          outcome: "ready",
+          locator: "https://secret.example/source?token=value",
+          authorization: "Bearer secret",
+        } as never),
+      );
+      await runtime.dispose();
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error === undefined ? resolve() : reject(error))),

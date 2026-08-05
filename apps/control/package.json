@@ -5,10 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
-    "db:migrate": "node dist/migrate.js",
+    "db:migrate": "node dist/src/migrate.js",
     "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "start": "node dist/src/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -16,27 +15,13 @@
     "@effect/sql-pg": "4.0.0-beta.103",
     "@aws-sdk/client-s3": "^3.1084.0",
     "@aws-sdk/s3-request-presigner": "^3.1085.0",
-    "@hono/node-server": "2.0.8",
-    "@opentelemetry/api": "1.9.0",
-    "@opentelemetry/api-logs": "0.221.0",
-    "@opentelemetry/exporter-logs-otlp-http": "0.221.0",
-    "@opentelemetry/resources": "2.10.0",
-    "@opentelemetry/sdk-logs": "0.221.0",
     "@shutter/protocol": "workspace:*",
     "@shutter/space-config": "workspace:*",
-    "@t3-oss/env-core": "^0.13.11",
-    "drizzle-orm": "^0.45.2",
-    "effect": "4.0.0-beta.103",
-    "hono": "4.12.28",
-    "pg": "^8.22.0",
-    "pino": "10.3.1",
-    "zod": "^4.4.3"
+    "effect": "4.0.0-beta.103"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "^12.0.4",
     "@types/node": "^22.18.0",
-    "@types/pg": "^8.20.0",
-    "drizzle-kit": "^0.31.10",
     "tsx": "4.22.4",
     "typescript": "6.0.3",
     "vitest": "4.1.4"

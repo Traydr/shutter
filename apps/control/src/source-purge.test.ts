@@ -1,18 +1,19 @@
 import { type DeleteObjectsCommand, ListObjectsV2Command, type S3Client } from "@aws-sdk/client-s3";
 import { buildSourceCacheTag } from "@shutter/protocol";
+import { Effect } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ControlLogger } from "./logging.js";
+import type { ControlLoggerShape } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
-import type { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
+import type { RenditionJobLifecycleShape } from "./rendition-job-lifecycle.js";
 import { createSourcePurge } from "./source-purge.js";
 
 const EDGE_BASE = "https://edge.shutter.test";
 const EDGE_TOKEN = "o".repeat(32);
-const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
+const NOOP_LOGGER: ControlLoggerShape = { emit: () => Effect.void };
 
 describe("Source Purge", () => {
   let test: PostgresTestLifecycle;
-  let lifecycle: PostgresRenditionJobLifecycle;
+  let lifecycle: RenditionJobLifecycleShape;
 
   beforeAll(async () => {
     test = await createPostgresTestLifecycle();
@@ -41,13 +42,15 @@ describe("Source Purge", () => {
 
   it("deletes every paginated prefix before purging Worker and zone cache tags", async () => {
     const identity = { spaceId: "pane-view", sourceId: "source/one", kind: "video" as const };
-    await lifecycle.submit(
-      {
-        ...identity,
-        sourceCapability: "opaque",
-        capabilityExpiresAt: new Date("2026-07-14T00:00:00Z"),
-      },
-      new Date("2026-07-13T00:00:00Z"),
+    await Effect.runPromise(
+      lifecycle.submit(
+        {
+          ...identity,
+          sourceCapability: "opaque",
+          capabilityExpiresAt: new Date("2026-07-14T00:00:00Z"),
+        },
+        new Date("2026-07-13T00:00:00Z"),
+      ),
     );
     const events: string[] = [];
     let publicPages = 0;
@@ -87,8 +90,8 @@ describe("Source Purge", () => {
     });
     const sourcePurge = createPurge(fetch, send);
 
-    await sourcePurge.purge({ spaceId: "pane-view", sourceId: "source/one" });
-    expect(await lifecycle.read(identity)).toBeUndefined();
+    await Effect.runPromise(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source/one" }));
+    expect(await Effect.runPromise(lifecycle.read(identity))).toBeUndefined();
     expect(events.filter((event) => event === "worker" || event === "tag")).toEqual([
       "worker",
       "tag",
@@ -109,9 +112,9 @@ describe("Source Purge", () => {
           : { Errors: [{ Key: "object", Code: "InternalError" }] },
       ),
     );
-    await expect(deleteFails.purge({ spaceId: "pane-view", sourceId: "source" })).rejects.toThrow(
-      "rendition deletion failed",
-    );
+    await expect(
+      Effect.runPromise(deleteFails.purge({ spaceId: "pane-view", sourceId: "source" })),
+    ).rejects.toMatchObject({ reason: "storage_delete_failed" });
 
     const workerFetch = vi.fn(async () => new Response(null, { status: 503 }));
     const workerFails = createPurge(
@@ -122,21 +125,23 @@ describe("Source Purge", () => {
           : { Errors: [] },
       ),
     );
-    await expect(workerFails.purge({ spaceId: "pane-view", sourceId: "source" })).rejects.toThrow(
-      "worker cache purge failed",
-    );
+    await expect(
+      Effect.runPromise(workerFails.purge({ spaceId: "pane-view", sourceId: "source" })),
+    ).rejects.toMatchObject({ reason: "worker_purge_failed" });
     expect(workerFetch).toHaveBeenCalledTimes(1);
   });
 
   it("retries safely after a Cloudflare failure", async () => {
     const identity = { spaceId: "pane-view", sourceId: "source", kind: "pdf" as const };
-    await lifecycle.submit(
-      {
-        ...identity,
-        sourceCapability: "opaque",
-        capabilityExpiresAt: new Date("2026-07-14T00:00:00Z"),
-      },
-      new Date("2026-07-13T00:00:00Z"),
+    await Effect.runPromise(
+      lifecycle.submit(
+        {
+          ...identity,
+          sourceCapability: "opaque",
+          capabilityExpiresAt: new Date("2026-07-14T00:00:00Z"),
+        },
+        new Date("2026-07-13T00:00:00Z"),
+      ),
     );
     const send = vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
       command instanceof ListObjectsV2Command
@@ -150,12 +155,12 @@ describe("Source Purge", () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(Response.json({ success: true }));
     const sourcePurge = createPurge(fetch, send);
-    await expect(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" })).rejects.toThrow(
-      "cache tag purge failed",
-    );
-    expect(await lifecycle.read(identity)).toBeUndefined();
     await expect(
-      sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" }),
+      Effect.runPromise(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" })),
+    ).rejects.toMatchObject({ reason: "zone_purge_failed" });
+    expect(await Effect.runPromise(lifecycle.read(identity))).toBeUndefined();
+    await expect(
+      Effect.runPromise(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" })),
     ).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledTimes(4);
   });
