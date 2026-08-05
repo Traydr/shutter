@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { sourceFingerprint } from "./cache-identity.js";
 import { CONTROL_HTTP_ROUTES, type ControlHttpRoute } from "./control-routes.js";
 import {
@@ -169,24 +170,30 @@ export function sanitizeOperationalEvent(event: unknown): OperationalEvent {
   return sanitizedEvent;
 }
 
-export async function operationalEvent(input: {
+export function operationalEvent(input: {
   event: OperationalEventName;
   spaceId?: string;
   sourceId?: string;
   processingToken?: string;
   fields?: OperationalEventFields;
-}): Promise<OperationalEvent> {
-  return sanitizeOperationalEvent({
-    event: input.event,
-    ...(input.spaceId === undefined || input.sourceId === undefined
-      ? {}
-      : { sourceHash: await sourceFingerprint(input.spaceId, input.sourceId) }),
-    ...(input.processingToken === undefined
-      ? {}
-      : {
-          processingTokenHash: await sourceFingerprint("processing-token", input.processingToken),
-        }),
-    ...input.fields,
+}): Effect.Effect<OperationalEvent> {
+  return Effect.gen(function* () {
+    const { processingToken, sourceId, spaceId } = input;
+    const sourceHash =
+      spaceId === undefined || sourceId === undefined
+        ? undefined
+        : yield* Effect.promise(() => sourceFingerprint(spaceId, sourceId));
+    const processingTokenHash =
+      processingToken === undefined
+        ? undefined
+        : yield* Effect.promise(() => sourceFingerprint("processing-token", processingToken));
+
+    return sanitizeOperationalEvent({
+      event: input.event,
+      ...(sourceHash === undefined ? {} : { sourceHash }),
+      ...(processingTokenHash === undefined ? {} : { processingTokenHash }),
+      ...input.fields,
+    });
   });
 }
 

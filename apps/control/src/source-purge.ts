@@ -5,11 +5,17 @@ import {
   buildSourceCacheTag,
   operationalEvent,
 } from "@shutter/protocol";
+import { Effect } from "effect";
 import type { ControlLogger } from "./logging.js";
 import type { RenditionJobLifecycle, SourceIdentity } from "./rendition-job-lifecycle.js";
 
 export interface SourcePurge {
   purge(source: SourceIdentity): Promise<void>;
+}
+
+function runProtocolEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  // TODO(effect-phase-2): Remove this adapter when Control runs Effect natively.
+  return Effect.runPromise(effect);
 }
 
 export interface SourcePurgeConfig {
@@ -104,22 +110,26 @@ export function createSourcePurge(config: SourcePurgeConfig): SourcePurge {
         });
         config.logger.emit(
           "info",
-          await operationalEvent({
-            event: "control.purge.completed",
-            spaceId: source.spaceId,
-            sourceId: source.sourceId,
-            fields: { outcome: "ready" },
-          }),
+          await runProtocolEffect(
+            operationalEvent({
+              event: "control.purge.completed",
+              spaceId: source.spaceId,
+              sourceId: source.sourceId,
+              fields: { outcome: "ready" },
+            }),
+          ),
         );
       } catch (error) {
         config.logger.emit(
           "error",
-          await operationalEvent({
-            event: "control.purge.failed",
-            spaceId: source.spaceId,
-            sourceId: source.sourceId,
-            fields: { outcome: "failed", failureCode: "service_unavailable" },
-          }),
+          await runProtocolEffect(
+            operationalEvent({
+              event: "control.purge.failed",
+              spaceId: source.spaceId,
+              sourceId: source.sourceId,
+              fields: { outcome: "failed", failureCode: "service_unavailable" },
+            }),
+          ),
         );
         throw error;
       }

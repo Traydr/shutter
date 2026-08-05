@@ -1,9 +1,15 @@
 import { operationalEvent, type RenditionKind } from "@shutter/protocol";
+import { Effect } from "effect";
 import type { ControlLogger } from "./logging.js";
 import type { RenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 
 export const RECOVERY_INTERVAL_MS = 5 * 60 * 1_000;
 export const RECOVERY_BATCH_SIZE = 100;
+
+function runProtocolEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  // TODO(effect-phase-2): Remove this adapter when Control runs Effect natively.
+  return Effect.runPromise(effect);
+}
 
 export interface RecoveryRuntime {
   logger: ControlLogger;
@@ -67,12 +73,14 @@ export async function runRecoverySweep(runtime: RecoveryRuntime): Promise<Recove
   ) {
     runtime.logger.emit(
       "info",
-      await operationalEvent({
-        event: "control.recovery.completed",
-        fields: {
-          count: result.dispatchedJobs + result.recoveredLeases + result.expiredPendingJobs,
-        },
-      }),
+      await runProtocolEffect(
+        operationalEvent({
+          event: "control.recovery.completed",
+          fields: {
+            count: result.dispatchedJobs + result.recoveredLeases + result.expiredPendingJobs,
+          },
+        }),
+      ),
     );
   }
   return result;

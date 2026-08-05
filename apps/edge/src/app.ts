@@ -2,15 +2,17 @@ import {
   buildCanonicalCacheUrl,
   buildR2CacheKey,
   buildSourceCacheTag,
+  CapabilityError,
   emitOperationalEvent,
+  isProtocolError,
   normalizeRenditionQuery,
   operationalEvent,
-  ProtocolError,
   parseCapabilityKeyRegistry,
   type RenditionCacheIdentity,
   verifySourceCapability,
 } from "@shutter/protocol";
 import { getSpacePolicy } from "@shutter/space-config";
+import { Effect } from "effect";
 import { Hono } from "hono";
 
 declare module "hono" {
@@ -26,22 +28,29 @@ const PUBLIC_EDGE_TTL_SECONDS = 2_592_000;
 type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
 let keyRegistryCache: { raw: string; registry: KeyRegistry } | undefined;
 
+function runProtocolEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  // TODO(effect-phase-4): Remove this adapter when Hono handlers use the Worker Effect runtime.
+  return Effect.runPromise(effect);
+}
+
 async function emitRenditionEvent(
   identity: RenditionCacheIdentity,
   cacheOutcome: "edge-hit" | "r2-hit" | "origin",
 ): Promise<void> {
   emitOperationalEvent(
     "info",
-    await operationalEvent({
-      event: "edge.rendition",
-      spaceId: identity.spaceId,
-      sourceId: identity.sourceId,
-      fields: {
-        routeClass: identity.routeClass,
-        cacheOutcome,
-        ...(identity.input.type === "master" ? { kind: identity.input.kind } : {}),
-      },
-    }),
+    await runProtocolEffect(
+      operationalEvent({
+        event: "edge.rendition",
+        spaceId: identity.spaceId,
+        sourceId: identity.sourceId,
+        fields: {
+          routeClass: identity.routeClass,
+          cacheOutcome,
+          ...(identity.input.type === "master" ? { kind: identity.input.kind } : {}),
+        },
+      }),
+    ),
   );
 }
 
@@ -53,13 +62,7 @@ function parseKeyRegistry(value: string): KeyRegistry {
 }
 
 function protocolFailure(error: unknown): Response {
-  if (
-    error instanceof ProtocolError ||
-    (error instanceof Error &&
-      error.name === "ProtocolError" &&
-      "code" in error &&
-      typeof error.code === "string")
-  ) {
+  if (isProtocolError(error)) {
     const status = error.code === "query_invalid" ? 400 : 403;
     return Response.json(
       { error: { code: error.code } },
@@ -250,16 +253,21 @@ async function publicLocatedRendition(
   return deliverRendition(bindings, identity, async () => {
     const policy = getSpacePolicy(identity.spaceId);
     if (policy === undefined || policy.routeClass !== "public")
-      throw new ProtocolError("space_mismatch", "Shutter Space is not public");
+      throw new CapabilityError({
+        code: "space_mismatch",
+        message: "Shutter Space is not public",
+      });
     const keys = parseKeyRegistry(bindings.CAPABILITY_KEYS).get(identity.spaceId) ?? new Map();
-    const claims = await verifySourceCapability(capability, {
-      spaceId: identity.spaceId,
-      expectedPurpose: "image_source",
-      expectedSourceId: identity.sourceId,
-      keys,
-      now: Math.floor(Date.now() / 1000),
-      allowedSourceOrigins: policy.allowedSourceOrigins,
-    });
+    const claims = await runProtocolEffect(
+      verifySourceCapability(capability, {
+        spaceId: identity.spaceId,
+        expectedPurpose: "image_source",
+        expectedSourceId: identity.sourceId,
+        keys,
+        now: Math.floor(Date.now() / 1000),
+        allowedSourceOrigins: policy.allowedSourceOrigins,
+      }),
+    );
     return claims.locator;
   });
 }
@@ -396,7 +404,9 @@ app.get("/v1/public/:spaceId/resolver/:resolverId/*", async (context) => {
     const sourceRef = decodeURIComponent(pathname.slice(markerIndex + marker.length));
     const source = resolveUploadThingSource(sourceRef, resolver.allowedProjectIds);
     if (source === undefined) return notFound();
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = await runProtocolEffect(
+      normalizeRenditionQuery(new URL(context.req.url).searchParams, policy),
+    );
     if (!query.isCanonical) {
       const canonical = new URL(context.req.url);
       canonical.search = `?w=${query.width}&q=${query.quality}`;
@@ -431,14 +441,18 @@ app.get("/v1/private/:spaceId/master/:capability", async (context) => {
     const spaceId = context.req.param("spaceId");
     const policy = getSpacePolicy(spaceId);
     if (policy === undefined || policy.routeClass !== "private") return notFound();
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = await runProtocolEffect(
+      normalizeRenditionQuery(new URL(context.req.url).searchParams, policy),
+    );
     const keys = parseKeyRegistry(context.env.CAPABILITY_KEYS).get(spaceId) ?? new Map();
-    const claims = await verifySourceCapability(context.req.param("capability"), {
-      spaceId,
-      expectedPurpose: "master_preview",
-      keys,
-      now: Math.floor(Date.now() / 1000),
-    });
+    const claims = await runProtocolEffect(
+      verifySourceCapability(context.req.param("capability"), {
+        spaceId,
+        expectedPurpose: "master_preview",
+        keys,
+        now: Math.floor(Date.now() / 1000),
+      }),
+    );
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
     return await privateRendition(context.env, {
       routeClass: "private",
@@ -460,7 +474,9 @@ app.get("/v1/public/:spaceId/master/:kind/:sourceId", async (context) => {
     if (policy === undefined || policy.routeClass !== "public") return notFound();
     const kind = context.req.param("kind");
     if (kind !== "video" && kind !== "pdf") return notFound();
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = await runProtocolEffect(
+      normalizeRenditionQuery(new URL(context.req.url).searchParams, policy),
+    );
     if (!query.isCanonical) {
       return canonicalRedirect(context.req.url, query.width, query.quality);
     }
@@ -482,15 +498,19 @@ app.get("/v1/private/:spaceId/source/:capability", async (context) => {
     const spaceId = context.req.param("spaceId");
     const policy = getSpacePolicy(spaceId);
     if (policy === undefined || policy.routeClass !== "private") return notFound();
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = await runProtocolEffect(
+      normalizeRenditionQuery(new URL(context.req.url).searchParams, policy),
+    );
     const keys = parseKeyRegistry(context.env.CAPABILITY_KEYS).get(spaceId) ?? new Map();
-    const claims = await verifySourceCapability(context.req.param("capability"), {
-      spaceId,
-      expectedPurpose: "image_source",
-      keys,
-      now: Math.floor(Date.now() / 1000),
-      allowedSourceOrigins: policy.allowedSourceOrigins,
-    });
+    const claims = await runProtocolEffect(
+      verifySourceCapability(context.req.param("capability"), {
+        spaceId,
+        expectedPurpose: "image_source",
+        keys,
+        now: Math.floor(Date.now() / 1000),
+        allowedSourceOrigins: policy.allowedSourceOrigins,
+      }),
+    );
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
     return await privateRendition(
       context.env,
@@ -514,7 +534,9 @@ app.get("/v1/public/:spaceId/located/:sourceId/:capability", async (context) => 
     const spaceId = context.req.param("spaceId");
     const policy = getSpacePolicy(spaceId);
     if (policy === undefined || policy.routeClass !== "public") return notFound();
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = await runProtocolEffect(
+      normalizeRenditionQuery(new URL(context.req.url).searchParams, policy),
+    );
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
     return await publicLocatedRendition(
       context.env,

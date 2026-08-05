@@ -10,10 +10,12 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@effect/platform-node": "4.0.0-beta.103",
     "@aws-sdk/client-s3": "^3.1084.0",
     "@shutter/executor-runtime": "workspace:*",
     "@hono/node-server": "2.0.8",
     "@shutter/protocol": "workspace:*",
+    "effect": "4.0.0-beta.103",
     "hono": "4.12.28"
   },
   "devDependencies": {

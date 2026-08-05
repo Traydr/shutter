@@ -127,12 +127,13 @@ authorizes.
 ### Issue a capability
 
 ```ts
-import { issueSourceCapability, buildPrivateSourceUrl } from "@shutter/protocol";
+import { buildPrivateSourceUrl, issueSourceCapability } from "@shutter/protocol";
+import { Effect } from "effect";
 
 const now = Math.floor(Date.now() / 1000);
 
 // after your own authorization check for this user and this media record
-const capability = await issueSourceCapability(
+const capability = await Effect.runPromise(issueSourceCapability(
   {
     space_id: "demo-private",
     source_id: "media_01H8...",   // immutable; changed bytes are a new source
@@ -142,7 +143,7 @@ const capability = await issueSourceCapability(
     exp: now + 300,
   },
   { kid: "key-2026-07", key: spaceKey },
-);
+));
 
 const src = buildPrivateSourceUrl("demo-private", capability, {
   width: 1200,

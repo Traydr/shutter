@@ -16,6 +16,7 @@ import {
   verifySourceCapability,
 } from "@shutter/protocol";
 import { issueSourceCapabilityWithIv } from "@shutter/protocol/testing";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   CACHE_IDENTITY_EXPECTED,
@@ -26,10 +27,12 @@ import {
 
 describe("Node protocol conformance", () => {
   it("matches the shared AES-GCM fixtures", async () => {
-    await runCapabilityConformance({
-      issueWithIv: issueSourceCapabilityWithIv,
-      verify: verifySourceCapability,
-    });
+    await Effect.runPromise(
+      runCapabilityConformance({
+        issueWithIv: issueSourceCapabilityWithIv,
+        verify: verifySourceCapability,
+      }),
+    );
   });
 
   it("matches the canonical URL fixtures", () => {

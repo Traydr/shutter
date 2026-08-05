@@ -4,11 +4,12 @@ import {
   buildMasterPreviewKey,
   CONTROL_HTTP_ROUTES,
   type ControlHttpRoute,
-  ProtocolError,
+  isProtocolError,
   parseCapabilityKeyRegistry,
   validateSourceLocator,
 } from "@shutter/protocol";
 import { getSpacePolicy } from "@shutter/space-config";
+import { Effect } from "effect";
 import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
 import { Pool } from "pg";
@@ -22,6 +23,11 @@ import { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 import { createSourcePurge } from "./source-purge.js";
 
 const EXECUTOR_WAKE_TIMEOUT_MS = 11 * 60 * 1_000;
+
+function runProtocolEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  // TODO(effect-phase-2): Remove this adapter when Control runs Effect natively.
+  return Effect.runPromise(effect);
+}
 
 export interface ControlRuntimeConfig {
   logger: ControlLogger;
@@ -184,9 +190,9 @@ export function createControlApp(
     }
 
     try {
-      validateSourceLocator(source, policy.allowedSourceOrigins);
+      await runProtocolEffect(validateSourceLocator(source, policy.allowedSourceOrigins));
     } catch (error) {
-      if (error instanceof ProtocolError) {
+      if (isProtocolError(error)) {
         return context.json({ error: { code: error.code } }, 403, {
           "cache-control": "private, no-store",
         });

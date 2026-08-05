@@ -1,150 +1,132 @@
-import { ProtocolError } from "./errors.js";
+import { Effect, Schema } from "effect";
+import { SubmissionError } from "./errors.js";
 import type {
   ExecutorClaim,
   ExecutorCompleteRequest,
   ExecutorFailRequest,
   ExecutorHeartbeatRequest,
-  FailedJobRepresentation,
-  JobFailureCode,
   PreviewJobSubmission,
-  RenditionKind,
 } from "./types.js";
-import { FAILURE_ACTIONS } from "./types.js";
 
-export function createFailedJobRepresentation(code: JobFailureCode): FailedJobRepresentation {
-  return {
-    status: "failed",
-    failure: { code, action: FAILURE_ACTIONS[code] },
-  } as FailedJobRepresentation;
+export { createFailedJobRepresentation } from "./job-representation.js";
+export type {
+  ExecutorClaim,
+  ExecutorCompleteRequest,
+  ExecutorFailRequest,
+  ExecutorHeartbeatRequest,
+  PreviewJobSubmission,
+} from "./types.js";
+
+const RenditionKindSchema = Schema.Literals(["video", "pdf"]);
+const JobFailureCodeSchema = Schema.Literals([
+  "source_expired",
+  "attempts_exhausted",
+  "source_missing",
+  "unsupported_media",
+  "source_too_large",
+  "source_corrupt",
+  "pdf_password_protected",
+  "configuration_error",
+  "internal_invariant",
+]);
+
+const PreviewJobSubmissionSchema = Schema.Struct({
+  sourceCapability: Schema.NonEmptyString,
+});
+
+const ExecutorClaimSchema = Schema.Struct({
+  spaceId: Schema.NonEmptyString,
+  sourceId: Schema.NonEmptyString,
+  kind: RenditionKindSchema,
+  locator: Schema.NonEmptyString,
+  outputKey: Schema.NonEmptyString,
+  processingToken: Schema.NonEmptyString,
+  executionCycle: Schema.Int,
+  attemptNumber: Schema.Int,
+});
+
+const ExecutorHeartbeatRequestSchema = Schema.Struct({
+  processingToken: Schema.NonEmptyString,
+});
+
+const ExecutorCompleteRequestSchema = Schema.Struct({
+  processingToken: Schema.NonEmptyString,
+  masterKey: Schema.NonEmptyString,
+  width: Schema.Int,
+  height: Schema.Int,
+  format: Schema.Literal("webp"),
+  objectEtag: Schema.String,
+});
+
+const ExecutorFailRequestSchema = Schema.Struct({
+  processingToken: Schema.NonEmptyString,
+  retryable: Schema.Boolean,
+  code: Schema.optionalKey(JobFailureCodeSchema),
+});
+
+const strictDecode = { onExcessProperty: "error" } as const;
+
+function decodeSubmission<Output>(
+  schema: Schema.Codec<Output, unknown, never, never>,
+  input: unknown,
+  code: "submission_invalid" | "request_invalid",
+  message: string,
+): Effect.Effect<Output, SubmissionError> {
+  return Schema.decodeUnknownEffect(
+    schema,
+    strictDecode,
+  )(input).pipe(Effect.mapError(() => new SubmissionError({ code, message })));
 }
 
-export function parsePreviewJobSubmission(input: unknown): PreviewJobSubmission {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    throw new ProtocolError("submission_invalid", "job submission must be a JSON object");
-  }
-
-  const record = input as Record<string, unknown>;
-  if (
-    Object.keys(record).length !== 1 ||
-    typeof record.sourceCapability !== "string" ||
-    record.sourceCapability.length === 0
-  ) {
-    throw new ProtocolError(
-      "submission_invalid",
-      "job submission must contain only a non-empty sourceCapability",
-    );
-  }
-
-  return { sourceCapability: record.sourceCapability };
+export function parsePreviewJobSubmission(
+  input: unknown,
+): Effect.Effect<PreviewJobSubmission, SubmissionError> {
+  return decodeSubmission(
+    PreviewJobSubmissionSchema,
+    input,
+    "submission_invalid",
+    "job submission must contain only a non-empty sourceCapability",
+  );
 }
 
-function requireObject(input: unknown, label: string): Record<string, unknown> {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    throw new ProtocolError("request_invalid", `${label} must be a JSON object`);
-  }
-  return input as Record<string, unknown>;
+export function parseExecutorClaim(input: unknown): Effect.Effect<ExecutorClaim, SubmissionError> {
+  return decodeSubmission(
+    ExecutorClaimSchema,
+    input,
+    "request_invalid",
+    "executor claim is invalid",
+  );
 }
 
-function requireString(
-  record: Record<string, unknown>,
-  key: string,
-  options?: { allowEmpty?: boolean },
-): string {
-  const value = record[key];
-  if (typeof value !== "string" || (!options?.allowEmpty && value.length === 0)) {
-    throw new ProtocolError("request_invalid", `${key} must be a non-empty string`);
-  }
-  return value;
+export function parseExecutorHeartbeatRequest(
+  input: unknown,
+): Effect.Effect<ExecutorHeartbeatRequest, SubmissionError> {
+  return decodeSubmission(
+    ExecutorHeartbeatRequestSchema,
+    input,
+    "request_invalid",
+    "executor heartbeat is invalid",
+  );
 }
 
-function requireKind(value: unknown): RenditionKind {
-  if (value !== "video" && value !== "pdf") {
-    throw new ProtocolError("request_invalid", "kind must be video or pdf");
-  }
-  return value;
+export function parseExecutorCompleteRequest(
+  input: unknown,
+): Effect.Effect<ExecutorCompleteRequest, SubmissionError> {
+  return decodeSubmission(
+    ExecutorCompleteRequestSchema,
+    input,
+    "request_invalid",
+    "executor completion is invalid",
+  );
 }
 
-function requireSafeInteger(record: Record<string, unknown>, key: string): number {
-  const value = record[key];
-  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
-    throw new ProtocolError("request_invalid", `${key} must be a safe integer`);
-  }
-  return value;
-}
-
-export function parseExecutorClaim(input: unknown): ExecutorClaim {
-  const record = requireObject(input, "executor claim");
-  const expectedKeys = [
-    "attemptNumber",
-    "executionCycle",
-    "kind",
-    "locator",
-    "outputKey",
-    "processingToken",
-    "sourceId",
-    "spaceId",
-  ];
-  if (Object.keys(record).sort().join(",") !== expectedKeys.join(",")) {
-    throw new ProtocolError("request_invalid", "executor claim has unexpected fields");
-  }
-  return {
-    spaceId: requireString(record, "spaceId"),
-    sourceId: requireString(record, "sourceId"),
-    kind: requireKind(record.kind),
-    locator: requireString(record, "locator"),
-    outputKey: requireString(record, "outputKey"),
-    processingToken: requireString(record, "processingToken"),
-    executionCycle: requireSafeInteger(record, "executionCycle"),
-    attemptNumber: requireSafeInteger(record, "attemptNumber"),
-  };
-}
-
-export function parseExecutorHeartbeatRequest(input: unknown): ExecutorHeartbeatRequest {
-  const record = requireObject(input, "executor heartbeat");
-  if (Object.keys(record).sort().join(",") !== "processingToken") {
-    throw new ProtocolError("request_invalid", "executor heartbeat has unexpected fields");
-  }
-  return { processingToken: requireString(record, "processingToken") };
-}
-
-export function parseExecutorCompleteRequest(input: unknown): ExecutorCompleteRequest {
-  const record = requireObject(input, "executor completion");
-  if (
-    Object.keys(record).sort().join(",") !==
-    "format,height,masterKey,objectEtag,processingToken,width"
-  ) {
-    throw new ProtocolError("request_invalid", "executor completion has unexpected fields");
-  }
-  if (record.format !== "webp") {
-    throw new ProtocolError("request_invalid", "format must be webp");
-  }
-  return {
-    processingToken: requireString(record, "processingToken"),
-    masterKey: requireString(record, "masterKey"),
-    width: requireSafeInteger(record, "width"),
-    height: requireSafeInteger(record, "height"),
-    format: "webp",
-    objectEtag: requireString(record, "objectEtag", { allowEmpty: true }),
-  };
-}
-
-export function parseExecutorFailRequest(input: unknown): ExecutorFailRequest {
-  const record = requireObject(input, "executor failure");
-  const keys = Object.keys(record).sort().join(",");
-  if (keys !== "processingToken,retryable" && keys !== "code,processingToken,retryable") {
-    throw new ProtocolError("request_invalid", "executor failure has unexpected fields");
-  }
-  if (typeof record.retryable !== "boolean") {
-    throw new ProtocolError("request_invalid", "retryable must be a boolean");
-  }
-  const processingToken = requireString(record, "processingToken");
-  if (record.code === undefined) return { processingToken, retryable: record.retryable };
-  if (typeof record.code !== "string" || !(record.code in FAILURE_ACTIONS)) {
-    throw new ProtocolError("request_invalid", "failure code is not recognized");
-  }
-  return {
-    processingToken,
-    retryable: record.retryable,
-    code: record.code as JobFailureCode,
-  };
+export function parseExecutorFailRequest(
+  input: unknown,
+): Effect.Effect<ExecutorFailRequest, SubmissionError> {
+  return decodeSubmission(
+    ExecutorFailRequestSchema,
+    input,
+    "request_invalid",
+    "executor failure is invalid",
+  );
 }

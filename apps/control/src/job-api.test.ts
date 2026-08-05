@@ -1,4 +1,5 @@
 import { issueSourceCapability } from "@shutter/protocol";
+import { Effect } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createJobApi } from "./job-api.js";
 import type { ControlLogger } from "./logging.js";
@@ -14,17 +15,20 @@ const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
 
 async function capability(): Promise<string> {
   const seconds = Math.floor(NOW.getTime() / 1_000);
-  return issueSourceCapability(
-    {
-      space_id: "pane-view",
-      source_id: "source-1",
-      purpose: "preview_job",
-      kind: "video",
-      locator: "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/source-1.mp4",
-      iat: seconds - 60,
-      exp: seconds + 3_600,
-    },
-    { kid: KID, key: KEY },
+  // TODO(effect-phase-2): Remove this adapter when Control tests run Effect natively.
+  return Effect.runPromise(
+    issueSourceCapability(
+      {
+        space_id: "pane-view",
+        source_id: "source-1",
+        purpose: "preview_job",
+        kind: "video",
+        locator: "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/source-1.mp4",
+        iat: seconds - 60,
+        exp: seconds + 3_600,
+      },
+      { kid: KID, key: KEY },
+    ),
   );
 }
 

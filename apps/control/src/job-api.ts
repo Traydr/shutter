@@ -5,17 +5,21 @@ import {
   type ExecutorCompleteRequest,
   type ExecutorFailRequest,
   type ExecutorHeartbeatRequest,
+  isProtocolError,
   operationalEvent,
-  ProtocolError,
+  type RenditionJobRepresentation,
+  type RenditionKind,
+  SubmissionError,
+  verifySourceCapability,
+} from "@shutter/protocol";
+import {
   parseExecutorCompleteRequest,
   parseExecutorFailRequest,
   parseExecutorHeartbeatRequest,
   parsePreviewJobSubmission,
-  type RenditionJobRepresentation,
-  type RenditionKind,
-  verifySourceCapability,
-} from "@shutter/protocol";
+} from "@shutter/protocol/jobs";
 import { getSpacePolicy } from "@shutter/space-config";
+import { Effect } from "effect";
 import { Hono } from "hono";
 import { type ControlLogger, operationalErrorType } from "./logging.js";
 import type {
@@ -26,6 +30,11 @@ import type {
 import type { SourcePurge } from "./source-purge.js";
 
 type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
+
+function runProtocolEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  // TODO(effect-phase-2): Remove this adapter when Control runs Effect natively.
+  return Effect.runPromise(effect);
+}
 
 export interface JobApiRuntime {
   logger: ControlLogger;
@@ -95,7 +104,10 @@ function requestFailure(status: number, code: string): Response {
 
 async function strictJson(request: Request): Promise<unknown> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
-    throw new ProtocolError("submission_invalid", "request must use application/json");
+    throw new SubmissionError({
+      code: "submission_invalid",
+      message: "request must use application/json",
+    });
   }
   return request.json();
 }
@@ -129,17 +141,21 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       return requestFailure(401, "unauthorized");
     }
     try {
-      const submission = parsePreviewJobSubmission(await strictJson(context.req.raw));
+      const submission = await runProtocolEffect(
+        parsePreviewJobSubmission(await strictJson(context.req.raw)),
+      );
       const now = runtime.now();
-      const claims = await verifySourceCapability(submission.sourceCapability, {
-        spaceId: identity.spaceId,
-        expectedPurpose: "preview_job",
-        expectedSourceId: identity.sourceId,
-        expectedKind: identity.kind,
-        keys: runtime.capabilityKeys().get(identity.spaceId) ?? new Map(),
-        now: Math.floor(now.getTime() / 1_000),
-        allowedSourceOrigins: policy.allowedSourceOrigins,
-      });
+      const claims = await runProtocolEffect(
+        verifySourceCapability(submission.sourceCapability, {
+          spaceId: identity.spaceId,
+          expectedPurpose: "preview_job",
+          expectedSourceId: identity.sourceId,
+          expectedKind: identity.kind,
+          keys: runtime.capabilityKeys().get(identity.spaceId) ?? new Map(),
+          now: Math.floor(now.getTime() / 1_000),
+          allowedSourceOrigins: policy.allowedSourceOrigins,
+        }),
+      );
       const submissionResult = await runtime.lifecycle.submit(
         {
           ...identity,
@@ -151,31 +167,35 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       const record = submissionResult.job;
       runtime.logger.emit(
         "info",
-        await operationalEvent({
-          event: "control.job.submitted",
-          spaceId: record.spaceId,
-          sourceId: record.sourceId,
-          fields: {
-            kind: record.kind,
-            executionCycle: record.executionCycle,
-            attemptNumber: record.attemptNumber,
-            outcome: "accepted",
-          },
-        }),
+        await runProtocolEffect(
+          operationalEvent({
+            event: "control.job.submitted",
+            spaceId: record.spaceId,
+            sourceId: record.sourceId,
+            fields: {
+              kind: record.kind,
+              executionCycle: record.executionCycle,
+              attemptNumber: record.attemptNumber,
+              outcome: "accepted",
+            },
+          }),
+        ),
       );
       if (record.status === "pending") {
         void runtime.dispatch(record.kind).catch(() => {
-          void operationalEvent({
-            event: "control.dispatch.failed",
-            spaceId: record.spaceId,
-            sourceId: record.sourceId,
-            fields: { kind: record.kind, outcome: "failed", failureCode: "service_unavailable" },
-          }).then((event) => runtime.logger.emit("error", event));
+          void runProtocolEffect(
+            operationalEvent({
+              event: "control.dispatch.failed",
+              spaceId: record.spaceId,
+              sourceId: record.sourceId,
+              fields: { kind: record.kind, outcome: "failed", failureCode: "service_unavailable" },
+            }),
+          ).then((event) => runtime.logger.emit("error", event));
         });
       }
       return activeResponse(record.representation, new URL(context.req.url).pathname);
     } catch (error) {
-      if (error instanceof ProtocolError) return requestFailure(400, error.code);
+      if (isProtocolError(error)) return requestFailure(400, error.code);
       runtime.logger.emit("error", {
         event: "control.service.failed",
         outcome: "failed",
@@ -221,15 +241,17 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       return requestFailure(503, "configuration_error");
     }
     try {
-      const claims = await verifySourceCapability(claim.sourceCapability, {
-        spaceId: claim.spaceId,
-        expectedPurpose: "preview_job",
-        expectedSourceId: claim.sourceId,
-        expectedKind: claim.kind,
-        keys: runtime.capabilityKeys().get(claim.spaceId) ?? new Map(),
-        now: Math.floor(now.getTime() / 1_000),
-        allowedSourceOrigins: policy.allowedSourceOrigins,
-      });
+      const claims = await runProtocolEffect(
+        verifySourceCapability(claim.sourceCapability, {
+          spaceId: claim.spaceId,
+          expectedPurpose: "preview_job",
+          expectedSourceId: claim.sourceId,
+          expectedKind: claim.kind,
+          keys: runtime.capabilityKeys().get(claim.spaceId) ?? new Map(),
+          now: Math.floor(now.getTime() / 1_000),
+          allowedSourceOrigins: policy.allowedSourceOrigins,
+        }),
+      );
       return context.json({
         spaceId: claim.spaceId,
         sourceId: claim.sourceId,
@@ -242,7 +264,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
       });
     } catch (error) {
       const code =
-        error instanceof ProtocolError && error.code === "capability_expired"
+        isProtocolError(error) && error.code === "capability_expired"
           ? "source_expired"
           : "internal_invariant";
       await runtime.lifecycle.fail(claim, claim.processingToken, { retryable: false, code }, now);
@@ -262,7 +284,9 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     }
     let body: ExecutorHeartbeatRequest;
     try {
-      body = parseExecutorHeartbeatRequest(await strictJson(context.req.raw));
+      body = await runProtocolEffect(
+        parseExecutorHeartbeatRequest(await strictJson(context.req.raw)),
+      );
     } catch {
       return requestFailure(400, "request_invalid");
     }
@@ -284,7 +308,9 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     }
     let body: ExecutorCompleteRequest;
     try {
-      body = parseExecutorCompleteRequest(await strictJson(context.req.raw));
+      body = await runProtocolEffect(
+        parseExecutorCompleteRequest(await strictJson(context.req.raw)),
+      );
     } catch {
       return requestFailure(400, "request_invalid");
     }
@@ -309,18 +335,20 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     );
     runtime.logger.emit(
       result.outcome === "accepted" ? "info" : "error",
-      await operationalEvent({
-        event:
-          result.outcome === "accepted" ? "control.job.completed" : "executor.stale_completion",
-        spaceId: identity.spaceId,
-        sourceId: identity.sourceId,
-        processingToken: body.processingToken,
-        fields: {
-          kind: identity.kind,
-          outcome: result.outcome === "accepted" ? "ready" : "failed",
-          ...(result.outcome === "accepted" ? {} : { failureCode: "stale_attempt" }),
-        },
-      }),
+      await runProtocolEffect(
+        operationalEvent({
+          event:
+            result.outcome === "accepted" ? "control.job.completed" : "executor.stale_completion",
+          spaceId: identity.spaceId,
+          sourceId: identity.sourceId,
+          processingToken: body.processingToken,
+          fields: {
+            kind: identity.kind,
+            outcome: result.outcome === "accepted" ? "ready" : "failed",
+            ...(result.outcome === "accepted" ? {} : { failureCode: "stale_attempt" }),
+          },
+        }),
+      ),
     );
     return result.outcome === "accepted"
       ? new Response(null, { status: 204 })
@@ -339,7 +367,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     }
     let body: ExecutorFailRequest;
     try {
-      body = parseExecutorFailRequest(await strictJson(context.req.raw));
+      body = await runProtocolEffect(parseExecutorFailRequest(await strictJson(context.req.raw)));
     } catch {
       return requestFailure(400, "request_invalid");
     }
@@ -354,17 +382,19 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     );
     runtime.logger.emit(
       result.outcome === "stale_attempt" ? "error" : "info",
-      await operationalEvent({
-        event: "control.job.failed",
-        spaceId: identity.spaceId,
-        sourceId: identity.sourceId,
-        processingToken: body.processingToken,
-        fields: {
-          kind: identity.kind,
-          outcome: "failed",
-          ...(body.code === undefined ? {} : { failureCode: body.code }),
-        },
-      }),
+      await runProtocolEffect(
+        operationalEvent({
+          event: "control.job.failed",
+          spaceId: identity.spaceId,
+          sourceId: identity.sourceId,
+          processingToken: body.processingToken,
+          fields: {
+            kind: identity.kind,
+            outcome: "failed",
+            ...(body.code === undefined ? {} : { failureCode: body.code }),
+          },
+        }),
+      ),
     );
     return result.outcome === "stale_attempt"
       ? requestFailure(409, "stale_attempt")

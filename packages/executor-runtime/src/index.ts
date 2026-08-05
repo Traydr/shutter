@@ -9,11 +9,12 @@ import {
   emitOperationalEvent,
   type JobFailureCode,
   operationalEvent,
-  parseExecutorClaim,
   type RenditionKind,
   type SourceOriginRule,
 } from "@shutter/protocol";
+import { parseExecutorClaim } from "@shutter/protocol/jobs";
 import { getSpacePolicy } from "@shutter/space-config";
+import { Effect } from "effect";
 import { Hono } from "hono";
 
 export {
@@ -31,6 +32,11 @@ export interface ExecutorConfig {
   bucket: string;
   s3: S3Client;
   fetch: typeof globalThis.fetch;
+}
+
+function runProtocolEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  // TODO(effect-phase-3): Remove this adapter when the Executor runtime runs Effect natively.
+  return Effect.runPromise(effect);
 }
 
 export interface ProcessedMasterPreview {
@@ -66,23 +72,25 @@ export async function runExecutorOnce(
   });
   if (claimed.status === 204) return "idle";
   if (!claimed.ok) throw new Error(`Control claim failed with ${claimed.status}`);
-  const claim = parseExecutorClaim(await claimed.json());
+  const claim = await runProtocolEffect(parseExecutorClaim(await claimed.json()));
   if (claim.kind !== processor.kind) throw new Error("Control returned the wrong Rendition kind");
   const startedAt = Date.now();
   emitOperationalEvent(
     "info",
-    await operationalEvent({
-      event: "executor.claimed",
-      spaceId: claim.spaceId,
-      sourceId: claim.sourceId,
-      processingToken: claim.processingToken,
-      fields: {
-        kind: claim.kind,
-        executionCycle: claim.executionCycle,
-        attemptNumber: claim.attemptNumber,
-        outcome: "accepted",
-      },
-    }),
+    await runProtocolEffect(
+      operationalEvent({
+        event: "executor.claimed",
+        spaceId: claim.spaceId,
+        sourceId: claim.sourceId,
+        processingToken: claim.processingToken,
+        fields: {
+          kind: claim.kind,
+          executionCycle: claim.executionCycle,
+          attemptNumber: claim.attemptNumber,
+          outcome: "accepted",
+        },
+      }),
+    ),
   );
   const directory = await mkdtemp(join(tmpdir(), `shutter-${processor.kind}-`));
   let uploaded = false;
@@ -188,20 +196,22 @@ async function emit(
 ) {
   emitOperationalEvent(
     level,
-    await operationalEvent({
-      event,
-      spaceId: claim.spaceId,
-      sourceId: claim.sourceId,
-      processingToken: claim.processingToken,
-      fields: {
-        kind: claim.kind,
-        executionCycle: claim.executionCycle,
-        attemptNumber: claim.attemptNumber,
-        durationMs: Date.now() - startedAt,
-        outcome: event === "executor.completed" ? "ready" : "failed",
-        ...(failureCode === undefined ? {} : { failureCode }),
-      },
-    }),
+    await runProtocolEffect(
+      operationalEvent({
+        event,
+        spaceId: claim.spaceId,
+        sourceId: claim.sourceId,
+        processingToken: claim.processingToken,
+        fields: {
+          kind: claim.kind,
+          executionCycle: claim.executionCycle,
+          attemptNumber: claim.attemptNumber,
+          durationMs: Date.now() - startedAt,
+          outcome: event === "executor.completed" ? "ready" : "failed",
+          ...(failureCode === undefined ? {} : { failureCode }),
+        },
+      }),
+    ),
   );
 }
 

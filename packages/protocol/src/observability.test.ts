@@ -1,15 +1,18 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { operationalEvent, sanitizeOperationalEvent } from "./observability.js";
 
 describe("operational events", () => {
   it("hashes identifiers, drops junk fields, and rejects concrete HTTP paths", async () => {
-    const event = await operationalEvent({
-      event: "executor.completed",
-      spaceId: "pane-view",
-      sourceId: "raw-source-id",
-      processingToken: "raw-processing-token",
-      fields: { kind: "video", executionCycle: 2, attemptNumber: 3, durationMs: 42 },
-    });
+    const event = await Effect.runPromise(
+      operationalEvent({
+        event: "executor.completed",
+        spaceId: "pane-view",
+        sourceId: "raw-source-id",
+        processingToken: "raw-processing-token",
+        fields: { kind: "video", executionCycle: 2, attemptNumber: 3, durationMs: 42 },
+      }),
+    );
     expect(Object.keys(event).sort()).toEqual([
       "attemptNumber",
       "durationMs",

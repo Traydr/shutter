@@ -1,4 +1,4 @@
-import { ProtocolError } from "./errors.js";
+import { CapabilityError } from "./errors.js";
 
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
 
@@ -10,7 +10,10 @@ export function encodeBase64Url(bytes: Uint8Array): string {
 
 export function decodeBase64Url(value: string): Uint8Array<ArrayBuffer> {
   if (!BASE64URL_PATTERN.test(value)) {
-    throw new ProtocolError("capability_malformed", "binary components must be unpadded base64url");
+    throw new CapabilityError({
+      code: "capability_malformed",
+      message: "binary components must be unpadded base64url",
+    });
   }
 
   const paddingLength = (4 - (value.length % 4)) % 4;
@@ -20,7 +23,10 @@ export function decodeBase64Url(value: string): Uint8Array<ArrayBuffer> {
   try {
     binary = atob(base64);
   } catch {
-    throw new ProtocolError("capability_malformed", "binary component is not valid base64url");
+    throw new CapabilityError({
+      code: "capability_malformed",
+      message: "binary component is not valid base64url",
+    });
   }
 
   const output = new Uint8Array(binary.length);
@@ -29,7 +35,10 @@ export function decodeBase64Url(value: string): Uint8Array<ArrayBuffer> {
   }
 
   if (encodeBase64Url(output) !== value) {
-    throw new ProtocolError("capability_malformed", "binary component is not canonical base64url");
+    throw new CapabilityError({
+      code: "capability_malformed",
+      message: "binary component is not canonical base64url",
+    });
   }
 
   return output;

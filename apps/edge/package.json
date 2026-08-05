@@ -15,6 +15,7 @@
   "dependencies": {
     "@shutter/protocol": "workspace:*",
     "@shutter/space-config": "workspace:*",
+    "effect": "4.0.0-beta.103",
     "hono": "4.12.28"
   },
   "devDependencies": {

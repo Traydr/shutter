@@ -7,6 +7,7 @@ import {
   type SourceOriginRule,
   validateSourceLocator,
 } from "@shutter/protocol";
+import { Effect } from "effect";
 
 export class ProcessingFailure extends Error {
   readonly code: JobFailureCode;
@@ -47,7 +48,8 @@ export async function runCommand(
 
 function assertAllowlisted(locator: string, rules: readonly SourceOriginRule[]): void {
   try {
-    validateSourceLocator(locator, rules);
+    // TODO(effect-phase-3): Remove this adapter when media processing runs Effect natively.
+    Effect.runSync(validateSourceLocator(locator, rules));
   } catch {
     throw new ProcessingFailure("source_missing", "source locator is not allowlisted");
   }

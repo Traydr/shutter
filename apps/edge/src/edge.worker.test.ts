@@ -6,12 +6,18 @@ import {
   TEST_CAPABILITY_KEY,
   TEST_CAPABILITY_KID,
 } from "@shutter/testkit";
+import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(async () => {
   vi.unstubAllGlobals();
   await reset();
 });
+
+function runProtocolEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
+  // TODO(effect-phase-4): Remove this adapter when Worker tests use the Effect runtime.
+  return Effect.runPromise(effect);
+}
 
 function tamper(value: string): string {
   const index = Math.floor(value.length / 2);
@@ -31,18 +37,20 @@ describe("edge app", () => {
   it("validates a private source capability before returning cached bytes", async () => {
     const now = Math.floor(Date.now() / 1000);
     const sourceId = "private-source";
-    const token = await issueSourceCapabilityWithIv(
-      {
-        space_id: "pane-view",
-        source_id: sourceId,
-        purpose: "image_source",
-        locator:
-          "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source.webp",
-        iat: now - 60,
-        exp: now + 3_600,
-      },
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      Uint8Array.from([11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]),
+    const token = await runProtocolEffect(
+      issueSourceCapabilityWithIv(
+        {
+          space_id: "pane-view",
+          source_id: sourceId,
+          purpose: "image_source",
+          locator:
+            "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source.webp",
+          iat: now - 60,
+          exp: now + 3_600,
+        },
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        Uint8Array.from([11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]),
+      ),
     );
     const identity = {
       routeClass: "private" as const,
@@ -79,17 +87,19 @@ describe("edge app", () => {
   it("validates a private capability before returning R2 or edge-cache bytes", async () => {
     const now = Math.floor(Date.now() / 1000);
     const sourceId = "private-master-source";
-    const token = await issueSourceCapabilityWithIv(
-      {
-        space_id: "pane-view",
-        source_id: sourceId,
-        purpose: "master_preview",
-        kind: "video",
-        iat: now - 60,
-        exp: now + 3_600,
-      },
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      Uint8Array.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+    const token = await runProtocolEffect(
+      issueSourceCapabilityWithIv(
+        {
+          space_id: "pane-view",
+          source_id: sourceId,
+          purpose: "master_preview",
+          kind: "video",
+          iat: now - 60,
+          exp: now + 3_600,
+        },
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        Uint8Array.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+      ),
     );
     const identity = {
       routeClass: "private" as const,
@@ -133,17 +143,19 @@ describe("edge app", () => {
     );
     vi.stubGlobal("fetch", origin);
     const now = Math.floor(Date.now() / 1000);
-    const token = await issueSourceCapabilityWithIv(
-      {
-        space_id: "pane-view",
-        source_id: "private-master-miss",
-        purpose: "master_preview",
-        kind: "pdf",
-        iat: now - 60,
-        exp: now + 3_600,
-      },
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      Uint8Array.from([1, 3, 5, 7, 9, 11, 2, 4, 6, 8, 10, 12]),
+    const token = await runProtocolEffect(
+      issueSourceCapabilityWithIv(
+        {
+          space_id: "pane-view",
+          source_id: "private-master-miss",
+          purpose: "master_preview",
+          kind: "pdf",
+          iat: now - 60,
+          exp: now + 3_600,
+        },
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        Uint8Array.from([1, 3, 5, 7, 9, 11, 2, 4, 6, 8, 10, 12]),
+      ),
     );
     const response = await SELF.fetch(
       `https://edge.shutter.test/v1/private/pane-view/master/${token}?w=640&q=75`,
@@ -264,30 +276,34 @@ describe("edge app", () => {
     });
     vi.stubGlobal("fetch", origin);
     const now = Math.floor(Date.now() / 1000);
-    const privateToken = await issueSourceCapabilityWithIv(
-      {
-        space_id: "pane-view",
-        source_id: "private-source-miss",
-        purpose: "image_source",
-        locator:
-          "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source-miss.webp",
-        iat: now - 60,
-        exp: now + 3_600,
-      },
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      Uint8Array.from([2, 4, 6, 8, 10, 12, 1, 3, 5, 7, 9, 11]),
+    const privateToken = await runProtocolEffect(
+      issueSourceCapabilityWithIv(
+        {
+          space_id: "pane-view",
+          source_id: "private-source-miss",
+          purpose: "image_source",
+          locator:
+            "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source-miss.webp",
+          iat: now - 60,
+          exp: now + 3_600,
+        },
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        Uint8Array.from([2, 4, 6, 8, 10, 12, 1, 3, 5, 7, 9, 11]),
+      ),
     );
-    const locatedToken = await issueSourceCapabilityWithIv(
-      {
-        space_id: "ernesta",
-        source_id: "public-located-miss",
-        purpose: "image_source",
-        locator: "https://8w0z32yftd.ufs.sh/f/public-located-miss",
-        iat: now - 60,
-        exp: now + 3_600,
-      },
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      Uint8Array.from([3, 6, 9, 12, 2, 5, 8, 11, 1, 4, 7, 10]),
+    const locatedToken = await runProtocolEffect(
+      issueSourceCapabilityWithIv(
+        {
+          space_id: "ernesta",
+          source_id: "public-located-miss",
+          purpose: "image_source",
+          locator: "https://8w0z32yftd.ufs.sh/f/public-located-miss",
+          iat: now - 60,
+          exp: now + 3_600,
+        },
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        Uint8Array.from([3, 6, 9, 12, 2, 5, 8, 11, 1, 4, 7, 10]),
+      ),
     );
 
     const responses = await Promise.all([
@@ -352,10 +368,12 @@ describe("edge app", () => {
 
 describe("workerd protocol conformance", () => {
   it("matches the shared AES-GCM fixtures", async () => {
-    await runCapabilityConformance({
-      issueWithIv: issueSourceCapabilityWithIv,
-      verify: verifySourceCapability,
-    });
+    await runProtocolEffect(
+      runCapabilityConformance({
+        issueWithIv: issueSourceCapabilityWithIv,
+        verify: verifySourceCapability,
+      }),
+    );
   });
 
   it("rejects unauthenticated Worker cache purge", async () => {

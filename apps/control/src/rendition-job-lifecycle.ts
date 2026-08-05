@@ -5,7 +5,7 @@ import type {
   RenditionJobRepresentation,
   RenditionKind,
 } from "@shutter/protocol";
-import { createFailedJobRepresentation } from "@shutter/protocol";
+import { createFailedJobRepresentation } from "@shutter/protocol/jobs";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
 
 export const MAX_ATTEMPTS = 5;

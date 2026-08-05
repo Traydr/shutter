@@ -1,5 +1,6 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { ProtocolError } from "./errors.js";
+import { QueryError } from "./errors.js";
 import { normalizeQuality, normalizeRenditionQuery, normalizeWidth } from "./normalization.js";
 
 const policy = { qualities: [30, 50, 75] as const, defaultQuality: 75 };
@@ -27,17 +28,21 @@ describe("rendition normalization", () => {
   });
 
   it("defaults only quality and reports whether the request is canonical", () => {
-    expect(normalizeRenditionQuery(new URLSearchParams("w=640"), policy)).toEqual({
+    expect(Effect.runSync(normalizeRenditionQuery(new URLSearchParams("w=640"), policy))).toEqual({
       width: 640,
       quality: 75,
       isCanonical: false,
     });
-    expect(normalizeRenditionQuery(new URLSearchParams("w=640&q=75"), policy)).toEqual({
+    expect(
+      Effect.runSync(normalizeRenditionQuery(new URLSearchParams("w=640&q=75"), policy)),
+    ).toEqual({
       width: 640,
       quality: 75,
       isCanonical: true,
     });
-    expect(normalizeRenditionQuery(new URLSearchParams("w=500&q=74"), policy)).toEqual({
+    expect(
+      Effect.runSync(normalizeRenditionQuery(new URLSearchParams("w=500&q=74"), policy)),
+    ).toEqual({
       width: 640,
       quality: 75,
       isCanonical: false,
@@ -55,8 +60,8 @@ describe("rendition normalization", () => {
     "w=640&q=75&q=50",
     "w=640&h=480",
   ])("rejects invalid query %s", (query) => {
-    expect(() => normalizeRenditionQuery(new URLSearchParams(query), policy)).toThrow(
-      ProtocolError,
-    );
+    expect(() =>
+      Effect.runSync(normalizeRenditionQuery(new URLSearchParams(query), policy)),
+    ).toThrow(QueryError);
   });
 });

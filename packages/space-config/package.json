@@ -14,7 +14,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@shutter/protocol": "workspace:*"
+    "@shutter/protocol": "workspace:*",
+    "effect": "4.0.0-beta.103"
   },
   "devDependencies": {
     "typescript": "6.0.3",

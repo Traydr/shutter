@@ -12,6 +12,13 @@ records are in [docs/architecture.md](./docs/architecture.md) and
 Run `pnpm check` (`lint` + `typecheck` + `test` + `build`). It needs a running
 container runtime for the Control tests; see docs/development.md.
 
+## Local Effect reference
+
+`repos/effect` is read-only reference material pinned to the installed Effect
+version. Never edit it or import from it. The entire `repos/` directory is
+gitignored and absent from CI; use `scripts/sync-effect-reference.mjs` to
+refresh the shallow clone.
+
 ## Invariants worth restating
 
 These are enforced by lint rules or tests, so breaking them fails the build

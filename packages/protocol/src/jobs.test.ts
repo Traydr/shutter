@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   createFailedJobRepresentation,
@@ -17,10 +18,16 @@ describe("job protocol", () => {
       failure: { code: "attempts_exhausted", action: "retry" },
     });
 
-    expect(() => parsePreviewJobSubmission({ sourceCapability: "opaque", extra: true })).toThrow();
-    expect(() => parseExecutorCompleteRequest({ processingToken: "token" })).toThrow();
     expect(() =>
-      parseExecutorFailRequest({ processingToken: "token", retryable: true, code: "nope" }),
+      Effect.runSync(parsePreviewJobSubmission({ sourceCapability: "opaque", extra: true })),
+    ).toThrow();
+    expect(() =>
+      Effect.runSync(parseExecutorCompleteRequest({ processingToken: "token" })),
+    ).toThrow();
+    expect(() =>
+      Effect.runSync(
+        parseExecutorFailRequest({ processingToken: "token", retryable: true, code: "nope" }),
+      ),
     ).toThrow();
   });
 });
