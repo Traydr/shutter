@@ -3,7 +3,8 @@
 Shutter Control writes every operational event to JSON stdout and, when
 configured, sends the same allowlisted event to OpenObserve with OTLP/HTTP JSON.
 Railway logs are the fallback if OpenObserve is unavailable. OTLP delivery uses an
-in-memory batch queue, so a forced process kill can lose the final batch.
+in-memory queue capped at 2,048 log records with batches of at most 512, so
+records above the bound and the final batch on a forced process kill can be lost.
 
 An Effect logger supplies the stdout envelope: stable JSON serialization,
 numeric levels, timestamps, and a testable destination stream. It is not trusted
@@ -76,7 +77,8 @@ The exporter accepts only a normalized exact match against
 parameters, URL credentials, alternate paths, and any header bundle other than
 the OpenObserve Basic authorization and `default` stream.
 Exporter timeouts are capped at five seconds even if the environment requests a
-larger value, preserving the shutdown flush allowance.
+larger value. The configured timeout is applied to every OTLP HTTP attempt, while
+the separate 5.5-second shutdown timeout preserves the process drain allowance.
 
 The OpenTelemetry Collector configuration uses
 `https://otel-collector.example.com/api/default` because the Collector appends
@@ -108,6 +110,14 @@ The OTLP body is the stable event name. OpenObserve fields include:
 Capabilities, locators, presigned URLs, authorization values, cookies, request
 and response bodies, query strings, raw Source IDs, command lines, stderr, error
 messages, and stacks are forbidden.
+
+Control keeps Effect server tracing enabled, but exports only low-cardinality
+`http.server <METHOD>`, `http.client <METHOD>`, and `sql.execute` span names.
+Span attributes are allowlisted to safe HTTP method/status, URL scheme, and SQL
+operation name values. Raw URL/path/query/header attributes, client addresses,
+`db.query.text`, unrestricted span events and links, and exception messages and
+stacks are discarded before the Effect OTLP tracer receives them. Health checks
+are not traced.
 
 ## Useful OpenObserve queries
 

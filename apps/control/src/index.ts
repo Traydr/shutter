@@ -89,7 +89,9 @@ const CoreServices = Layer.mergeAll(ExecutorDispatch.layer, Imgproxy.layer, Mast
 );
 const AllServices = SourcePurge.layer.pipe(Layer.provideMerge(CoreServices));
 
-const HttpLive = HttpRouter.serve(RoutesLive).pipe(Layer.provide(ServerLive));
+const HttpLive = HttpRouter.serve(RoutesLive, { disableLogger: true }).pipe(
+  Layer.provide(ServerLive),
+);
 const StartedLive = Layer.effectDiscard(
   Effect.gen(function* () {
     const logger = yield* ControlLogger;

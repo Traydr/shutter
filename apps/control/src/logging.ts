@@ -1,7 +1,6 @@
 import { type OperationalEvent, sanitizeOperationalEvent } from "@shutter/protocol";
 import { Context, Effect, Layer, Logger, References } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { OtlpLogger, OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
+import { makeControlTelemetryLayer } from "./control-telemetry.js";
 import { ControlConfig, type ControlConfigShape } from "./env/server.js";
 import { type ControlLoggingEnvironment, readOtlpLogsConfig } from "./logging-config.js";
 
@@ -13,6 +12,8 @@ export type OperationalLogLevel = "info" | "error";
 // Preserve the shutdown budget previously enforced by shutdown.ts. Effect's
 // OTLP exporter applies this timeout to its scoped flush finalizer.
 export const CONTROL_LOG_FLUSH_BUDGET_MS = 5_500;
+const EXPORT_FAILURE_REPORT_INTERVAL_MS = 60_000;
+const SANITIZED_EVENT_ANNOTATION = "shutter.control.sanitized";
 
 export interface ControlLoggerShape {
   emit(level: OperationalLogLevel, event: OperationalEvent): Effect.Effect<void>;
@@ -26,6 +27,7 @@ export interface ControlLoggerDependencies {
   stdout?: { write(chunk: string): unknown };
   packageVersion?: string;
   allowedOtlpEndpoints?: readonly string[];
+  now?: () => number;
 }
 
 type OptionalOperationalEventField = Exclude<keyof OperationalEvent, "event">;
@@ -68,33 +70,77 @@ function projectEvent(event: OperationalEvent): {
 function makeControlLogger(): ControlLoggerShape {
   return ControlLogger.of({
     emit(level, event) {
-      const projected = projectEvent(sanitizeOperationalEvent(event));
-      return Effect.logWithLevel(level === "info" ? "Info" : "Error")(event.event).pipe(
-        Effect.annotateLogs(projected.attributes),
+      const sanitized = sanitizeOperationalEvent(event);
+      const projected = projectEvent(sanitized);
+      return Effect.logWithLevel(level === "info" ? "Info" : "Error")(sanitized.event).pipe(
+        Effect.annotateLogs({
+          ...projected.attributes,
+          [SANITIZED_EVENT_ANNOTATION]: true,
+        }),
       );
     },
   });
 }
 
+function writeStdoutEvent(
+  stdout: { write(chunk: string): unknown },
+  time: number,
+  level: number,
+  event: Record<string, string | number>,
+): void {
+  stdout.write(
+    `${JSON.stringify({
+      level,
+      time,
+      service: "shutter-control",
+      ...event,
+    })}\n`,
+  );
+}
+
 function makeStdoutLogger(stdout: { write(chunk: string): unknown }): Logger.Logger<unknown, void> {
   return Logger.make((options) => {
-    const message = Array.isArray(options.message) ? options.message[0] : options.message;
-    if (typeof message !== "string" || !message.includes(".")) return;
     const annotations = options.fiber.getRef(References.CurrentLogAnnotations);
+    if (annotations[SANITIZED_EVENT_ANNOTATION] !== true) return;
+    const message = Array.isArray(options.message) ? options.message[0] : options.message;
+    if (typeof message !== "string") return;
     const projected: Record<string, string | number> = { event: message };
     for (const field of Object.keys(EVENT_FIELD_PROJECTIONS) as OptionalOperationalEventField[]) {
       const value = annotations[EVENT_FIELD_PROJECTIONS[field]];
       if (typeof value === "string" || typeof value === "number") projected[field] = value;
     }
-    stdout.write(
-      `${JSON.stringify({
-        level: options.logLevel === "Error" ? 50 : 30,
-        time: options.date.getTime(),
-        service: "shutter-control",
-        ...projected,
-      })}\n`,
+    writeStdoutEvent(
+      stdout,
+      options.date.getTime(),
+      options.logLevel === "Error" ? 50 : 30,
+      projected,
     );
   });
+}
+
+function makeExportFailureReporter(
+  stdout: { write(chunk: string): unknown },
+  now: () => number,
+): () => Effect.Effect<void> {
+  let lastReportAt = Number.NEGATIVE_INFINITY;
+  let failuresSinceReport = 0;
+  return () =>
+    Effect.sync(() => {
+      failuresSinceReport += 1;
+      const currentTime = now();
+      if (currentTime - lastReportAt < EXPORT_FAILURE_REPORT_INTERVAL_MS) return;
+      const event = projectEvent(
+        sanitizeOperationalEvent({
+          event: "control.telemetry.export_failed",
+          outcome: "failed",
+          failureCode: "service_unavailable",
+          count: failuresSinceReport,
+        }),
+      ).stdout;
+      writeStdoutEvent(stdout, currentTime, 50, event);
+      failuresSinceReport = 0;
+      lastReportAt = currentTime;
+    });
 }
 
 function loggingEnvironment(config: ControlConfigShape): ControlLoggingEnvironment {
@@ -152,22 +198,19 @@ export function makeControlLoggingLayer(
         dependencies.allowedOtlpEndpoints,
       );
       if (otlp === undefined) throw new Error("missing OTLP configuration");
-      const common = {
+      const tracesUrl = otlp.endpoint.replace(/\/v1\/logs\/?$/u, "/v1/traces");
+      const reportExportFailure = makeExportFailureReporter(stdout, dependencies.now ?? Date.now);
+      telemetryLayer = makeControlTelemetryLayer({
+        logsUrl: otlp.endpoint,
+        tracesUrl,
         resource: resource(config, packageVersion),
         headers: otlp.headers,
+        timeoutMillis: otlp.timeoutMillis,
         shutdownTimeout: `${CONTROL_LOG_FLUSH_BUDGET_MS} millis`,
-      } as const;
-      const tracesUrl = otlp.endpoint.replace(/\/v1\/logs\/?$/u, "/v1/traces");
-      telemetryLayer = Layer.merge(
-        OtlpLogger.layer({
-          url: otlp.endpoint,
-          ...common,
-          maxBatchSize: 512,
-          exportInterval: "1 second",
-          mergeWithExisting: true,
-        }),
-        OtlpTracer.layer({ url: tracesUrl, ...common }),
-      ).pipe(Layer.provide(OtlpSerialization.layerJson), Layer.provide(FetchHttpClient.layer));
+        sanitizedEventAnnotation: SANITIZED_EVENT_ANNOTATION,
+        allowedLogAttributes: Object.values(EVENT_FIELD_PROJECTIONS),
+        reportExportFailure,
+      });
     } catch {
       configurationFailed = true;
     }
