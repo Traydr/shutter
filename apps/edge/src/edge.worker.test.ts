@@ -1,12 +1,17 @@
 import { env, reset, SELF } from "cloudflare:test";
-import { buildR2CacheKey, buildSourceCacheTag, verifySourceCapability } from "@shutter/protocol";
+import {
+  buildCanonicalCacheUrl,
+  buildR2CacheKey,
+  buildSourceCacheTag,
+  verifySourceCapability,
+} from "@shutter/protocol";
 import { issueSourceCapabilityWithIv } from "@shutter/protocol/testing";
 import {
   runCapabilityConformance,
   TEST_CAPABILITY_KEY,
   TEST_CAPABILITY_KID,
 } from "@shutter/testkit";
-import { Effect } from "effect";
+import { Layer, ManagedRuntime } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 afterEach(async () => {
@@ -14,10 +19,7 @@ afterEach(async () => {
   await reset();
 });
 
-function runProtocolEffect<A, E>(effect: Effect.Effect<A, E>): Promise<A> {
-  // TODO(effect-phase-4): Remove this adapter when Worker tests use the Effect runtime.
-  return Effect.runPromise(effect);
-}
+const testRuntime = ManagedRuntime.make(Layer.empty);
 
 function tamper(value: string): string {
   const index = Math.floor(value.length / 2);
@@ -37,7 +39,7 @@ describe("edge app", () => {
   it("validates a private source capability before returning cached bytes", async () => {
     const now = Math.floor(Date.now() / 1000);
     const sourceId = "private-source";
-    const token = await runProtocolEffect(
+    const token = await testRuntime.runPromise(
       issueSourceCapabilityWithIv(
         {
           space_id: "pane-view",
@@ -75,19 +77,30 @@ describe("edge app", () => {
     );
     expect(first.status).toBe(200);
     expect(first.headers.get("cache-control")).toBe("private, no-store");
+    expect(first.headers.get("cache-tag")).toBeNull();
     expect(first.headers.get("x-shutter-cache")).toBe("r2-hit");
     expect(new TextDecoder().decode(await first.arrayBuffer())).toBe("private-source-rendition");
+
+    const internal = await caches.default.match(
+      new Request(await buildCanonicalCacheUrl(identity)),
+    );
+    expect(internal?.headers.get("cache-control")).toBe("public, max-age=86400");
+    expect(internal?.headers.get("cache-tag")).toBe(
+      await buildSourceCacheTag(identity.spaceId, identity.sourceId),
+    );
 
     const second = await SELF.fetch(
       `https://edge.shutter.test/v1/private/pane-view/source/${token}?w=640&q=75`,
     );
     expect(second.headers.get("x-shutter-cache")).toBe("edge-hit");
+    expect(second.headers.get("cache-control")).toBe("private, no-store");
+    expect(second.headers.get("cache-tag")).toBeNull();
   });
 
   it("validates a private capability before returning R2 or edge-cache bytes", async () => {
     const now = Math.floor(Date.now() / 1000);
     const sourceId = "private-master-source";
-    const token = await runProtocolEffect(
+    const token = await testRuntime.runPromise(
       issueSourceCapabilityWithIv(
         {
           space_id: "pane-view",
@@ -143,7 +156,7 @@ describe("edge app", () => {
     );
     vi.stubGlobal("fetch", origin);
     const now = Math.floor(Date.now() / 1000);
-    const token = await runProtocolEffect(
+    const token = await testRuntime.runPromise(
       issueSourceCapabilityWithIv(
         {
           space_id: "pane-view",
@@ -238,6 +251,18 @@ describe("edge app", () => {
     expect(origin).toHaveBeenCalledOnce();
   });
 
+  it("reports an unexpected origin defect as unavailable", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("unexpected origin defect")));
+
+    const response = await SELF.fetch(
+      "https://edge.shutter.test/v1/public/ernesta/master/video/defect?w=640&q=75",
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({ error: { code: "service_unavailable" } });
+  });
+
   it("excludes a public located-source capability from canonical cached identity", async () => {
     const sourceId = "public-located-source";
     const identity = {
@@ -276,7 +301,7 @@ describe("edge app", () => {
     });
     vi.stubGlobal("fetch", origin);
     const now = Math.floor(Date.now() / 1000);
-    const privateToken = await runProtocolEffect(
+    const privateToken = await testRuntime.runPromise(
       issueSourceCapabilityWithIv(
         {
           space_id: "pane-view",
@@ -291,7 +316,7 @@ describe("edge app", () => {
         Uint8Array.from([2, 4, 6, 8, 10, 12, 1, 3, 5, 7, 9, 11]),
       ),
     );
-    const locatedToken = await runProtocolEffect(
+    const locatedToken = await testRuntime.runPromise(
       issueSourceCapabilityWithIv(
         {
           space_id: "ernesta",
@@ -368,7 +393,7 @@ describe("edge app", () => {
 
 describe("workerd protocol conformance", () => {
   it("matches the shared AES-GCM fixtures", async () => {
-    await runProtocolEffect(
+    await testRuntime.runPromise(
       runCapabilityConformance({
         issueWithIv: issueSourceCapabilityWithIv,
         verify: verifySourceCapability,
