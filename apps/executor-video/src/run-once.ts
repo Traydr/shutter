@@ -4,6 +4,7 @@ import {
   type ExecutorProcessor,
   runExecutorOnce,
 } from "@shutter/executor-runtime";
+import type { Effect } from "effect";
 import { ProcessingFailure, processVideoPreview, runCommand } from "./processor.js";
 
 export type VideoExecutorConfig = ExecutorConfig;
@@ -22,6 +23,8 @@ const videoProcessor: ExecutorProcessor = {
       : { retryable: true },
 };
 
-export function runVideoOnce(config: VideoExecutorConfig): Promise<"idle" | "processed"> {
+export function runVideoOnce(
+  config: VideoExecutorConfig,
+): Effect.Effect<"idle" | "processed", unknown> {
   return runExecutorOnce(config, videoProcessor);
 }

@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type ProcessingFailure, processPdfPreview } from "./processor.js";
 
@@ -28,25 +29,23 @@ describe("PDF preview processor", () => {
     const fetch_ = vi.fn(
       async () => new Response(new Uint8Array([1, 2, 3])),
     ) as unknown as typeof fetch;
-    const run = vi.fn(async (command: string, arguments_: readonly string[]) => {
-      if (command === "pdfinfo") return "Pages: 2\nEncrypted: no\n";
-      if (command === "ffmpeg")
-        await writeFile(arguments_.at(-1) as string, new Uint8Array([6, 7]));
-      return command === "ffprobe"
-        ? JSON.stringify({ streams: [{ width: 800, height: 1200 }] })
-        : "";
-    });
+    const run = vi.fn((command: string, arguments_: readonly string[]) =>
+      Effect.promise(async () => {
+        if (command === "pdfinfo") return "Pages: 2\nEncrypted: no\n";
+        if (command === "ffmpeg")
+          await writeFile(arguments_.at(-1) as string, new Uint8Array([6, 7]));
+        return command === "ffprobe"
+          ? JSON.stringify({ streams: [{ width: 800, height: 1200 }] })
+          : "";
+      }),
+    );
 
-    const result = await processPdfPreview(
-      "https://media.example/file.pdf",
-      input,
-      prefix,
-      output,
-      {
+    const result = await Effect.runPromise(
+      processPdfPreview("https://media.example/file.pdf", input, prefix, output, {
         fetch: fetch_,
         runCommand: run,
         allowedSourceOrigins: [{ origin: "https://media.example" }],
-      },
+      }),
     );
     expect({ ...result, bytes: [...result.bytes] }).toEqual({
       bytes: [6, 7],
@@ -61,11 +60,13 @@ describe("PDF preview processor", () => {
     const fetch_ = vi.fn(async () => new Response(new Uint8Array([1]))) as unknown as typeof fetch;
 
     await expect(
-      processPdfPreview("https://media.example/file.pdf", input, prefix, output, {
-        fetch: fetch_,
-        runCommand: vi.fn(async () => "Pages: 1\nEncrypted: yes\n"),
-        allowedSourceOrigins: [{ origin: "https://media.example" }],
-      }),
+      Effect.runPromise(
+        processPdfPreview("https://media.example/file.pdf", input, prefix, output, {
+          fetch: fetch_,
+          runCommand: vi.fn(() => Effect.succeed("Pages: 1\nEncrypted: yes\n")),
+          allowedSourceOrigins: [{ origin: "https://media.example" }],
+        }),
+      ),
     ).rejects.toMatchObject<Partial<ProcessingFailure>>({
       code: "pdf_password_protected",
       retryable: false,

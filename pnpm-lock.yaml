@@ -121,9 +121,6 @@ importers:
       '@effect/platform-node':
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103(effect@4.0.0-beta.103)(ioredis@5.11.1)
-      '@hono/node-server':
-        specifier: 2.0.8
-        version: 2.0.8(hono@4.12.28)
       '@shutter/executor-runtime':
         specifier: workspace:*
         version: link:../../packages/executor-runtime
@@ -133,9 +130,6 @@ importers:
       effect:
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103
-      hono:
-        specifier: 4.12.28
-        version: 4.12.28
     devDependencies:
       '@types/node':
         specifier: ^22.18.0
@@ -158,9 +152,6 @@ importers:
       '@effect/platform-node':
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103(effect@4.0.0-beta.103)(ioredis@5.11.1)
-      '@hono/node-server':
-        specifier: 2.0.8
-        version: 2.0.8(hono@4.12.28)
       '@shutter/executor-runtime':
         specifier: workspace:*
         version: link:../../packages/executor-runtime
@@ -170,9 +161,6 @@ importers:
       effect:
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103
-      hono:
-        specifier: 4.12.28
-        version: 4.12.28
     devDependencies:
       '@types/node':
         specifier: ^22.18.0
@@ -195,9 +183,6 @@ importers:
       '@effect/platform-node':
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103(effect@4.0.0-beta.103)(ioredis@5.11.1)
-      '@hono/node-server':
-        specifier: 2.0.8
-        version: 2.0.8(hono@4.12.28)
       '@shutter/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -207,9 +192,6 @@ importers:
       effect:
         specifier: 4.0.0-beta.103
         version: 4.0.0-beta.103
-      hono:
-        specifier: 4.12.28
-        version: 4.12.28
     devDependencies:
       '@types/node':
         specifier: ^22.18.0
@@ -739,12 +721,6 @@ packages:
     resolution: {integrity: sha512-wtF6h+DY6M3YaDBPAmvuuA6jV8Sif9MjtOI5euKFWRgCDl5PeDpPsHR9u2l6St5ceY8AZgoNDww5+HvEsXFsGg==}
     engines: {node: '>=6'}
     hasBin: true
-
-  '@hono/node-server@2.0.8':
-    resolution: {integrity: sha512-GuCWzLxwg218fy1JaHculFsdcuY12hxit83V+algozTPnwhNjLrRL/Alg9OYjLZLoUZ1rw/S4CdTMsnkSKCmFA==}
-    engines: {node: '>=20'}
-    peerDependencies:
-      hono: ^4
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -2791,10 +2767,6 @@ snapshots:
       long: 5.3.2
       protobufjs: 7.6.5
       yargs: 17.7.3
-
-  '@hono/node-server@2.0.8(hono@4.12.28)':
-    dependencies:
-      hono: 4.12.28
 
   '@img/colour@1.1.0': {}
 
