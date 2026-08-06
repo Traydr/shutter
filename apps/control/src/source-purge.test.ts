@@ -1,7 +1,8 @@
 import { type DeleteObjectsCommand, ListObjectsV2Command, type S3Client } from "@aws-sdk/client-s3";
+import { it } from "@effect/vitest";
 import { buildSourceCacheTag } from "@shutter/protocol";
 import { Effect } from "effect";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, vi } from "vitest";
 import type { ControlLoggerShape } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import type { RenditionJobLifecycleShape } from "./rendition-job-lifecycle.js";
@@ -40,128 +41,130 @@ describe("Source Purge", () => {
     });
   }
 
-  it("deletes every paginated prefix before purging Worker and zone cache tags", async () => {
-    const identity = { spaceId: "pane-view", sourceId: "source/one", kind: "video" as const };
-    await Effect.runPromise(
-      lifecycle.submit(
+  it.effect("deletes every paginated prefix before purging Worker and zone cache tags", () =>
+    Effect.gen(function* () {
+      const identity = { spaceId: "pane-view", sourceId: "source/one", kind: "video" as const };
+      yield* lifecycle.submit(
         {
           ...identity,
           sourceCapability: "opaque",
           capabilityExpiresAt: new Date("2026-07-14T00:00:00Z"),
         },
         new Date("2026-07-13T00:00:00Z"),
-      ),
-    );
-    const events: string[] = [];
-    let publicPages = 0;
-    const tag = await buildSourceCacheTag("pane-view", "source/one");
-    const send = vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) => {
-      if (command instanceof ListObjectsV2Command) {
-        events.push(`list:${command.input.Prefix}`);
-        if (command.input.Prefix?.includes("/public/")) {
-          publicPages += 1;
-          return publicPages === 1
-            ? {
-                Contents: [{ Key: `${command.input.Prefix}one.webp` }],
-                IsTruncated: true,
-                NextContinuationToken: "next",
-              }
-            : { Contents: [{ Key: `${command.input.Prefix}two.webp` }], IsTruncated: false };
+      );
+      const events: string[] = [];
+      let publicPages = 0;
+      const tag = yield* Effect.promise(() => buildSourceCacheTag("pane-view", "source/one"));
+      const send = vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) => {
+        if (command instanceof ListObjectsV2Command) {
+          events.push(`list:${command.input.Prefix}`);
+          if (command.input.Prefix?.includes("/public/")) {
+            publicPages += 1;
+            return publicPages === 1
+              ? {
+                  Contents: [{ Key: `${command.input.Prefix}one.webp` }],
+                  IsTruncated: true,
+                  NextContinuationToken: "next",
+                }
+              : { Contents: [{ Key: `${command.input.Prefix}two.webp` }], IsTruncated: false };
+          }
+          return { Contents: [], IsTruncated: false };
         }
-        return { Contents: [], IsTruncated: false };
-      }
-      events.push("delete");
-      return { Errors: [] };
-    });
-    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes("/internal/v1/cache/purge")) {
-        events.push("worker");
-        expect(url).toBe(`${EDGE_BASE}/internal/v1/cache/purge`);
-        expect(init?.headers).toMatchObject({
-          authorization: `Bearer ${EDGE_TOKEN}`,
-        });
+        events.push("delete");
+        return { Errors: [] };
+      });
+      const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/internal/v1/cache/purge")) {
+          events.push("worker");
+          expect(url).toBe(`${EDGE_BASE}/internal/v1/cache/purge`);
+          expect(init?.headers).toMatchObject({
+            authorization: `Bearer ${EDGE_TOKEN}`,
+          });
+          expect(JSON.parse(String(init?.body))).toEqual({ tags: [tag] });
+          return new Response(null, { status: 204 });
+        }
+        events.push("tag");
         expect(JSON.parse(String(init?.body))).toEqual({ tags: [tag] });
-        return new Response(null, { status: 204 });
-      }
-      events.push("tag");
-      expect(JSON.parse(String(init?.body))).toEqual({ tags: [tag] });
-      return Response.json({ success: true });
-    });
-    const sourcePurge = createPurge(fetch, send);
+        return Response.json({ success: true });
+      });
+      const sourcePurge = createPurge(fetch, send);
 
-    await Effect.runPromise(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source/one" }));
-    expect(await Effect.runPromise(lifecycle.read(identity))).toBeUndefined();
-    expect(events.filter((event) => event === "worker" || event === "tag")).toEqual([
-      "worker",
-      "tag",
-    ]);
-    expect(events.filter((event) => event === "delete")).toHaveLength(2);
-    expect(fetch).toHaveBeenCalledWith(
-      "https://api.cloudflare.com/client/v4/zones/zone-id/purge_cache",
-      expect.objectContaining({ method: "POST" }),
-    );
-  });
+      yield* sourcePurge.purge({ spaceId: "pane-view", sourceId: "source/one" });
+      expect(yield* lifecycle.read(identity)).toBeUndefined();
+      expect(events.filter((event) => event === "worker" || event === "tag")).toEqual([
+        "worker",
+        "tag",
+      ]);
+      expect(events.filter((event) => event === "delete")).toHaveLength(2);
+      expect(fetch).toHaveBeenCalledWith(
+        "https://api.cloudflare.com/client/v4/zones/zone-id/purge_cache",
+        expect.objectContaining({ method: "POST" }),
+      );
+    }),
+  );
 
-  it("stops before later purge stages when an earlier stage fails", async () => {
-    const deleteFails = createPurge(
-      vi.fn(),
-      vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
-        command instanceof ListObjectsV2Command
-          ? { Contents: [{ Key: "object" }], IsTruncated: false }
-          : { Errors: [{ Key: "object", Code: "InternalError" }] },
-      ),
-    );
-    await expect(
-      Effect.runPromise(deleteFails.purge({ spaceId: "pane-view", sourceId: "source" })),
-    ).rejects.toMatchObject({ reason: "storage_delete_failed" });
+  it.effect("stops before later purge stages when an earlier stage fails", () =>
+    Effect.gen(function* () {
+      const deleteFails = createPurge(
+        vi.fn(),
+        vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
+          command instanceof ListObjectsV2Command
+            ? { Contents: [{ Key: "object" }], IsTruncated: false }
+            : { Errors: [{ Key: "object", Code: "InternalError" }] },
+        ),
+      );
+      expect(
+        yield* Effect.flip(deleteFails.purge({ spaceId: "pane-view", sourceId: "source" })),
+      ).toMatchObject({ reason: "storage_delete_failed" });
 
-    const workerFetch = vi.fn(async () => new Response(null, { status: 503 }));
-    const workerFails = createPurge(
-      workerFetch,
-      vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
+      const workerFetch = vi.fn(async () => new Response(null, { status: 503 }));
+      const workerFails = createPurge(
+        workerFetch,
+        vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
+          command instanceof ListObjectsV2Command
+            ? { Contents: [], IsTruncated: false }
+            : { Errors: [] },
+        ),
+      );
+      expect(
+        yield* Effect.flip(workerFails.purge({ spaceId: "pane-view", sourceId: "source" })),
+      ).toMatchObject({ reason: "worker_purge_failed" });
+      expect(workerFetch).toHaveBeenCalledTimes(1);
+    }),
+  );
+
+  it.effect("retries safely after a Cloudflare failure", () =>
+    Effect.gen(function* () {
+      const identity = { spaceId: "pane-view", sourceId: "source", kind: "pdf" as const };
+      yield* lifecycle.submit(
+        {
+          ...identity,
+          sourceCapability: "opaque",
+          capabilityExpiresAt: new Date("2026-07-14T00:00:00Z"),
+        },
+        new Date("2026-07-13T00:00:00Z"),
+      );
+      const send = vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
         command instanceof ListObjectsV2Command
           ? { Contents: [], IsTruncated: false }
           : { Errors: [] },
-      ),
-    );
-    await expect(
-      Effect.runPromise(workerFails.purge({ spaceId: "pane-view", sourceId: "source" })),
-    ).rejects.toMatchObject({ reason: "worker_purge_failed" });
-    expect(workerFetch).toHaveBeenCalledTimes(1);
-  });
-
-  it("retries safely after a Cloudflare failure", async () => {
-    const identity = { spaceId: "pane-view", sourceId: "source", kind: "pdf" as const };
-    await Effect.runPromise(
-      lifecycle.submit(
-        {
-          ...identity,
-          sourceCapability: "opaque",
-          capabilityExpiresAt: new Date("2026-07-14T00:00:00Z"),
-        },
-        new Date("2026-07-13T00:00:00Z"),
-      ),
-    );
-    const send = vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) =>
-      command instanceof ListObjectsV2Command
-        ? { Contents: [], IsTruncated: false }
-        : { Errors: [] },
-    );
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 204 }))
-      .mockResolvedValueOnce(Response.json({ success: false }))
-      .mockResolvedValueOnce(new Response(null, { status: 204 }))
-      .mockResolvedValueOnce(Response.json({ success: true }));
-    const sourcePurge = createPurge(fetch, send);
-    await expect(
-      Effect.runPromise(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" })),
-    ).rejects.toMatchObject({ reason: "zone_purge_failed" });
-    expect(await Effect.runPromise(lifecycle.read(identity))).toBeUndefined();
-    await expect(
-      Effect.runPromise(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" })),
-    ).resolves.toBeUndefined();
-    expect(fetch).toHaveBeenCalledTimes(4);
-  });
+      );
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockResolvedValueOnce(new Response(null, { status: 204 }))
+        .mockResolvedValueOnce(Response.json({ success: false }))
+        .mockResolvedValueOnce(new Response(null, { status: 204 }))
+        .mockResolvedValueOnce(Response.json({ success: true }));
+      const sourcePurge = createPurge(fetch, send);
+      expect(
+        yield* Effect.flip(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" })),
+      ).toMatchObject({ reason: "zone_purge_failed" });
+      expect(yield* lifecycle.read(identity)).toBeUndefined();
+      expect(
+        yield* sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" }),
+      ).toBeUndefined();
+      expect(fetch).toHaveBeenCalledTimes(4);
+    }),
+  );
 });

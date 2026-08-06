@@ -26,11 +26,13 @@ rather than showing up in review.
 
 - The edge Worker runs on Web standards only. No Node imports, no
   `nodejs_compat` (`scripts/check-edge-boundary.mjs`).
+- `apps/edge/src` must never import `@shutter/protocol/jobs`; that subpath pulls
+  Schema into the Worker bundle (`scripts/check-edge-boundary.mjs`).
 - Reviewed infrastructure in `.railway/railway.ts`, `apps/edge/wrangler.jsonc`,
   and the R2 lifecycle rule is guarded by `scripts/check-phase2-config.mjs`.
   Deployment-specific values stay `preserve()`d, never committed.
-- Control reads configuration only through the `ControlConfig` service in
-  `apps/control/src/env/server.ts`.
+- Control modules obtain configuration from the `ControlConfig` service defined
+  in `apps/control/src/env/server.ts`; they do not read `process.env` directly.
 - Protocol changes are fixture changes. Cross-consumer behavior is pinned in
   `@shutter/testkit`, and URLs and capabilities carry an explicit `v1`.
 - Logging is allowlisted and redacted. Never add raw paths, queries, headers,

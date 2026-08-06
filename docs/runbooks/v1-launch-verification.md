@@ -14,9 +14,10 @@ data unless the disposable purge mode is explicitly confirmed.
 5. Run the opt-in live modes below against disposable sources before changing a
    consumer provider switch.
 
-Executors are serverless and may cold-start. A pending job with a missed wake is
-expected to be recovered by Control's five-minute sweep; do not treat one cold
-start as job loss.
+Executors are serverless and may cold-start. Control retries the cold-start
+`502` twice with short exponential backoff. A pending job whose wake is still
+missed is recovered by Control's five-minute sweep; do not treat one cold start
+as job loss.
 
 ## Live verification
 

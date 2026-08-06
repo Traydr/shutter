@@ -5,10 +5,11 @@ configured, sends the same allowlisted event to OpenObserve with OTLP/HTTP JSON.
 Railway logs are the fallback if OpenObserve is unavailable. OTLP delivery uses an
 in-memory batch queue, so a forced process kill can lose the final batch.
 
-Pino supplies the stdout envelope: stable JSON serialization, numeric levels,
-timestamps, and a testable destination stream. It is not trusted to redact
-events. The shared protocol sanitizer drops invalid or unknown fields first, and
-one declarative projection table then produces both the Pino and OTLP records.
+An Effect logger supplies the stdout envelope: stable JSON serialization,
+numeric levels, timestamps, and a testable destination stream. It is not trusted
+to redact events. The shared protocol sanitizer drops invalid or unknown fields
+first, and one declarative projection table then produces both the stdout and
+OTLP records.
 
 ## OpenObserve resources
 
@@ -32,7 +33,7 @@ stream-name: default
 
 ## Control configuration
 
-Control reads its environment through the typed T3 Env contract in
+Control reads its environment through the `ControlConfig` service defined in
 `apps/control/src/env/server.ts`; production modules do not read `process.env`
 directly. The OTLP values remain optional raw strings at that boundary so the
 logger can reject malformed telemetry configuration without preventing Control
@@ -95,7 +96,7 @@ The OTLP body is the stable event name. OpenObserve fields include:
 | `event.name` | Stable operational event name |
 | `request.id` | Server-generated request correlation UUID |
 | `http.request.method` | HTTP method |
-| `http.route` | Hono route template, never the raw path |
+| `http.route` | Effect `HttpRouter` route template, never the raw path |
 | `http.response.status_code` | Response status |
 | `error.type` | Bounded error class name, never a message or stack |
 | `shutter.duration_ms` | Event or request duration |

@@ -1,4 +1,5 @@
 import { env, reset, SELF } from "cloudflare:test";
+import { it } from "@effect/vitest";
 import {
   buildCanonicalCacheUrl,
   buildR2CacheKey,
@@ -12,7 +13,7 @@ import {
   TEST_CAPABILITY_KID,
 } from "@shutter/testkit";
 import { Layer, ManagedRuntime } from "effect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, vi } from "vitest";
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -392,14 +393,12 @@ describe("edge app", () => {
 });
 
 describe("workerd protocol conformance", () => {
-  it("matches the shared AES-GCM fixtures", async () => {
-    await testRuntime.runPromise(
-      runCapabilityConformance({
-        issueWithIv: issueSourceCapabilityWithIv,
-        verify: verifySourceCapability,
-      }),
-    );
-  });
+  it.effect("matches the shared AES-GCM fixtures", () =>
+    runCapabilityConformance({
+      issueWithIv: issueSourceCapabilityWithIv,
+      verify: verifySourceCapability,
+    }),
+  );
 
   it("rejects unauthenticated Worker cache purge", async () => {
     const response = await SELF.fetch("https://edge.shutter.test/internal/v1/cache/purge", {

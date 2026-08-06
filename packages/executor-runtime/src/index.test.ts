@@ -1,6 +1,8 @@
 import { DeleteObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
-import { Effect, Fiber } from "effect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { it } from "@effect/vitest";
+import { Effect, Exit, Fiber } from "effect";
+import { TestClock } from "effect/testing";
+import { describe, expect, vi } from "vitest";
 import {
   type ExecutorConfig,
   type ExecutorProcessor,
@@ -18,10 +20,6 @@ const claim = {
   executionCycle: 0,
   attemptNumber: 1,
 };
-
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 function setup(options?: {
   completeStatus?: number;
@@ -75,121 +73,144 @@ function setup(options?: {
 }
 
 describe("Executor work cycle", () => {
-  it("claims, processes, uploads, and completes through one interface", async () => {
-    const { config, processor, requests, send } = setup();
-    await expect(Effect.runPromise(runExecutorOnce(config, processor))).resolves.toBe("processed");
-    expect(processor.process).toHaveBeenCalledOnce();
-    expect(send.mock.calls[0]?.[0]).toBeInstanceOf(PutObjectCommand);
-    expect(requests).toEqual([
-      "/internal/v1/executors/video/claim",
-      "/internal/v1/executors/video/jobs/pane-view/source-1/complete",
-    ]);
-  });
+  it.effect("claims, processes, uploads, and completes through one interface", () =>
+    Effect.gen(function* () {
+      const { config, processor, requests, send } = setup();
+      expect(yield* runExecutorOnce(config, processor)).toBe("processed");
+      expect(processor.process).toHaveBeenCalledOnce();
+      expect(send.mock.calls[0]?.[0]).toBeInstanceOf(PutObjectCommand);
+      expect(requests).toEqual([
+        "/internal/v1/executors/video/claim",
+        "/internal/v1/executors/video/jobs/pane-view/source-1/complete",
+      ]);
+    }),
+  );
 
-  it("conditionally deletes this attempt's Master Preview after a lost complete", async () => {
-    const { config, processor, send } = setup({ completeStatus: 409 });
-    await expect(Effect.runPromise(runExecutorOnce(config, processor))).resolves.toBe("processed");
-    expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([
-      PutObjectCommand,
-      DeleteObjectCommand,
-    ]);
-    expect((send.mock.calls[1]?.[0] as DeleteObjectCommand).input).toMatchObject({
-      Key: "masters/source-1.webp",
-      IfMatch: '"etag-1"',
-    });
-  });
+  it.effect("conditionally deletes this attempt's Master Preview after a lost complete", () =>
+    Effect.gen(function* () {
+      const { config, processor, send } = setup({ completeStatus: 409 });
+      expect(yield* runExecutorOnce(config, processor)).toBe("processed");
+      expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([
+        PutObjectCommand,
+        DeleteObjectCommand,
+      ]);
+      expect((send.mock.calls[1]?.[0] as DeleteObjectCommand).input).toMatchObject({
+        Key: "masters/source-1.webp",
+        IfMatch: '"etag-1"',
+      });
+    }),
+  );
 
-  it("does not delete when fail reports the attempt is already gone", async () => {
-    const { config, processor, requests, send } = setup({
-      completeThrows: true,
-      failStatus: 409,
-    });
-    await expect(Effect.runPromise(runExecutorOnce(config, processor))).resolves.toBe("processed");
-    expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([PutObjectCommand]);
-    expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/pane-view/source-1/fail");
-  });
+  it.effect("does not delete when fail reports the attempt is already gone", () =>
+    Effect.gen(function* () {
+      const { config, processor, requests, send } = setup({
+        completeThrows: true,
+        failStatus: 409,
+      });
+      expect(yield* runExecutorOnce(config, processor)).toBe("processed");
+      expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([PutObjectCommand]);
+      expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/pane-view/source-1/fail");
+    }),
+  );
 
-  it("conditionally deletes an uploaded preview after Control accepts fail", async () => {
-    const { config, processor, send } = setup({ completeThrows: true });
+  it.effect("conditionally deletes an uploaded preview after Control accepts fail", () =>
+    Effect.gen(function* () {
+      const { config, processor, send } = setup({ completeThrows: true });
 
-    await expect(Effect.runPromise(runExecutorOnce(config, processor))).resolves.toBe("processed");
+      expect(yield* runExecutorOnce(config, processor)).toBe("processed");
 
-    expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([
-      PutObjectCommand,
-      DeleteObjectCommand,
-    ]);
-    expect((send.mock.calls[1]?.[0] as DeleteObjectCommand).input).toMatchObject({
-      Key: "masters/source-1.webp",
-      IfMatch: '"etag-1"',
-    });
-  });
+      expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([
+        PutObjectCommand,
+        DeleteObjectCommand,
+      ]);
+      expect((send.mock.calls[1]?.[0] as DeleteObjectCommand).input).toMatchObject({
+        Key: "masters/source-1.webp",
+        IfMatch: '"etag-1"',
+      });
+    }),
+  );
 
-  it("leaves an uploaded preview orphaned when the fail call throws", async () => {
-    const { config, processor, send } = setup({ completeThrows: true, failThrows: true });
+  it.effect("leaves an uploaded preview orphaned when the fail call throws", () =>
+    Effect.gen(function* () {
+      const { config, processor, send } = setup({ completeThrows: true, failThrows: true });
 
-    await expect(Effect.runPromise(runExecutorOnce(config, processor))).resolves.toBe("processed");
+      expect(yield* runExecutorOnce(config, processor)).toBe("processed");
 
-    expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([PutObjectCommand]);
-  });
+      expect(send.mock.calls.map(([command]) => command.constructor)).toEqual([PutObjectCommand]);
+    }),
+  );
 
-  it("reports processing failure without uploading", async () => {
-    const { config, processor, requests, send } = setup();
-    processor.process = vi.fn(() => Effect.fail(new Error("corrupt")));
-    await expect(Effect.runPromise(runExecutorOnce(config, processor))).resolves.toBe("processed");
-    expect(send).not.toHaveBeenCalled();
-    expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/pane-view/source-1/fail");
-  });
+  it.effect("reports processing failure without uploading", () =>
+    Effect.gen(function* () {
+      const { config, processor, requests, send } = setup();
+      processor.process = vi.fn(() => Effect.fail(new Error("corrupt")));
+      expect(yield* runExecutorOnce(config, processor)).toBe("processed");
+      expect(send).not.toHaveBeenCalled();
+      expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/pane-view/source-1/fail");
+    }),
+  );
 
-  it("keeps unexpected processor throws as defects", async () => {
-    const { config, processor, requests, send } = setup();
-    processor.process = vi.fn(() => Effect.die(new Error("processor invariant")));
+  it.effect("keeps unexpected processor throws as defects", () =>
+    Effect.gen(function* () {
+      const { config, processor, requests, send } = setup();
+      processor.process = vi.fn(() => Effect.die(new Error("processor invariant")));
 
-    await expect(Effect.runPromise(runExecutorOnce(config, processor))).rejects.toBeDefined();
+      const exit = yield* Effect.exit(runExecutorOnce(config, processor));
+      expect(Exit.isFailure(exit)).toBe(true);
 
-    expect(send).not.toHaveBeenCalled();
-    expect(requests).toEqual(["/internal/v1/executors/video/claim"]);
-  });
+      expect(send).not.toHaveBeenCalled();
+      expect(requests).toEqual(["/internal/v1/executors/video/claim"]);
+    }),
+  );
 
-  it("reports a ten-minute processing timeout as a retryable failure", async () => {
-    vi.useFakeTimers();
-    const { config, failureBodies, processor, requests, send } = setup();
-    processor.process = vi.fn(() => Effect.never);
+  it.effect("reports a ten-minute processing timeout as a retryable failure", () =>
+    Effect.gen(function* () {
+      const { config, failureBodies, processor, requests, send } = setup();
+      processor.process = vi.fn(() => Effect.never);
 
-    const result = Effect.runPromise(runExecutorOnce(config, processor));
-    await vi.waitFor(() => expect(processor.process).toHaveBeenCalledOnce());
-    await vi.advanceTimersByTimeAsync(10 * 60 * 1_000);
+      const fiber = yield* Effect.forkChild(runExecutorOnce(config, processor));
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(processor.process).toHaveBeenCalledOnce()),
+      );
+      yield* TestClock.adjust("10 minutes");
 
-    await expect(result).resolves.toBe("processed");
-    expect(send).not.toHaveBeenCalled();
-    expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/pane-view/source-1/fail");
-    expect(failureBodies).toEqual([{ processingToken: "processing-token", retryable: true }]);
-  });
+      expect(yield* Fiber.join(fiber)).toBe("processed");
+      expect(send).not.toHaveBeenCalled();
+      expect(requests.at(-1)).toBe("/internal/v1/executors/video/jobs/pane-view/source-1/fail");
+      expect(failureBodies).toEqual([{ processingToken: "processing-token", retryable: true }]);
+    }),
+  );
 
-  it("keeps heartbeating while a timed-out attempt reports its failure", async () => {
-    vi.useFakeTimers();
-    const { config, processor, requests } = setup({ failNever: true });
-    processor.process = vi.fn(() => Effect.never);
-    const fiber = Effect.runFork(runExecutorOnce(config, processor));
-    await vi.waitFor(() => expect(processor.process).toHaveBeenCalledOnce());
+  it.effect("keeps heartbeating while a timed-out attempt reports its failure", () =>
+    Effect.gen(function* () {
+      const { config, processor, requests } = setup({ failNever: true });
+      processor.process = vi.fn(() => Effect.never);
+      const fiber = yield* Effect.forkChild(runExecutorOnce(config, processor));
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(processor.process).toHaveBeenCalledOnce()),
+      );
 
-    await vi.advanceTimersByTimeAsync(10 * 60 * 1_000);
-    await vi.waitFor(() => expect(requests.some((path) => path.endsWith("/fail"))).toBe(true));
-    const heartbeatsAtTimeout = requests.filter((path) => path.endsWith("/heartbeat")).length;
-    await vi.advanceTimersByTimeAsync(60_000);
+      yield* TestClock.adjust("10 minutes");
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(requests.some((path) => path.endsWith("/fail"))).toBe(true)),
+      );
+      const heartbeatsAtTimeout = requests.filter((path) => path.endsWith("/heartbeat")).length;
+      yield* TestClock.adjust("1 minute");
 
-    expect(requests.filter((path) => path.endsWith("/heartbeat"))).toHaveLength(
-      heartbeatsAtTimeout + 1,
-    );
-    await Effect.runPromise(Fiber.interrupt(fiber));
-  });
+      expect(requests.filter((path) => path.endsWith("/heartbeat"))).toHaveLength(
+        heartbeatsAtTimeout + 1,
+      );
+      yield* Fiber.interrupt(fiber);
+    }),
+  );
 });
 
 describe("Executor configuration", () => {
-  it("stays unconfigured when required environment values are missing or empty", async () => {
-    await expect(Effect.runPromise(loadExecutorConfig({}))).resolves.toBeUndefined();
-    await expect(
-      Effect.runPromise(
-        loadExecutorConfig({
+  it.effect("stays unconfigured when required environment values are missing or empty", () =>
+    Effect.gen(function* () {
+      expect(yield* loadExecutorConfig({})).toBeUndefined();
+      expect(
+        yield* loadExecutorConfig({
           CONTROL_BASE_URL: "https://control.test",
           EXECUTOR_ROLE_TOKEN: "",
           S3_ENDPOINT: "https://s3.test",
@@ -197,7 +218,7 @@ describe("Executor configuration", () => {
           S3_SECRET_ACCESS_KEY: "secret",
           S3_BUCKET: "renditions",
         }),
-      ),
-    ).resolves.toBeUndefined();
-  });
+      ).toBeUndefined();
+    }),
+  );
 });

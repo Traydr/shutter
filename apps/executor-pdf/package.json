@@ -17,6 +17,7 @@
     "effect": "4.0.0-beta.103"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.0-beta.103",
     "@types/node": "^22.18.0",
     "tsx": "4.22.4",
     "typescript": "6.0.3",

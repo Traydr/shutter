@@ -21,6 +21,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.43.0",
     "@cloudflare/vitest-pool-workers": "0.18.2",
+    "@effect/vitest": "4.0.0-beta.103",
     "@shutter/testkit": "workspace:*",
     "typescript": "6.0.3",
     "vite": "8.1.3",

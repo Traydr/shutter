@@ -53,8 +53,9 @@ OTLP/HTTP JSON. The direct exporter is pinned to the exact OpenObserve ingest UR
 and requires the complete authorization and stream header bundle before it can start.
 Resource attributes identify the service, deployment environment, version,
 replica, and region. Control also emits one completion event for each
-non-health HTTP request using a server-generated request ID and the matched Hono
-route template; it never records raw paths, queries, headers, bodies, locators,
+non-health HTTP request using a server-generated request ID and the matched
+Effect `HttpRouter` route template; it never records raw paths, queries, headers,
+bodies, locators,
 capabilities, Source IDs, error messages, or stacks. Direct export is best effort
 with an in-memory batch queue, while Railway stdout remains the independent
 fallback. The operational procedure is in
@@ -72,12 +73,15 @@ authorization to remain under quota.
 
 ## Implementation stack
 
-Shutter is a TypeScript pnpm workspace. Shutter Control and both Executors run
-on Node with Hono; Drizzle manages the Postgres job schema; R2 is the Rendition
-Store; imgproxy remains a separate upstream container image.
+Shutter is a TypeScript pnpm workspace. Effect v4 owns the application runtime
+in Shutter Control, both Executors, and the protocol package. Control and the
+Executors run on Node through `@effect/platform-node`; `@effect/sql-pg` owns
+Postgres access and `PgMigrator` owns the job schema migrations. R2 is the
+Rendition Store, and imgproxy remains a separate upstream container image.
 
-The Cloudflare edge app is a web-native Hono Worker. It uses `wrangler.jsonc` as
-configuration source of truth, the official Cloudflare Vite plugin for local
+The Cloudflare edge app retains Hono only as its web-native HTTP shell around an
+Effect `ManagedRuntime`. It uses `wrangler.jsonc` as configuration source of
+truth, the official Cloudflare Vite plugin for local
 workerd execution, `wrangler types` for compatibility-date-specific bindings,
 Web Crypto AES-GCM for Source Capabilities, the Workers Cache API for private
 canonical entries, and Worker secrets for capability keys and the origin
@@ -356,8 +360,10 @@ retry state. The Executor writes one canonical high-quality Master Preview to
 the Rendition Store. Unpic and imgproxy then produce normalized responsive image
 sizes from that master through the ordinary image-delivery pipeline rather than
 scheduling size-specific video or PDF work. Each serverless Executor claims and
-completes at most one job per invocation; it
-records a terminal outcome before returning. Control serializes wake calls
+completes at most one job per invocation; it records a terminal outcome before
+returning. Control retries the Railway cold-start `502` twice with short
+exponential backoff before treating a wake as missed; the recovery sweep remains
+the backstop. Control serializes wake calls
 independently for each Executor kind, and only a completed `200` wake counts as
 successful; a `202` busy response remains a missed dispatch. A recovery sweep
 re-wakes jobs whose initial dispatch was missed.
@@ -417,9 +423,14 @@ Deterministic source failures remain unchanged unless the Source Object is
 purged or changed bytes are submitted under a new Source ID.
 
 Each job receives at most five attempts with retry delays of one minute, five
-minutes, thirty minutes, and two hours. An attempt has a ten-minute hard timeout,
-a fifteen-minute processing lease, and a one-minute heartbeat. A five-minute
-recovery sweep requeues expired leases and work whose initial wake was missed.
+minutes, thirty minutes, and two hours. The Executor enforces a ten-minute hard
+timeout around the media-processing step; Control's wake timeout only bounds how
+long Control waits for the invocation. Each attempt has a fifteen-minute
+processing lease and a one-minute heartbeat. That outbound heartbeat also keeps
+the Executor awake during a transcode: Railway Serverless sleeps a service after
+ten minutes without outbound traffic and does not count inbound traffic. A
+five-minute recovery sweep requeues expired leases and work whose initial wake
+was missed.
 Missing, unsupported, oversized, corrupt, or password-protected input is
 permanently terminal for that Source ID. Network, Railway, R2, and
 executor-process failures are retried automatically; consuming all five attempts
@@ -445,6 +456,6 @@ credentials. Its internal source URLs must be encrypted and signed.
 Deployable apps are `edge`, `control`, `executor-video`, and `executor-pdf`.
 Internal packages are `protocol` for Web-standard capability, URL, policy, and
 API contracts; `space-config` for checked-in non-secret policies; and `testkit`
-for cross-runtime fixtures and conformance helpers. Drizzle schema and migrations
+for cross-runtime fixtures and conformance helpers. `PgMigrator` migrations
 remain private to Control because Executors claim through its authenticated API
 rather than connecting directly to Postgres.

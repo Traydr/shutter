@@ -242,7 +242,7 @@ ready descriptor contains no URL, no locator, and no capability.
 
 ## Design decisions worth reading
 
-The interesting part of this repo is the reasoning as much as the code. Twenty
+The interesting part of this repo is the reasoning as much as the code. Twenty-one
 [architecture decision records](./docs/adr/) cover the tradeoffs; the
 [v1 contracts](./docs/contracts/v1/) pin the wire behavior each consumer can
 depend on.
@@ -254,6 +254,7 @@ depend on.
 | [Authorize before private cache lookups](./docs/adr/0008-authorize-before-private-cache-lookups.md) | The ordering constraint that makes private caching safe |
 | [Separate source identity from location](./docs/adr/0018-separate-source-identity-from-location.md) | An immutable Source ID drives cache and job identity while the locator stays replaceable |
 | [Require immutable source objects](./docs/adr/0003-require-immutable-source-objects.md) | Changed bytes are a different source, which removes cache invalidation as a category of bug |
+| [Adopt Effect for the application runtime](./docs/adr/0021-adopt-effect-for-the-application-runtime.md) | Effect owns application control flow while the Worker keeps Hono as its HTTP shell |
 
 A few properties fall out of those decisions:
 
@@ -284,13 +285,15 @@ A few properties fall out of those decisions:
 | `packages/space-config` | Per-tenant policy: trusted origins, quality ladders |
 | `packages/testkit` | Cross-consumer conformance fixtures |
 | `packages/executor-runtime` | Shared claim, heartbeat, upload, and cleanup work cycle |
-| `packages/observability-node` | Structured logging and OTLP export for Node services |
 
 ---
 
 ## Development
 
-TypeScript workspace on Node 22 and pnpm 11.1.
+TypeScript workspace on Node 22 and pnpm 11.1. Effect v4 owns the application
+runtime in Control, both Executors, and the protocol package; Hono remains only
+as the Cloudflare Worker's HTTP shell. Control uses `@effect/sql-pg` for
+Postgres access and `PgMigrator` for schema migrations.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -309,7 +312,7 @@ The video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
 `poppler-utils`.
 
 ```sh
-pnpm --filter @shutter/control db:migrate   # Rendition Job ledger
+pnpm --filter @shutter/control db:migrate   # PgMigrator, Rendition Job ledger
 pnpm --filter @shutter/control dev          # Control plane on :3000
 ```
 
