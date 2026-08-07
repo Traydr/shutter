@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { Cause, Effect, Exit } from "effect";
-import { describe, expect } from "vitest";
-import { verifySourceCapability } from "./capability.js";
+import { afterEach, describe, expect, vi } from "vitest";
+import { issueSourceCapability, verifySourceCapability } from "./capability.js";
 import { CapabilityError } from "./errors.js";
 import { issueSourceCapabilityWithIv } from "./testing.js";
 import type { ImageSourceClaims, SourceCapabilityClaims } from "./types.js";
@@ -18,6 +18,10 @@ const claims: ImageSourceClaims = {
   exp: 1_800_003_600,
   locator: "https://sources.example.test/objects/source-01?signature=test",
 };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function tokenFor(value: SourceCapabilityClaims = claims) {
   return issueSourceCapabilityWithIv(value, { kid, key }, iv);
@@ -125,6 +129,54 @@ describe("source capabilities", () => {
       const exit = yield* Effect.exit(
         verifySourceCapability(token, verification({ keys: hostileKeys })),
       );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Cause.hasDies(exit.cause)).toBe(true);
+        expect(Cause.hasFails(exit.cause)).toBe(false);
+      }
+    }),
+  );
+
+  it.effect("surfaces a key import failure as a defect", () =>
+    Effect.gen(function* () {
+      vi.spyOn(crypto.subtle, "importKey").mockRejectedValueOnce(
+        new TypeError("WebCrypto key import is unavailable"),
+      );
+
+      const exit = yield* Effect.exit(tokenFor());
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Cause.hasDies(exit.cause)).toBe(true);
+        expect(Cause.hasFails(exit.cause)).toBe(false);
+      }
+    }),
+  );
+
+  it.effect("surfaces an IV generation failure as a defect", () =>
+    Effect.gen(function* () {
+      vi.spyOn(crypto, "getRandomValues").mockImplementationOnce(() => {
+        throw new TypeError("WebCrypto randomness is unavailable");
+      });
+
+      const exit = yield* Effect.exit(issueSourceCapability(claims, { kid, key }));
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Cause.hasDies(exit.cause)).toBe(true);
+        expect(Cause.hasFails(exit.cause)).toBe(false);
+      }
+    }),
+  );
+
+  it.effect("surfaces an encryption failure as a defect", () =>
+    Effect.gen(function* () {
+      vi.spyOn(crypto.subtle, "encrypt").mockRejectedValueOnce(
+        new TypeError("WebCrypto encryption is unavailable"),
+      );
+
+      const exit = yield* Effect.exit(tokenFor());
 
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isFailure(exit)) {

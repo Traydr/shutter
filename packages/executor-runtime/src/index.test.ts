@@ -1,6 +1,6 @@
 import { DeleteObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
 import { it } from "@effect/vitest";
-import { Effect, Exit, Fiber } from "effect";
+import { Cause, Effect, Exit, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, vi } from "vitest";
 import {
@@ -158,6 +158,23 @@ describe("Executor work cycle", () => {
       const exit = yield* Effect.exit(runExecutorOnce(config, processor));
       expect(Exit.isFailure(exit)).toBe(true);
 
+      expect(send).not.toHaveBeenCalled();
+      expect(requests).toEqual(["/internal/v1/executors/video/claim"]);
+    }),
+  );
+
+  it.effect("turns an unexpected processor typed failure into a defect", () =>
+    Effect.gen(function* () {
+      const { config, processor, requests, send } = setup();
+      processor.process = vi.fn(() => Effect.fail(new Error("unmodeled processor failure")));
+
+      const exit = yield* Effect.exit(runExecutorOnce(config, processor));
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Cause.hasDies(exit.cause)).toBe(true);
+        expect(Cause.hasFails(exit.cause)).toBe(false);
+      }
       expect(send).not.toHaveBeenCalled();
       expect(requests).toEqual(["/internal/v1/executors/video/claim"]);
     }),

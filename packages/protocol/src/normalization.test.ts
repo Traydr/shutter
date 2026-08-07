@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Cause, Effect, Exit } from "effect";
 import { describe, expect, it } from "vitest";
 import { QueryError } from "./errors.js";
 import { normalizeQuality, normalizeRenditionQuery, normalizeWidth } from "./normalization.js";
@@ -63,5 +63,21 @@ describe("rendition normalization", () => {
     expect(() =>
       Effect.runSync(normalizeRenditionQuery(new URLSearchParams(query), policy)),
     ).toThrow(QueryError);
+  });
+
+  it("surfaces an unexpected query API failure as a defect", () => {
+    const hostileQuery = {
+      keys() {
+        throw new TypeError("URLSearchParams iteration is broken");
+      },
+    } as unknown as URLSearchParams;
+
+    const exit = Effect.runSyncExit(normalizeRenditionQuery(hostileQuery, policy));
+
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(Cause.hasDies(exit.cause)).toBe(true);
+      expect(Cause.hasFails(exit.cause)).toBe(false);
+    }
   });
 });

@@ -59,8 +59,8 @@ export function normalizeRenditionQuery(
   query: URLSearchParams,
   policy: RenditionPolicyInput,
 ): Effect.Effect<NormalizedRenditionQuery, QueryError> {
-  return Effect.try({
-    try: () => {
+  return Effect.suspend(() => {
+    try {
       for (const key of query.keys()) {
         if (key !== "w" && key !== "q") {
           throw queryError(`unknown rendition parameter: ${key}`);
@@ -85,14 +85,14 @@ export function normalizeRenditionQuery(
       const width = normalizeWidth(requestedWidth);
       const quality = normalizeQuality(requestedQuality, policy.qualities);
 
-      return {
+      return Effect.succeed({
         width,
         quality,
         isCanonical:
           widthValue === String(width) && qualityValue !== null && qualityValue === String(quality),
-      };
-    },
-    catch: (error) =>
-      error instanceof QueryError ? error : queryError("rendition query validation failed"),
+      });
+    } catch (error) {
+      return error instanceof QueryError ? Effect.fail(error) : Effect.die(error);
+    }
   });
 }

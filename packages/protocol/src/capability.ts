@@ -74,10 +74,9 @@ function importKey(
   if (key.byteLength !== CAPABILITY_KEY_BYTES) {
     return Effect.fail(capabilityError("claims_invalid", "capability keys must be 256 bits"));
   }
-  return Effect.tryPromise({
-    try: () => crypto.subtle.importKey("raw", copyBytes(key), { name: "AES-GCM" }, false, [usage]),
-    catch: () => capabilityError("claims_invalid", "capability key could not be imported"),
-  });
+  return Effect.promise(() =>
+    crypto.subtle.importKey("raw", copyBytes(key), { name: "AES-GCM" }, false, [usage]),
+  );
 }
 
 function associatedData(
@@ -240,10 +239,9 @@ export function issueSourceCapability(
   claims: SourceCapabilityClaims,
   options: IssueCapabilityOptions,
 ): Effect.Effect<string, CapabilityError> {
-  return Effect.try({
-    try: () => crypto.getRandomValues(new Uint8Array(CAPABILITY_IV_BYTES)),
-    catch: () => capabilityError("claims_invalid", "capability IV could not be generated"),
-  }).pipe(Effect.flatMap((iv) => issueSourceCapabilityWithIvInternal(claims, options, iv)));
+  return tryCapability(() => crypto.getRandomValues(new Uint8Array(CAPABILITY_IV_BYTES))).pipe(
+    Effect.flatMap((iv) => issueSourceCapabilityWithIvInternal(claims, options, iv)),
+  );
 }
 
 export function issueSourceCapabilityWithIvInternal(
@@ -279,20 +277,18 @@ export function issueSourceCapabilityWithIvInternal(
 
     const key = yield* importKey(options.key, "encrypt");
     const iv = copyBytes(ivInput);
-    const ciphertext = yield* Effect.tryPromise({
-      try: () =>
-        crypto.subtle.encrypt(
-          {
-            name: "AES-GCM",
-            iv,
-            additionalData: associatedData(claims.space_id, options.kid, claims.purpose),
-            tagLength: CAPABILITY_TAG_BITS,
-          },
-          key,
-          encodeUtf8(canonicalClaimsJson(claims)),
-        ),
-      catch: () => capabilityError("claims_invalid", "capability encryption failed"),
-    });
+    const ciphertext = yield* Effect.promise(() =>
+      crypto.subtle.encrypt(
+        {
+          name: "AES-GCM",
+          iv,
+          additionalData: associatedData(claims.space_id, options.kid, claims.purpose),
+          tagLength: CAPABILITY_TAG_BITS,
+        },
+        key,
+        encodeUtf8(canonicalClaimsJson(claims)),
+      ),
+    );
 
     const token = `${PROTOCOL_VERSION}.${options.kid}.${encodeBase64Url(iv)}.${encodeBase64Url(new Uint8Array(ciphertext))}`;
     if (token.length > CAPABILITY_MAX_BYTES) {
