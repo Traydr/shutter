@@ -1,113 +1,111 @@
 # Plan 01 — Space registry schema
 
-One PR. Adds the database layer and the shared policy schema without changing a
-single call site. Everything continues to read the checked-in policies, so this
-lands with no behavioural change and no deployment risk.
+One PR. Add the database layer and shared policy schema. Do not change runtime
+callers in this plan.
 
 ## Goal
 
-The tables, the envelope encryption, and the repository functions exist and are
-tested. Nothing uses them yet.
+Postgres can store every Shutter Space policy and credential. Tenant values
+remain in the existing package until plan 02 performs the cutover.
 
 ## Not in scope
 
-Reading the registry from Control, Edge, or the Executors; removing tenant data
-from the repository; the admin surface. All of that is plan 02 onward.
+Runtime reads, tenant-data removal, Edge refresh, and the admin surface.
+
+## Decisions
+
+- Every table has an incrementing internal primary key.
+- A Space also has an immutable, unique public identifier such as
+  `example-public`.
+- A Space's route class is immutable. To change from public to private, or from
+  private to public, create a new Space with a new public identifier.
+- A Space is decommissioned, not deleted. Its public identifier remains
+  reserved, and old jobs and cache keys keep their meaning.
+- Other policy fields can change.
 
 ## Steps
 
 ### 1. Move the policy schema into `@shutter/protocol`
 
-`packages/space-config` holds two things: tenant data and a lookup function.
-Once the data leaves, what remains is a zod schema and a parser — and
-`packages/protocol/src/key-material.ts` already exports
-`parseCapabilityKeyRegistry`, which does the identical job for the other
-environment variable. They belong in one place.
+Move the existing `SpacePolicy` parser and validation rules from
+`packages/space-config` to `packages/protocol/src/`. Validate the discriminated
+route class, HTTPS origins without credentials, resolver shape, allowed
+qualities, and the default quality.
 
-Add to `packages/protocol/src/`:
+Keep `packages/space-config` until plan 02 removes its final caller.
 
-- `spacePolicySchema` — a zod schema over the existing `SpacePolicy` union in
-  `types.ts`, enforcing the discriminated `routeClass`, that private Spaces have
-  no resolvers, that `defaultQuality` is a member of `qualities`, and that every
-  allowed origin is HTTPS with no credentials.
-- `parseSpacePolicies(raw: string): SpacePolicyRegistry` — mirrors the shape and
-  failure behaviour of `parseCapabilityKeyRegistry`, returning a registry with a
-  synchronous `get(spaceId)`.
+### 2. Add the registry tables
 
-Zod is pure JavaScript, so `scripts/check-edge-boundary.mjs` stays satisfied.
-Do not delete `packages/space-config` in this PR — plan 02 removes it once the
-last import is gone.
+Use generated identity integer primary keys for every table. Keep separate
+unique constraints for the business identifiers:
 
-### 2. Schema migration
+- `spaces` — internal `id`, unique `space_id`, `route_class`, `status`, quality
+  policy, timestamps, and `decommissioned_at`.
+- `space_source_origins` — internal `id`, `space_id` foreign key, `origin`, and
+  `path_prefix`; unique on the Space and normalized origin rule.
+- `space_resolvers` — internal `id`, `space_id` foreign key, unique
+  `resolver_id` inside the Space, resolver type, and allowed project IDs.
+- `space_api_tokens` — internal `id`, `space_id` foreign key, label, globally
+  unique token hash, display prefix, and use/revocation timestamps.
+- `space_capability_keys` — internal `id`, `space_id` foreign key, unique key ID
+  inside the Space, sealed key fields, acceptance timestamp, and disablement
+  timestamp.
+- `space_registry_metadata` — one row with the current generation. Every policy
+  or credential write increments it in the same transaction.
 
-New tables in `apps/control/src/db/schema.ts`, following the existing
-`renditionJobs` conventions (`text` identifiers, `timestamp` with time zone,
-`check` constraints for enumerations):
+Do not use a cross-table `CHECK` constraint for the rule that a private Space
+has no resolver. Postgres `CHECK` constraints cannot inspect another table.
+Enforce the rule in the repository transaction and with a database trigger so
+direct SQL cannot create an invalid registry.
 
-- `spaces` — `id` text primary key, `route_class` with a check constraint of
-  `('public', 'private')`, `qualities` integer array, `default_quality`,
-  `created_at`, `updated_at`.
-- `space_source_origins` — `space_id` foreign key, `origin`, `path_prefix`.
-- `space_resolvers` — `space_id` foreign key, `resolver_id`, `type` checked
-  against `('uploadthing')`, `allowed_project_ids` text array.
-- `space_api_tokens` — `space_id` foreign key, `label`, `token_sha256`,
-  `token_prefix` for display, `created_at`, `last_used_at`, `revoked_at`.
-- `space_capability_keys` — `space_id` foreign key, `key_id`, `key_ciphertext`,
-  `key_nonce`, `activated_at`, `retired_at`.
+Add database triggers that reject changes to `spaces.space_id` and
+`spaces.route_class`. The TypeScript repository must also omit these fields
+from its update interface.
 
-Foreign keys cascade on delete, so removing a Space removes its credentials.
-A check constraint enforces that a private Space has no resolver rows.
+### 3. Add envelope encryption
 
-Generate the migration with the existing drizzle setup. `db:migrate` already
-runs in `preDeploy` in `.railway/railway.ts`, so no deployment change is needed.
+Add `SHUTTER_ENCRYPTION_KEY` to Control configuration and keep it as
+`preserve()` in Railway IaC. It is 32 bytes encoded as hex or base64url.
 
-### 3. Envelope encryption
+Seal capability keys with AES-256-GCM in Control. Use the public Space
+identifier and capability key identifier as additional authenticated data. If
+the encryption key is missing, key reads and writes return `503`; Control can
+still serve its health route.
 
-`SHUTTER_ENCRYPTION_KEY` — 32 bytes, hex or base64url, validated the same way
-capability keys already are in `packages/protocol/src/key-material.ts`. Add it
-to `apps/control/src/env/server.ts` as an optional string, to `.env.example`,
-and to `.railway/railway.ts` as `preserve()` on Control.
+### 4. Add a deep registry module
 
-Capability key material is sealed with AES-256-GCM using `node:crypto`, in
-Control only. The Space identifier and key identifier go in as additional
-authenticated data, so a ciphertext cannot be moved between Spaces or key slots.
+Add an async `SpaceRegistry` interface in `apps/control/src/spaces/`. Keep the
+Postgres and cryptography implementation behind this seam. Its operations cover:
 
-Fail-closed, matching the convention stated in `.env.example`: if the variable
-is unset, capability-key reads and writes fail and their routes return 503,
-while the rest of Control boots normally.
+- get one active Space policy;
+- load one atomic Edge snapshot;
+- create, edit, and decommission a Space;
+- issue, verify, and revoke API tokens; and
+- add and manage capability keys.
 
-### 4. Repository functions
+Each mutation runs in one transaction and increments the registry generation.
+The test adapter and the Postgres adapter implement the same interface.
 
-A new `apps/control/src/spaces/` module with the query and mutation functions —
-create and delete a Space, replace its origins and resolvers, issue and revoke
-API tokens, add and retire capability keys, and load the full policy set.
-
-Token verification hashes the presented value with SHA-256 and compares in
-constant time against `token_sha256`, rejects rows with `revoked_at` set, and
-updates `last_used_at` without blocking the response.
-
-Capability key retirement refuses to retire the last active key for a Space,
-and records `retired_at` rather than deleting the row, so verification can
-continue through the overlap window required by
-[ADR-0013](../adr/0013-separate-space-api-and-capability-credentials.md).
-
-## Files touched
-
-- `packages/protocol/src/` — new schema and parser, exported from `index.ts`
-- `apps/control/src/db/schema.ts` and a generated `drizzle/` migration
-- `apps/control/src/spaces/` — new
-- `apps/control/src/env/server.ts`, `.env.example`, `.railway/railway.ts`
+Shutter stores the set of Capability Keys that it accepts. It does not select
+which key a consuming application uses to issue new capabilities. Rotation is
+a manual operator process: add the new key to Shutter, update the application,
+wait for old capabilities to expire, and then disable the old key in Shutter.
+An operator can disable a compromised key immediately and accept that existing
+capabilities for that key will fail.
 
 ## Verification
 
-`pnpm check` passes unchanged, since no existing behaviour is touched. New unit
-tests cover schema rejection cases, seal/unseal round trips including the
-additional-authenticated-data rejection, and the repository functions against
-the testcontainers Postgres already used by the Control suite.
+Run `pnpm check`. Add tests for:
 
-## Risks
+- all unique constraints and foreign keys;
+- immutable public identifiers and route classes;
+- the private-Space resolver trigger;
+- decommission behavior;
+- generation increments in the same transaction as each write;
+- encryption round trips and additional-authenticated-data rejection; and
+- repository behavior against the existing testcontainers Postgres.
 
-The migration adds tables and touches nothing existing, so it is reversible by
-dropping them. The one thing to get right first time is the additional
-authenticated data on the seal, because changing it later invalidates every
-stored ciphertext.
+## Risk
+
+The encryption format and authenticated-data fields must be correct before any
+real key is stored. A later incompatible change would make stored keys unreadable.

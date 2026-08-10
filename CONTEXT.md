@@ -40,6 +40,12 @@ capability contains a Source Locator only when its purpose must fetch an
 application-owned Source Object.
 _Avoid_: Shared bucket credential, permanent source URL, Source Grant
 
+**Capability Key**:
+A shared symmetric credential that a consuming application uses to issue Source
+Capabilities and Shutter uses to accept them. The application owner coordinates
+key installation and rotation on both sides.
+_Avoid_: Public verification key, Shutter-managed application key
+
 **Rendition**:
 A visual representation of a Source Object. A Rendition is produced on demand
 or materialized as a stored Derivative.
@@ -49,6 +55,12 @@ _Avoid_: Media URL, arbitrary transformation pipeline
 An on-demand Image Rendition that resizes a Source Object to a requested width
 while preserving its composition, then WebP-encodes it at the requested quality.
 _Avoid_: General-purpose image manipulation, crop-to-fill
+
+**Source Delivery**:
+Pass-through delivery of a Source Object through Shutter without converting its
+bytes. It uses the Source ID for cache and purge identity and uses the Source
+Locator only to fetch the current immutable original.
+_Avoid_: Original Rendition, arbitrary reverse proxy, media catalog
 
 **Rendition Policy**:
 The trusted Shutter Space configuration that defines canonical image widths,

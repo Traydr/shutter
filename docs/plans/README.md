@@ -1,75 +1,61 @@
 # Plans
 
 Implementation plans for work that spans several pull requests. Each numbered
-plan is one PR. A plan is deleted once its work has landed and its outcome is
-recorded in `docs/adr/` or `docs/architecture.md`.
+plan is one PR unless the plan says it is not scheduled. A plan is deleted once
+its work has landed and its outcome is recorded in `docs/adr/` or
+`docs/architecture.md`.
 
-## Move Space configuration out of the repository
+Open the [interactive plan](./index.html) for the visual explanation.
 
-| Plan | PR scope |
-| --- | --- |
-| [01 — Space registry schema](./01-space-registry-schema.md) | Schema, encryption, database layer. No call sites change. |
-| [02 — Space registry cutover](./02-space-registry-cutover.md) | Control, Edge, and Executors read the registry. Tenant data leaves the repository. |
-| [03 — Admin surface](./03-admin-surface.md) | Server-rendered Space management in Control, with credential issuing and copy-out. |
-| [04 — Deferred work](./04-deferred.md) | Drift detection, Edge auto-refresh, operator accounts. Not scheduled. |
+## Sequence
 
-### Why
+| Plan | PR scope | Priority |
+| --- | --- | --- |
+| [01 — Space registry schema](./01-space-registry-schema.md) | Identity keys, immutable route class, encryption, and database layer. | Now |
+| [02 — Space registry cutover](./02-space-registry-cutover.md) | Direct Postgres reads, per-isolate Edge refresh, maintenance cutover, and tenant-data removal. | Now |
+| [03 — Admin surface](./03-admin-surface.md) | Server-rendered Space and credential management in Control. | Now |
+| [04 — Deployment portability](./04-deployment-portability.md) | Fresh-deploy inputs and deletion of two obsolete scripts. | Later |
+| [05 — Media delivery](./05-media-delivery.md) | One Shutter hostname for original images, videos, PDFs, and optional image optimization. | After configuration |
+| [06 — Deferred operations](./06-deferred.md) | Operator accounts, encryption-key tooling, and measured scaling work. | Not scheduled |
 
-`packages/space-config/src/index.ts` holds two real tenants' policies —
-`ernesta` and `pane-view` — including their storage origins and UploadThing
-project identifiers, in a public MIT repository. `README.md` and
-`docs/architecture.md` both describe those Spaces as illustrative demo values,
-so the documentation and the code disagree.
+## Why
 
-Underneath that leak is a structural problem. "Which Spaces exist" is asserted
-in three uncoordinated places — the checked-in TypeScript, the
-`SPACE_API_TOKENS` environment variable, and the `CAPABILITY_KEYS` environment
-variable — with no referential integrity between them. A typo in one produces a
-silent 401 from another. Adding a Space means editing TypeScript, hand-writing
-two JSON documents, updating `IMGPROXY_ALLOWED_SOURCES`, and redeploying three
-services across two clouds.
+`packages/space-config/src/index.ts` contains real tenant policy in a public
+repository. Space existence is also repeated in checked-in TypeScript,
+`SPACE_API_TOKENS`, and `CAPABILITY_KEYS`, with no shared source of truth.
 
-The goal is that a self-hoster authors nothing. They deploy the template, open
-the admin page, create a Space, and copy two credentials into their
-application.
+The target is simple: a self-hoster deploys Shutter, opens the admin page,
+creates a Space, and configures the consuming application. They do not edit
+Shutter code or paste Space policy JSON into Cloudflare.
 
-### Decisions taken before writing these plans
+## Accepted decisions
 
-**Control's database is the authoring source; the Edge is configured by
-generated environment variables.** Railway must not depend on Cloudflare. The
-admin page renders the `SPACE_POLICIES` and `CAPABILITY_KEYS` JSON for the
-operator to paste into Cloudflare. Automatic refresh at the Edge is deferred to
-plan 04 and is not required for any of this to work.
+- The cutover can use a maintenance window of up to 10 minutes.
+- Database tables use incrementing internal primary keys plus unique business
+  constraints.
+- A Space public identifier and route class are immutable. A route-class change
+  uses a new Space and a new identifier.
+- Control reads Postgres on each Space-scoped request. It has no policy cache in
+  the first version.
+- Edge fetches one atomic configuration snapshot from Control and keeps it for
+  at most 60 seconds in each isolate. Workers KV is not required.
+- `ADMIN_BOOTSTRAP_TOKEN` and other deployment values stay `preserve()`d in
+  Railway IaC until plan 04.
+- Capability-key rotation is manual. Add the new key to Shutter, update the
+  application, wait for old capabilities to expire, and disable the old key.
+- Plan 04 deletes `check-phase2-config.mjs` and `verify-v1.mjs`. The Edge
+  boundary and workspace test-runner scripts remain.
+- General media delivery is plan 05, after registry and admin work.
 
-**The API token and the capability key stay separate credentials**, as
-[ADR-0013](../adr/0013-separate-space-api-and-capability-credentials.md)
-already requires. They cannot be merged: an API token is only ever checked, so
-it is stored as an unrecoverable hash, while a capability key is used to
-decrypt and must be stored recoverably. They also revoke on incompatible
-schedules — an API token revokes instantly, while a retired capability key must
-keep verifying until every capability it minted has expired, up to 24 hours.
-And only the capability key belongs on Cloudflare; the Worker has no business
-holding a credential that authorises job submission and purge.
+## Configuration ownership
 
-What gets unified is the *management surface*, not the cryptography. One Space
-row, one page, both credentials issued together.
+Space policy and credentials belong in Postgres. Provider regions, custom
+domains, storage bindings, and provider credentials belong in deployment
+configuration. Versioned URL shapes, capability purposes, cache identity, and
+maximum protocol lifetimes remain in code and contracts.
 
-**Space identifiers are immutable.** They are embedded in R2 object keys
-(`cache/{space}/`, `masters/{space}/`) and in the `rendition_jobs` primary key.
-The admin surface offers create and delete, never rename.
+## Independent security work
 
-**Encryption key rotation is documented, not implemented.** Rotating
-`SHUTTER_ENCRYPTION_KEY` requires re-encrypting every stored capability key.
-Plan 03 ships the runbook; the tooling is out of scope.
-
-**`SHUTTER_ENCRYPTION_KEY`, not `SHUTTER_MASTER_KEY`.** "Master" already means
-Master Preview throughout this codebase — the `masters/` prefix, the
-`master_preview` capability purpose, `MasterPreviewDescriptor`, and the
-`rendition_jobs.master_key` column, which is an R2 object key and not a secret.
-
-### Work that is related but independent
-
-The current tenant values are in the public git history and remain there after
-any change to `HEAD`. Scrubbing them needs `git filter-repo` and a force push,
-and the values should be assumed already exposed. This is not sequenced against
-the plans above and can happen at any point.
+Removing tenant values from `HEAD` does not remove them from git history. Treat
+the current values as exposed. History rewriting and credential replacement are
+independent operational work.

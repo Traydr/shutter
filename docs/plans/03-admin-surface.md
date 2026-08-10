@@ -1,111 +1,109 @@
 # Plan 03 — Admin surface
 
-One PR, depending on plan 02. Server-rendered Space management inside Control.
+One PR, after plan 02. Add server-rendered Space management inside Control.
 
 ## Goal
 
-A self-hoster deploys the template, opens the admin page, creates a Space, and
-copies its credentials into their application. They author no JSON and edit no
-TypeScript.
+A self-hoster deploys Shutter, opens `/admin`, creates a Space, and copies the
+new credentials into the consuming application. They do not edit TypeScript or
+author policy JSON.
 
 ## Why it lives in Control
 
-Control is already a Hono app with a database connection and a custom domain. A
-separate `apps/admin` would mean another service in `.railway/railway.ts` and
-another thing a self-hoster deploys, which is the tax this work exists to
-remove. Server-rendered HTML from Hono keeps it to one service with no frontend
-build step.
+Control already owns the Space registry and database connection. A separate
+admin application would add another deployment and another interface. Render
+the small management surface from Hono with no frontend build step.
 
 ## Steps
 
-### 1. Bootstrap authentication
+### 1. Add bootstrap authentication
 
-A single operator credential, `ADMIN_BOOTSTRAP_TOKEN`, `preserve()`d in
-`.railway/railway.ts` and generated on first deploy. Session cookie after
-login — `Secure`, `HttpOnly`, `SameSite=Strict`, short expiry.
+Use one `ADMIN_BOOTSTRAP_TOKEN`, kept as `preserve()` in Railway IaC and managed
+by the operator. After login, use a short-lived `Secure`, `HttpOnly`,
+`SameSite=Strict` session cookie.
 
-This is deliberately minimal. Real operator accounts with per-Space scoping are
-plan 04. One credential is enough for a single-operator deployment and is the
-difference between this PR being a few days and a few weeks.
+Mount the interface at `/admin`. Register admin routes separately from public
+and job routes. Only the login form is unauthenticated.
 
-Mount at `/admin` on Control's existing domain. Every route requires the
-session; there is no unauthenticated surface beyond the login form. The admin
-routes are registered separately from the job API so that a routing mistake
-cannot expose one through the other.
+Automatic first-deploy credential generation and operator accounts are later
+work. This plan keeps the current Railway `preserve()` model.
 
-### 2. Space management
+### 2. Manage Space policy
 
-Create, view, and delete Spaces. Edit route class, quality ladder, default
-quality, source origins, and resolvers.
+Create, view, edit, and decommission Spaces.
 
-The identifier field is create-only and immutable afterwards, because it is
-embedded in R2 keys (`cache/{space}/`, `masters/{space}/`) and in the
-`rendition_jobs` primary key. The form says so.
+The public Space identifier and route class are create-only. Do not render an
+edit control for either field. If an operator needs a different route class,
+the interface tells them to create a new Space with a new identifier, migrate
+the application, and decommission the old Space.
 
-Deleting a Space warns when unfinished `rendition_jobs` rows reference it, since
-`docs/architecture.md` requires configuration to outlive any job that names it.
-Cascading deletes remove its credentials with it.
+Allow edits to the quality policy, source origins, and public-Space resolvers.
+Validate each write through the same `SpaceRegistry` interface used by runtime
+callers. Show the new registry generation after a successful write.
 
-### 3. Credential management
+Do not delete a Space or reuse its public identifier. Decommissioning blocks new
+Space-scoped work but retains identity, policy history needed by unfinished
+jobs, and credential audit fields.
 
-Issue an API token: generated server-side, displayed once, stored as a hash.
-The list shows label, prefix, creation date, and last use. Revocation is
+### 3. Manage credentials
+
+Issue an API token on the server, display it once, and store only its hash. Show
+its label, prefix, creation time, last use, and revocation state. Revocation is
 immediate.
 
-Add a capability key: generated server-side, displayed once, sealed with
-`SHUTTER_ENCRYPTION_KEY`. The list shows key identifier, activation date, and
-state.
+Generate capability keys on the server, display them once for installation in
+the consuming application, and seal them in Postgres. Show the key identifier,
+acceptance time, and whether Shutter still accepts it.
 
-Retiring a capability key is where the UI earns its place. It refuses to retire
-the last active key, and it explains the overlap window rather than leaving it
-to tribal knowledge — a retired key must keep verifying until every capability
-it minted has expired, up to the 24 hours fixed in
-`docs/contracts/v1/rendition-policy.md`. The interface shows the earliest safe
-retirement time and blocks the action until then.
+Key rotation is manual and the consuming application owns its minting choice:
 
-### 4. Copy-out panel
+1. Add the new key to Shutter, so Shutter accepts old and new capabilities.
+2. Install the new key in the consuming application and make it the minting key.
+3. Wait 24 hours from the application cutover so old capabilities expire.
+4. Disable the old key in Shutter.
 
-The piece the Edge depends on, given that Railway does not talk to Cloudflare.
+Do not require an automatic handoff. For a compromised key, allow immediate
+disablement with a clear warning that existing capabilities will fail.
 
-One page rendering:
+### 4. Show deployment coverage and refresh status
 
-- `SPACE_POLICIES` — the full policy JSON, for the Worker.
-- `CAPABILITY_KEYS` — the unsealed key registry in the shape
-  `{ "space-id": { "kid": "key" } }` the Worker already parses, for the Worker.
-- `IMGPROXY_ALLOWED_SOURCES` — the origin list derived from every Space, for
-  Railway.
+Do not render `SPACE_POLICIES` or `CAPABILITY_KEYS` for copy into Cloudflare.
+Plan 02 makes Edge pull one atomic snapshot from Control.
 
-Each with a copy button. Each stamped with a generation number that increments
-on every write, so it is possible to tell what was last pasted where.
+Show instead:
 
-The panel warns when a Space's origins are not covered by the currently
-configured `IMGPROXY_ALLOWED_SOURCES`, which is the one piece of policy that
-cannot follow the database.
+- the current registry generation;
+- the latest successful Edge refresh generation and time, when reported;
+- the derived `IMGPROXY_ALLOWED_SOURCES` value for manual Railway updates; and
+- a warning for any Space origin that the deployment allowlist does not cover.
 
-### 5. Runbooks
+The deployment allowlist remains manual because imgproxy reads it at process
+start.
 
-- Creating a Space and wiring an application to it — the plug-and-play path,
-  written for someone who has never seen this repository.
-- Rotating an API token.
-- Rotating a capability key, including the overlap window.
-- Rotating `SHUTTER_ENCRYPTION_KEY`. **Documented, not implemented.** It
-  requires unsealing and re-sealing every `space_capability_keys` row, and no
-  tooling ships for it. The runbook states the procedure and that it needs a
-  maintenance window.
+### 5. Add runbooks
+
+Write runbooks for:
+
+- creating and decommissioning a Space;
+- changing a mutable policy field;
+- rotating an API token;
+- rotating a capability key with the manual overlap process;
+- updating `IMGPROXY_ALLOWED_SOURCES`; and
+- rotating `SHUTTER_ENCRYPTION_KEY` in a maintenance window.
+
+Encryption-key rotation tooling is not part of this plan.
 
 ## Verification
 
-Beyond unit and route tests: create a Space through the interface, paste the
-rendered values into a local Worker and imgproxy, and render an image
-end to end without touching a source file. That walk-through is the actual
-acceptance criterion for the whole effort, and it belongs in the runbook.
+Run `pnpm check`. In an end-to-end acceptance test, create a Space, configure a
+consuming application, wait for Edge to refresh, and render an image without
+editing a repository file or pasting Space JSON into Cloudflare.
+
+Also test immutable fields, decommissioning, session protection, one-time secret
+display, CSRF protection, and deployment-allowlist warnings.
 
 ## Risks
 
-**An admin surface on the origin domain is new attack surface.** It sits behind
-a bearer credential on the same host that serves the job API. Registering the
-routes separately limits routing mistakes; a separate hostname would be
-stronger and is plan 04.
-
-**Credentials displayed once are lost once.** The interface must be explicit
-that a token cannot be recovered, only replaced.
+The admin surface is security-sensitive because it can issue credentials and
+change fetch policy. Keep it small, server-rendered, and separate from job
+routes. A separate admin hostname and real operator accounts remain later work.

@@ -1,183 +1,167 @@
 # Plan 02 — Space registry cutover
 
-One PR, depending on plan 01. Control reads Spaces from the database, the Edge
-reads them from an environment variable, the Executors stop reading them at all,
-and the tenant data leaves the repository.
+One PR, after plan 01. Control and Edge read the registry, Executors receive the
+small policy fragment they need, and tenant data leaves the repository.
 
 ## Goal
 
-`packages/space-config` is deleted. No tenant identifier appears anywhere in the
-tree. The live deployment migrates without downtime.
+Delete `packages/space-config`. Remove `SPACE_API_TOKENS`, `CAPABILITY_KEYS`,
+and tenant policy JSON from deployment configuration. A policy or key change
+reaches every active Edge isolate within 60 seconds.
+
+The production cutover can use a maintenance window of up to 10 minutes. Do not
+add dual reads or a zero-downtime compatibility layer.
 
 ## Not in scope
 
-The admin surface. Until plan 03 lands, Spaces are managed with the import
-script and direct SQL. That is acceptable for a deployment with two Spaces and
-keeps this PR reviewable.
+The admin surface, deployment portability, and general media delivery.
 
 ## Steps
 
-### 1. Space registry in Control
+### 1. Make Control read Postgres for each request
 
-An in-memory registry loaded at boot from the plan 01 repository functions and
-invalidated on write. It exposes the same synchronous
-`getSpacePolicy(spaceId): SpacePolicy | undefined` signature the call sites
-already use, which is what keeps this diff small — the four call sites change
-their import, not their shape:
+Replace synchronous `getSpacePolicy()` calls with async `SpaceRegistry` calls.
+Do not add a Control in-memory policy cache. Each Space-scoped Control request
+reads current policy from Postgres through the registry interface.
 
-- `apps/control/src/app.ts:169`
-- `apps/control/src/job-api.ts:109`, `:126`, `:213`
+This supports multiple Control replicas without cache invalidation. If database
+load later becomes measurable, optimize inside the registry module without
+changing callers.
 
-Control runs a single replica (`replicas: { [region]: 1 }` in
-`.railway/railway.ts`), so an in-process cache needs no cross-replica
-invalidation. Record this as a constraint in `docs/architecture.md`: raising the
-replica count requires a real invalidation path first.
+If Postgres is unavailable, return `503`. Return `404` only when a successful
+query confirms that an active Space does not exist. Do not fail open.
 
-If the registry cannot load at boot — no database, no rows — Control starts and
-every Space-scoped route returns 404 or 503. It must not fall open.
+### 2. Move API-token verification to the registry
 
-### 2. API token verification
+Make `authorizedSpace()` call `SpaceRegistry.verifyApiToken()`. Remove
+`SPACE_API_TOKENS` from Control environment parsing, `.env.example`, and
+Railway IaC.
 
-`authorizedSpace()` in `apps/control/src/job-api.ts` currently compares against
-the parsed `SPACE_API_TOKENS` environment variable. Point it at the plan 01
-token verification instead. Remove `SPACE_API_TOKENS` from
-`apps/control/src/env/server.ts`, `.env.example`, and `.railway/railway.ts`.
+Hash the presented token and compare it in constant time. A revoked token fails
+immediately. The `last_used_at` update must not delay the response.
 
-`CAPABILITY_KEYS` stays in Control's environment for now only if the import
-script still needs it; otherwise it is removed here too and read from the
-database.
+### 3. Remove Space policy from Executors
 
-### 3. Executors stop reading policy
+Add the allowed source-origin rules to the claim that Control already issues.
+Control obtains those rules from the current Space policy. Each Executor uses
+the signed claim and no longer loads the whole Space registry.
 
-`packages/executor-runtime/src/index.ts:91` loads a whole policy and uses only
-`policy.allowedSourceOrigins`, for a claim Control has just issued. Put that
-array in the claim payload:
+Update the claim protocol, contract fixtures, Executor runtime, package
+dependencies, and Railway watch patterns.
 
-- Extend the claim type in `packages/protocol/src/jobs.ts`.
-- Populate it in `apps/control/src/job-api.ts:213`, which already has the policy
-  in hand.
-- Consume it in `packages/executor-runtime/src/index.ts`, deleting the import at
-  line 16 and the lookup and its `configuration_error` branch.
-- Update `docs/contracts/v1/job-execution.md`.
-- Remove `@shutter/space-config` from `packages/executor-runtime/package.json`
-  and drop `/packages/space-config/**` from `executorWatchPatterns` in
-  `.railway/railway.ts`.
+### 4. Add one atomic Edge snapshot endpoint
 
-The Executors then have no Space configuration at all.
+Add a versioned internal Control endpoint that returns one complete snapshot:
 
-### 4. Edge reads `SPACE_POLICIES`
-
-The Worker parses the plan 01 schema from a new `SPACE_POLICIES` environment
-variable, cached by raw string in the isolate exactly as `keyRegistryCache`
-already does for `CAPABILITY_KEYS` at `apps/edge/src/app.ts:26-51`. The six
-`getSpacePolicy` call sites — lines 251, 386, 432, 459, 483, and 515 — change
-their import only.
-
-Add `SPACE_POLICIES` to the required secrets in `apps/edge/wrangler.jsonc` and
-to `apps/edge/.dev.vars.example`. A missing or unparseable value yields 404 on
-every Space-scoped route.
-
-### 5. Import script
-
-A one-shot script that reads the existing `SPACE_API_TOKENS` and
-`CAPABILITY_KEYS` environment variables plus the policies being deleted, and
-writes the corresponding rows. This is what migrates the live deployment without
-retyping secrets or invalidating capabilities already in browsers.
-
-Run it once against production after deploy, then confirm the rendered
-`SPACE_POLICIES` matches what the Worker already has before removing anything.
-
-### 6. Delete `packages/space-config`
-
-Remove the package, its entry in `pnpm-workspace.yaml`, its dependency in
-`apps/edge/package.json`, `apps/control/package.json`, and
-`packages/executor-runtime/package.json`, and its root in
-`scripts/check-edge-boundary.mjs`.
-
-### 7. Test fixtures
-
-Thirteen files assert the literal tenant identifiers and must move to a
-`fixtureSpaces()` helper in `packages/testkit`. This is the bulk of the diff:
-
-```
-apps/control/src/app.test.ts
-apps/control/src/imgproxy.test.ts
-apps/control/src/job-api.test.ts
-apps/control/src/recovery.test.ts
-apps/control/src/rendition-job-lifecycle.test.ts
-apps/control/src/source-purge.test.ts
-apps/edge/src/edge.worker.test.ts
-apps/edge/vitest.config.ts
-packages/executor-runtime/src/index.test.ts
-packages/protocol/src/cache-identity.test.ts
-packages/protocol/src/key-material.test.ts
-packages/protocol/src/observability.test.ts
-packages/space-config/src/index.test.ts   (deleted)
+```json
+{
+  "schemaVersion": "v1",
+  "generation": 42,
+  "spaces": [],
+  "capabilityKeys": {}
+}
 ```
 
-The fixtures use obviously fake values — `example-public`, `example-private`,
-`https://sources.example.com` — so that a future leak of this kind is visible on
-sight.
+Read and validate the snapshot in one database transaction. Policies and keys
+must become active together. Never serve a partial generation.
 
-### 8. imgproxy allowlist scope
+Protect the endpoint with a dedicated read-only `EDGE_CONFIG_TOKEN`. Do not
+reuse the admin credential. Require HTTPS, reject redirects, and return
+`Cache-Control: private, no-store`. Do not log the token, response body,
+policies, keys, locators, or parser error text.
 
-`IMGPROXY_ALLOWED_SOURCES` cannot follow the database: it is read by the
-imgproxy container at process start. Redefine it as a *deployment-level* guard —
-the origin families this instance will ever fetch from — rather than per-Space
-policy, which now lives in the registry and is enforced by Control before it
-signs (`apps/control/src/imgproxy.ts`) and by the Edge before it delivers.
+The current capability keys are symmetric. Edge uses them for verification,
+but possession can also mint capabilities. Treat the complete snapshot as
+secret key material.
 
-Keep it. Do not open it to all sources. The private-address guards
-(`IMGPROXY_ALLOW_LOOPBACK_SOURCE_ADDRESSES`,
-`IMGPROXY_ALLOW_PRIVATE_SOURCE_ADDRESSES`,
-`IMGPROXY_ALLOW_LINK_LOCAL_SOURCE_ADDRESSES`, all `"false"`) become
-load-bearing if it is ever widened, and it is not confirmed that imgproxy's
-private-address check covers the IPv6 unique-local range Railway's private
-network uses. Verify that before considering it.
+### 5. Cache the snapshot in each Edge isolate
 
-### 9. Scripts
+Keep one parsed immutable snapshot in module scope. It is local to one Worker
+isolate; it is not shared by all isolates, all Cloudflare locations, or all
+requests worldwide.
 
-`scripts/check-phase2-config.mjs` is not an artifact despite its name — it runs
-in `pnpm lint` and enforces the ADR-0020 lifecycle rule, the native R2 binding,
-the absence of `nodejs_compat`, and the pinned imgproxy image. Rename it to
-`check-deployment-invariants.mjs`, update `lint:phase2-config` in
-`package.json`, and reword its `IMGPROXY_ALLOWED_SOURCES` assertion for the
-narrowed meaning in step 8.
+- From 0 through 45 seconds, use the local snapshot.
+- From 45 through 60 seconds, use it and start one background refresh for that
+  isolate with `ctx.waitUntil()`.
+- At 60 seconds, or on a cold isolate, wait for Control before authorization.
+- If refresh fails and no snapshot younger than 60 seconds exists, return
+  `503` with `Cache-Control: private, no-store`.
+- Return `404` only when a fresh valid snapshot confirms that the Space is
+  absent.
 
-`scripts/check-edge-boundary.mjs` and `scripts/run-workspace-tests.mjs` stay as
-they are, minus the deleted `space-config` root.
+Each cold isolate can call Control independently. Duplicate refreshes are safe.
+Use a plain-data single-flight promise only as an isolate-local optimization,
+and clear it in `finally`.
 
-`scripts/verify-v1.mjs` is not wired into `pnpm check` and is the one script
-that fits the "leftover" description. Deleting it is a separate decision from
-this plan.
+Fetch with `cache: "no-store"`, a short timeout, manual redirect handling, and
+an explicit body limit of 1 MiB. Validate the schema version, generation,
+identifiers, policy, and every key before one atomic swap. Keep no `Request`,
+`Response`, stream, or other request-bound object in module scope.
 
-### 10. Documentation
+Do not add Workers KV, Cache API storage, a Cron Trigger, or a Durable Object.
+The detailed Cloudflare research is in
+[`docs/research/edge-config-refresh.md`](../research/edge-config-refresh.md).
 
-- Rewrite `docs/architecture.md:151-166`, which currently states that Spaces are
-  static deployment configuration.
-- Fix `README.md:341`, which describes the committed Spaces as illustrative.
-- Fix `docs/runbooks/foundation-phase-2.md`, which names `demo-project-1` and
-  `demo-project-2`.
-- New ADR superseding static Space configuration.
-- New ADR narrowing the imgproxy allowlist to deployment scope, recording that
-  the signature requirement and the private-address guards are what it now
-  relies on.
+### 6. Perform the maintenance cutover
+
+Use one short, explicit maintenance window:
+
+1. Start maintenance mode and stop Space-scoped traffic.
+2. Run the tested one-shot import against production Postgres. Import current
+   policies, API-token hashes, and capability keys.
+3. Read the snapshot back and compare it with the old deployed values.
+4. Deploy Control, Executors, and Edge with the new registry path.
+5. Confirm one old capability, one API token, one public route, and one private
+   route.
+6. End maintenance mode and remove the old environment values.
+
+Do not ship a fallback to the checked-in registry. The import utility is a
+cutover tool, not a permanent operator interface. Remove it after the cutover
+or keep it outside runtime packages as a tested one-shot migration artifact.
+
+### 7. Delete tenant configuration from the repository
+
+Delete `packages/space-config`, its workspace entry, all package dependencies,
+and its Edge-boundary root. Replace real identifiers in tests with fixtures such
+as `example-public`, `example-private`, and `https://sources.example.com`.
+
+### 8. Keep the imgproxy guard at deployment scope
+
+`IMGPROXY_ALLOWED_SOURCES` is process-start configuration for imgproxy. Keep it
+as a deployment-level allowlist and keep it as `preserve()` in Railway IaC.
+Space origin rules remain the finer application policy.
+
+The admin page in plan 03 will show whether every Space origin is covered by
+this deployment allowlist. Do not widen it to all sources. Keep private,
+loopback, and link-local address access disabled.
+
+### 9. Update documentation and contracts
+
+Update architecture, configuration, job-execution, and self-hosting documents.
+Record the three ownership classes:
+
+- Space configuration belongs in Postgres and the admin surface.
+- Deployment configuration belongs in Railway and Cloudflare settings.
+- Protocol invariants belong in versioned code and contracts.
+
+Add an ADR for the database-backed Space registry and the strict 60-second Edge
+snapshot rule. Keep script cleanup in plan 04.
 
 ## Verification
 
-`pnpm check` passes. Beyond the suite: bring up Control with an empty database
-and confirm every Space route 404s rather than falling open; run the import
-script against a copy of production and diff the rendered `SPACE_POLICIES`
-against the current Worker secret; confirm a capability minted before the
-migration still verifies after it.
+Run `pnpm check`, then test:
+
+- Postgres unavailable versus Space absent (`503` versus `404`);
+- cold Edge isolates and several independent isolates;
+- concurrent refresh, soft refresh, hard expiry, and isolate eviction;
+- invalid, oversized, timed-out, or mismatched snapshots;
+- an API token and capability issued before cutover;
+- public and private end-to-end requests; and
+- the cutover against a copy of production before the maintenance window.
 
 ## Risks
 
-**Import correctness is the whole risk.** A capability key that does not survive
-the round trip breaks every private image URL in flight for up to 24 hours.
-Diff the rendered output against the live Worker secret before cutting over, and
-keep the old environment variables set until the diff is clean.
-
-**Fixture churn hides regressions.** Thirteen files changing at once makes
-review hard. Land the fixture helper and mechanical renames as the first commit
-in the PR, so the behavioural commits read separately.
+Import correctness is the main cutover risk. A wrong capability key breaks
+private URLs that are still valid. The Edge snapshot also contains every
+capability key, so its endpoint credential, response, and logs need strict
+treatment.

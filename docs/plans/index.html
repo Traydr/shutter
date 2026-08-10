@@ -1,0 +1,1735 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Interactive implementation plan for Shutter configuration, Edge refresh, administration, and media delivery."
+    />
+    <title>Shutter — configuration and media delivery plan</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        color-scheme: dark;
+        --ink: #080b12;
+        --surface: #101620;
+        --surface-raised: #161f2c;
+        --line: #2c3949;
+        --line-strong: #52657a;
+        --text: #edf4f8;
+        --muted: #a3b2c0;
+        --cyan: #58d6e8;
+        --cyan-soft: #173b45;
+        --amber: #ffbd6b;
+        --amber-soft: #4b3422;
+        --green: #75d5a0;
+        --green-soft: #183b2d;
+        --blue: #8aaeff;
+        --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+        --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+        font-family: "IBM Plex Sans", system-ui, sans-serif;
+        background: var(--ink);
+        color: var(--text);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
+      body {
+        margin: 0;
+        background:
+          linear-gradient(90deg, transparent 0 95%, rgb(88 214 232 / 4%) 95% 100%),
+          var(--ink);
+        background-size: 56px 100%;
+      }
+
+      a {
+        color: var(--cyan);
+      }
+
+      button,
+      a {
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      button:focus-visible,
+      a:focus-visible,
+      summary:focus-visible {
+        outline: 3px solid var(--amber);
+        outline-offset: 3px;
+      }
+
+      .shell {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        position: sticky;
+        z-index: 20;
+        top: 0;
+        border-bottom: 1px solid rgb(82 101 122 / 62%);
+        background: rgb(8 11 18 / 88%);
+        backdrop-filter: blur(16px);
+      }
+
+      .topbar-inner {
+        display: flex;
+        min-height: 58px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+      }
+
+      .wordmark {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        color: var(--text);
+        font-family: "Space Grotesk", sans-serif;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-decoration: none;
+      }
+
+      .aperture {
+        position: relative;
+        width: 22px;
+        height: 22px;
+        border: 1px solid var(--cyan);
+        border-radius: 50%;
+      }
+
+      .aperture::before,
+      .aperture::after {
+        position: absolute;
+        inset: 4px;
+        border: 1px solid var(--amber);
+        content: "";
+        transform: rotate(45deg);
+      }
+
+      .aperture::after {
+        inset: 7px;
+        border-color: var(--cyan);
+        border-radius: 50%;
+      }
+
+      .topnav {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 18px;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.75rem;
+        text-transform: uppercase;
+      }
+
+      .topnav a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+
+      .topnav a:hover {
+        color: var(--text);
+      }
+
+      .hero {
+        display: grid;
+        min-height: 620px;
+        grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+        align-items: end;
+        gap: 72px;
+        padding: 104px 0 72px;
+      }
+
+      .eyebrow,
+      .mono-label {
+        margin: 0;
+        color: var(--cyan);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.76rem;
+        font-weight: 500;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3 {
+        margin-top: 0;
+        font-family: "Space Grotesk", sans-serif;
+      }
+
+      h1 {
+        max-width: 860px;
+        margin-bottom: 28px;
+        font-size: clamp(3.4rem, 8.2vw, 7.6rem);
+        font-weight: 500;
+        letter-spacing: -0.07em;
+        line-height: 0.88;
+      }
+
+      .hero-copy {
+        max-width: 680px;
+        margin: 0;
+        color: var(--muted);
+        font-size: clamp(1.08rem, 2vw, 1.35rem);
+        line-height: 1.55;
+      }
+
+      .hero-thesis {
+        display: grid;
+        gap: 18px;
+        padding-bottom: 8px;
+      }
+
+      .thesis-row {
+        border-top: 1px solid var(--line-strong);
+        padding-top: 14px;
+      }
+
+      .thesis-row strong {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--amber);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.8rem;
+        font-weight: 500;
+        text-transform: uppercase;
+      }
+
+      .thesis-row span {
+        color: var(--text);
+        line-height: 1.45;
+      }
+
+      .film-strip {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(6, minmax(140px, 1fr));
+        gap: 6px;
+        margin: 0 0 112px;
+        overflow-x: auto;
+        border-block: 1px solid var(--line-strong);
+        padding: 24px 0;
+        scrollbar-color: var(--line-strong) transparent;
+      }
+
+      .film-strip::before,
+      .film-strip::after {
+        position: absolute;
+        right: 0;
+        left: 0;
+        height: 6px;
+        background: repeating-linear-gradient(
+          90deg,
+          var(--line-strong) 0 18px,
+          transparent 18px 30px
+        );
+        content: "";
+        opacity: 0.65;
+      }
+
+      .film-strip::before {
+        top: 5px;
+      }
+
+      .film-strip::after {
+        bottom: 5px;
+      }
+
+      .frame {
+        min-height: 150px;
+        border-inline-start: 1px solid var(--line);
+        padding: 18px 16px 14px;
+        color: var(--text);
+        text-decoration: none;
+        transition:
+          background 180ms ease,
+          transform 180ms var(--ease-out);
+      }
+
+      .frame:first-of-type {
+        border-inline-start: 0;
+      }
+
+      .frame .number {
+        display: block;
+        margin-bottom: 34px;
+        color: var(--cyan);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.76rem;
+      }
+
+      .frame strong {
+        display: block;
+        margin-bottom: 8px;
+        font-family: "Space Grotesk", sans-serif;
+      }
+
+      .frame small {
+        color: var(--muted);
+      }
+
+      .frame[data-state="now"] .number::after {
+        margin-left: 8px;
+        color: var(--green);
+        content: "NOW";
+      }
+
+      @media (hover: hover) and (pointer: fine) {
+        .frame:hover {
+          background: var(--surface);
+          transform: translateY(-4px);
+        }
+      }
+
+      main section {
+        scroll-margin-top: 82px;
+      }
+
+      .section {
+        border-top: 1px solid var(--line-strong);
+        padding: 92px 0;
+      }
+
+      .section-heading {
+        display: grid;
+        grid-template-columns: minmax(180px, 0.32fr) minmax(0, 1fr);
+        gap: 40px;
+        margin-bottom: 48px;
+      }
+
+      .section-heading h2 {
+        max-width: 760px;
+        margin-bottom: 18px;
+        font-size: clamp(2.1rem, 5vw, 4.6rem);
+        font-weight: 500;
+        letter-spacing: -0.055em;
+        line-height: 0.98;
+      }
+
+      .section-heading p {
+        max-width: 760px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 1.04rem;
+        line-height: 1.65;
+      }
+
+      .flow-board {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--line-strong);
+        background:
+          linear-gradient(rgb(88 214 232 / 5%) 1px, transparent 1px),
+          linear-gradient(90deg, rgb(88 214 232 / 5%) 1px, transparent 1px),
+          var(--surface);
+        background-size: 32px 32px;
+      }
+
+      .lane {
+        display: grid;
+        grid-template-columns: 0.8fr 1fr 0.9fr 1fr;
+        min-height: 176px;
+        align-items: center;
+        gap: 22px;
+        padding: 34px;
+      }
+
+      .lane + .lane {
+        border-top: 1px solid var(--line);
+      }
+
+      .lane-label {
+        align-self: start;
+      }
+
+      .lane-label strong {
+        display: block;
+        margin-top: 7px;
+        font-family: "Space Grotesk", sans-serif;
+        font-size: 1.2rem;
+      }
+
+      .node {
+        position: relative;
+        z-index: 2;
+        min-height: 96px;
+        border: 1px solid var(--line-strong);
+        background: rgb(8 11 18 / 93%);
+        padding: 18px;
+      }
+
+      .node::after {
+        position: absolute;
+        top: 50%;
+        left: calc(100% + 1px);
+        width: 23px;
+        border-top: 1px solid var(--cyan);
+        content: "";
+      }
+
+      .node:last-child::after,
+      .node.no-arrow::after {
+        display: none;
+      }
+
+      .node-kicker {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--cyan);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+      }
+
+      .node strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .node small {
+        color: var(--muted);
+        line-height: 1.4;
+      }
+
+      .node.database {
+        border-color: var(--amber);
+      }
+
+      .node.database .node-kicker {
+        color: var(--amber);
+      }
+
+      .lane-note {
+        grid-column: 2 / -1;
+        margin: -8px 0 0;
+        color: var(--muted);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.73rem;
+      }
+
+      .simulator {
+        border: 1px solid var(--line-strong);
+        background: var(--surface);
+      }
+
+      .sim-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        min-inline-size: 0;
+        margin: 0;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        padding: 16px;
+      }
+
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        clip-path: inset(50%);
+      }
+
+      .sim-button {
+        border: 1px solid var(--line-strong);
+        border-radius: 0;
+        background: var(--ink);
+        color: var(--text);
+        cursor: pointer;
+        font: 500 0.78rem "IBM Plex Mono", monospace;
+        padding: 10px 13px;
+        transition:
+          border-color 160ms ease,
+          color 160ms ease,
+          transform 140ms var(--ease-out);
+      }
+
+      .sim-button:hover {
+        border-color: var(--cyan);
+        color: var(--cyan);
+      }
+
+      .sim-button:active {
+        transform: scale(0.97);
+      }
+
+      .sim-button.primary {
+        border-color: var(--cyan);
+        background: var(--cyan-soft);
+        color: var(--text);
+      }
+
+      .sim-stats {
+        display: flex;
+        gap: 24px;
+        margin-left: auto;
+        color: var(--muted);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.72rem;
+      }
+
+      .sim-stats output {
+        color: var(--amber);
+      }
+
+      .sim-stage {
+        position: relative;
+        display: grid;
+        grid-template-columns: 0.65fr 1.5fr 0.82fr 0.82fr;
+        min-height: 320px;
+        align-items: center;
+        gap: 28px;
+        overflow: hidden;
+        padding: 34px;
+      }
+
+      .sim-source,
+      .sim-target {
+        position: relative;
+        z-index: 2;
+        border: 1px solid var(--line-strong);
+        background: var(--ink);
+        padding: 18px;
+        text-align: center;
+      }
+
+      .sim-target.control {
+        border-color: var(--cyan);
+      }
+
+      .sim-target.db {
+        border-color: var(--amber);
+      }
+
+      .isolate-rack {
+        position: relative;
+        z-index: 2;
+        display: grid;
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .isolate {
+        display: grid;
+        grid-template-columns: 52px 1fr auto;
+        align-items: center;
+        gap: 14px;
+        border: 1px solid var(--line);
+        background: var(--ink);
+        padding: 13px;
+        transition:
+          border-color 180ms ease,
+          background 180ms ease,
+          transform 220ms var(--ease-out);
+      }
+
+      .isolate.active {
+        border-color: var(--cyan);
+        background: var(--cyan-soft);
+        transform: translateX(5px);
+      }
+
+      .isolate.fetching {
+        border-color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .isolate-id {
+        color: var(--cyan);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.78rem;
+      }
+
+      .isolate strong,
+      .isolate small {
+        display: block;
+      }
+
+      .isolate small {
+        margin-top: 3px;
+        color: var(--muted);
+      }
+
+      .age {
+        min-width: 46px;
+        color: var(--amber);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.75rem;
+        text-align: right;
+      }
+
+      .packet {
+        position: absolute;
+        z-index: 8;
+        width: 12px;
+        height: 12px;
+        border: 2px solid var(--ink);
+        border-radius: 50%;
+        background: var(--cyan);
+        box-shadow: 0 0 18px var(--cyan);
+        pointer-events: none;
+      }
+
+      .sim-log {
+        min-height: 52px;
+        margin: 0;
+        border-top: 1px solid var(--line);
+        padding: 16px 18px;
+        color: var(--text);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.78rem;
+      }
+
+      .sim-log::before {
+        margin-right: 10px;
+        color: var(--green);
+        content: ">";
+      }
+
+      .plain-answer {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        margin-top: 20px;
+        background: var(--line);
+      }
+
+      .answer-cell {
+        background: var(--ink);
+        padding: 22px;
+      }
+
+      .answer-cell strong {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--amber);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+      }
+
+      .answer-cell p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .ownership {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 1px;
+        background: var(--line-strong);
+      }
+
+      .owner {
+        min-height: 360px;
+        background: var(--ink);
+        padding: 28px;
+      }
+
+      .owner h3 {
+        margin: 15px 0 20px;
+        font-size: 1.55rem;
+      }
+
+      .owner ul,
+      .plan-body ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .owner li,
+      .plan-body li {
+        position: relative;
+        border-top: 1px solid var(--line);
+        padding: 12px 0 12px 20px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .owner li::before,
+      .plan-body li::before {
+        position: absolute;
+        top: 18px;
+        left: 2px;
+        width: 6px;
+        height: 6px;
+        background: var(--cyan);
+        content: "";
+      }
+
+      .owner:nth-child(2) li::before {
+        background: var(--amber);
+      }
+
+      .owner:nth-child(3) li::before {
+        background: var(--blue);
+      }
+
+      .owner .where {
+        color: var(--text);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.75rem;
+      }
+
+      .plans {
+        border-top: 1px solid var(--line-strong);
+      }
+
+      .plan {
+        display: grid;
+        grid-template-columns: 118px minmax(220px, 0.55fr) minmax(0, 1fr);
+        gap: 28px;
+        border-bottom: 1px solid var(--line-strong);
+        padding: 34px 0 38px;
+      }
+
+      .plan-number {
+        color: var(--cyan);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 2rem;
+      }
+
+      .plan[data-priority="later"] .plan-number {
+        color: var(--amber);
+      }
+
+      .plan[data-priority="deferred"] .plan-number {
+        color: var(--muted);
+      }
+
+      .plan-title h3 {
+        margin-bottom: 10px;
+        font-size: 1.65rem;
+        line-height: 1.05;
+      }
+
+      .status {
+        display: inline-block;
+        border: 1px solid var(--line-strong);
+        padding: 4px 7px;
+        color: var(--muted);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.66rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .plan-body p {
+        margin: 0 0 16px;
+        color: var(--muted);
+        line-height: 1.58;
+      }
+
+      .plan-body strong {
+        color: var(--text);
+      }
+
+      .plan-link {
+        display: inline-block;
+        margin-top: 18px;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.75rem;
+      }
+
+      .cutover {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        margin: 0;
+        border-block: 1px solid var(--line-strong);
+        padding: 0;
+        list-style: none;
+      }
+
+      .cutover-step {
+        position: relative;
+        min-height: 215px;
+        border-inline-end: 1px solid var(--line);
+        padding: 22px 18px;
+      }
+
+      .cutover-step:last-child {
+        border-inline-end: 0;
+      }
+
+      .cutover-step::after {
+        position: absolute;
+        top: 38px;
+        right: -5px;
+        z-index: 2;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--amber);
+        content: "";
+      }
+
+      .cutover-step:last-child::after {
+        display: none;
+      }
+
+      .cutover-step .tick {
+        display: block;
+        margin-bottom: 42px;
+        color: var(--amber);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.75rem;
+      }
+
+      .cutover-step strong {
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      .cutover-step p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+        line-height: 1.45;
+      }
+
+      .media-flow {
+        display: grid;
+        grid-template-columns: 0.65fr 0.9fr 1.6fr;
+        align-items: stretch;
+        gap: 26px;
+      }
+
+      .media-origin,
+      .media-host,
+      .media-branches > div {
+        border: 1px solid var(--line-strong);
+        background: var(--surface);
+        padding: 22px;
+      }
+
+      .media-origin,
+      .media-host {
+        display: flex;
+        min-height: 270px;
+        flex-direction: column;
+        justify-content: center;
+      }
+
+      .media-host {
+        border-color: var(--cyan);
+        background: var(--cyan-soft);
+      }
+
+      .media-host::before {
+        color: var(--cyan);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.72rem;
+        content: "ONE HOSTNAME";
+      }
+
+      .media-origin h3,
+      .media-host h3 {
+        margin: 11px 0;
+        font-size: 1.5rem;
+      }
+
+      .media-origin p,
+      .media-host p,
+      .media-branches p {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .media-branches {
+        display: grid;
+        gap: 10px;
+      }
+
+      .media-branches > div:first-child {
+        border-color: var(--green);
+      }
+
+      .media-branches > div:nth-child(2) {
+        border-color: var(--cyan);
+      }
+
+      .media-branches > div:nth-child(3) {
+        border-color: var(--amber);
+      }
+
+      .media-branches strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      .rotation-rule {
+        display: grid;
+        grid-template-columns: 180px 1fr;
+        gap: 34px;
+        border: 1px solid var(--green);
+        background: var(--green-soft);
+        padding: 30px;
+      }
+
+      .rotation-rule h3 {
+        margin: 0;
+        color: var(--green);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.82rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .rotation-rule p {
+        max-width: 780px;
+        margin: 0;
+        font-size: 1.08rem;
+        line-height: 1.6;
+      }
+
+      .sources {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 24px;
+        margin-top: 28px;
+        color: var(--muted);
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.73rem;
+      }
+
+      footer {
+        border-top: 1px solid var(--line-strong);
+        padding: 46px 0 70px;
+        color: var(--muted);
+      }
+
+      footer .shell {
+        display: flex;
+        justify-content: space-between;
+        gap: 28px;
+      }
+
+      footer .shell > p {
+        margin: 0;
+      }
+
+      @media (max-width: 900px) {
+        .hero,
+        .section-heading {
+          grid-template-columns: 1fr;
+        }
+
+        .hero {
+          min-height: auto;
+          gap: 52px;
+          padding-top: 82px;
+        }
+
+        .topnav {
+          display: none;
+        }
+
+        .lane {
+          grid-template-columns: repeat(3, 1fr);
+        }
+
+        .lane-label,
+        .lane-note {
+          grid-column: 1 / -1;
+        }
+
+        .sim-stage {
+          grid-template-columns: 0.65fr 1.4fr 0.85fr;
+        }
+
+        .sim-target.db {
+          grid-column: 3;
+        }
+
+        .ownership,
+        .plain-answer {
+          grid-template-columns: 1fr;
+        }
+
+        .owner {
+          min-height: auto;
+        }
+
+        .plan {
+          grid-template-columns: 80px 0.7fr 1fr;
+        }
+
+        .cutover {
+          grid-template-columns: repeat(3, 1fr);
+        }
+
+        .cutover-step:nth-child(3) {
+          border-inline-end: 0;
+        }
+
+        .cutover-step:nth-child(-n + 3) {
+          border-bottom: 1px solid var(--line);
+        }
+
+        .media-flow {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .media-branches {
+          grid-column: 1 / -1;
+          grid-template-columns: repeat(3, 1fr);
+        }
+      }
+
+      @media (max-width: 660px) {
+        .shell {
+          width: min(100% - 24px, 1180px);
+        }
+
+        h1 {
+          font-size: clamp(3.25rem, 17vw, 5rem);
+        }
+
+        .section {
+          padding: 68px 0;
+        }
+
+        .lane,
+        .sim-stage,
+        .plan,
+        .media-flow,
+        .media-branches,
+        .rotation-rule {
+          grid-template-columns: 1fr;
+        }
+
+        .node::after {
+          top: calc(100% + 1px);
+          left: 50%;
+          width: 0;
+          height: 23px;
+          border-top: 0;
+          border-left: 1px solid var(--cyan);
+        }
+
+        .sim-stats {
+          width: 100%;
+          margin: 4px 0 0;
+        }
+
+        .sim-target.db {
+          grid-column: auto;
+        }
+
+        .plan {
+          gap: 16px;
+        }
+
+        .plan-number {
+          font-size: 1rem;
+        }
+
+        .cutover {
+          grid-template-columns: 1fr;
+        }
+
+        .cutover-step,
+        .cutover-step:nth-child(3) {
+          min-height: auto;
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+
+        .cutover-step:last-child {
+          border-bottom: 0;
+        }
+
+        .cutover-step::after {
+          display: none;
+        }
+
+        .cutover-step .tick {
+          margin-bottom: 18px;
+        }
+
+        .rotation-rule {
+          gap: 12px;
+        }
+
+        footer .shell {
+          flex-direction: column;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+
+        .frame,
+        .sim-button,
+        .isolate {
+          transition-duration: 0.01ms;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <a class="wordmark" href="#top" aria-label="Shutter plan home">
+          <span class="aperture" aria-hidden="true"></span>
+          SHUTTER / PLAN
+        </a>
+        <nav class="topnav" aria-label="Page sections">
+          <a href="#architecture">System</a>
+          <a href="#isolates">Edge cache</a>
+          <a href="#ownership">Ownership</a>
+          <a href="#plans">Plans</a>
+          <a href="#media">Media</a>
+        </nav>
+      </div>
+    </header>
+
+    <div id="top" class="shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <div>
+          <p class="eyebrow">Configuration extraction → media delivery</p>
+          <h1 id="hero-title">One config source. One media front door.</h1>
+          <p class="hero-copy">
+            Move every Shutter Space out of source code. Let Control own the
+            registry in Postgres. Let each Edge isolate refresh it safely. Then
+            add original media delivery beside image optimization.
+          </p>
+        </div>
+        <aside class="hero-thesis" aria-label="Plan thesis">
+          <div class="thesis-row">
+            <strong>Now</strong>
+            <span>Registry, cutover, and admin surface.</span>
+          </div>
+          <div class="thesis-row">
+            <strong>Next</strong>
+            <span>Deployment portability and script cleanup.</span>
+          </div>
+          <div class="thesis-row">
+            <strong>Then</strong>
+            <span>Images, videos, and PDFs through one hostname.</span>
+          </div>
+        </aside>
+      </section>
+
+      <nav class="film-strip" aria-label="Implementation plan sequence">
+        <a class="frame" data-state="now" href="#plan-01">
+          <span class="number">01</span>
+          <strong>Registry schema</strong>
+          <small>Identity, policy, keys</small>
+        </a>
+        <a class="frame" data-state="now" href="#plan-02">
+          <span class="number">02</span>
+          <strong>Runtime cutover</strong>
+          <small>Postgres + Edge refresh</small>
+        </a>
+        <a class="frame" data-state="now" href="#plan-03">
+          <span class="number">03</span>
+          <strong>Admin surface</strong>
+          <small>No source edits</small>
+        </a>
+        <a class="frame" href="#plan-04">
+          <span class="number">04</span>
+          <strong>Portability</strong>
+          <small>Deploy inputs + scripts</small>
+        </a>
+        <a class="frame" href="#plan-05">
+          <span class="number">05</span>
+          <strong>Media delivery</strong>
+          <small>One media hostname</small>
+        </a>
+        <a class="frame" href="#plan-06">
+          <span class="number">06</span>
+          <strong>Deferred work</strong>
+          <small>Only after measured need</small>
+        </a>
+      </nav>
+
+      <main>
+        <section id="architecture" class="section" aria-labelledby="architecture-title">
+          <div class="section-heading">
+            <p class="mono-label">System shape</p>
+            <div>
+              <h2 id="architecture-title">Postgres is authoritative. Edge memory is temporary.</h2>
+              <p>
+                Control reads current policy from Postgres for each Space-scoped
+                request. Edge uses an immutable local snapshot for speed. The
+                Edge snapshot never becomes the source of truth.
+              </p>
+            </div>
+          </div>
+
+          <div class="flow-board" role="img" aria-label="Control requests read Postgres directly. Media requests use an Edge isolate, which refreshes configuration from Control when its local snapshot is cold or expired.">
+            <div class="lane">
+              <div class="lane-label">
+                <span class="mono-label">Control lane</span>
+                <strong>Every request</strong>
+              </div>
+              <div class="node">
+                <span class="node-kicker">Caller</span>
+                <strong>Application</strong>
+                <small>Job, purge, or admin request</small>
+              </div>
+              <div class="node">
+                <span class="node-kicker">Runtime</span>
+                <strong>Control</strong>
+                <small>Async SpaceRegistry interface</small>
+              </div>
+              <div class="node database">
+                <span class="node-kicker">Authority</span>
+                <strong>Postgres</strong>
+                <small>Current policy and credentials</small>
+              </div>
+              <p class="lane-note">No Control policy cache in the first version.</p>
+            </div>
+            <div class="lane">
+              <div class="lane-label">
+                <span class="mono-label">Media lane</span>
+                <strong>Most requests</strong>
+              </div>
+              <div class="node">
+                <span class="node-kicker">Caller</span>
+                <strong>Browser</strong>
+                <small>Image, video, or PDF</small>
+              </div>
+              <div class="node">
+                <span class="node-kicker">Fast path</span>
+                <strong>One Edge isolate</strong>
+                <small>Local snapshot younger than 60s</small>
+              </div>
+              <div class="node database">
+                <span class="node-kicker">On cold / expired</span>
+                <strong>Control → Postgres</strong>
+                <small>One atomic secret snapshot</small>
+              </div>
+              <p class="lane-note">Each isolate has its own snapshot and its own timer.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="isolates" class="section" aria-labelledby="isolates-title">
+          <div class="section-heading">
+            <p class="mono-label">Edge cache lab</p>
+            <div>
+              <h2 id="isolates-title">“Module scope” means one copy per isolate.</h2>
+              <p>
+                Cloudflare can run several isolates for the same Worker script.
+                Requests that reach the same warm isolate reuse its variable.
+                A different or new isolate starts cold and calls Control for its
+                own snapshot.
+              </p>
+            </div>
+          </div>
+
+          <div class="simulator">
+            <fieldset class="sim-toolbar">
+              <legend class="sr-only">Edge isolate scenarios</legend>
+              <button class="sim-button primary" type="button" data-scenario="cold">Cold request</button>
+              <button class="sim-button" type="button" data-scenario="warm">Request at 20s</button>
+              <button class="sim-button" type="button" data-scenario="soft">Request at 50s</button>
+              <button class="sim-button" type="button" data-scenario="hard">Request at 60s</button>
+              <button class="sim-button" type="button" data-scenario="new">New isolate</button>
+              <div class="sim-stats">
+                <span>Control fetches <output id="fetch-count">0</output></span>
+                <span>Active isolate <output id="active-isolate">A</output></span>
+              </div>
+            </fieldset>
+            <div id="sim-stage" class="sim-stage">
+              <div id="sim-client" class="sim-source">
+                <span class="node-kicker">Request</span>
+                <strong>Browser</strong>
+              </div>
+              <ul class="isolate-rack" aria-label="Independent Edge isolates">
+                <li id="isolate-a" class="isolate active" data-age="cold">
+                  <span class="isolate-id">ISO A</span>
+                  <span><strong>Cold</strong><small>No snapshot</small></span>
+                  <span class="age">—</span>
+                </li>
+                <li id="isolate-b" class="isolate" data-age="cold">
+                  <span class="isolate-id">ISO B</span>
+                  <span><strong>Cold</strong><small>Separate module variable</small></span>
+                  <span class="age">—</span>
+                </li>
+                <li id="isolate-c" class="isolate" data-age="cold">
+                  <span class="isolate-id">ISO C</span>
+                  <span><strong>Cold</strong><small>Separate module variable</small></span>
+                  <span class="age">—</span>
+                </li>
+              </ul>
+              <div id="sim-control" class="sim-target control">
+                <span class="node-kicker">Snapshot endpoint</span>
+                <strong>Control</strong>
+              </div>
+              <div id="sim-db" class="sim-target db">
+                <span class="node-kicker">Source of truth</span>
+                <strong>Postgres</strong>
+              </div>
+            </div>
+            <p id="sim-log" class="sim-log" aria-live="polite">Choose a request scenario.</p>
+          </div>
+
+          <div class="plain-answer">
+            <div class="answer-cell">
+              <strong>Shared</strong>
+              <p>Requests handled by the same warm isolate can reuse one module-level snapshot.</p>
+            </div>
+            <div class="answer-cell">
+              <strong>Not shared</strong>
+              <p>Two isolates do not share that variable, even when they run the same Worker code.</p>
+            </div>
+            <div class="answer-cell">
+              <strong>Result</strong>
+              <p>Several cold isolates can call Control. This is expected and needs no KV.</p>
+            </div>
+          </div>
+
+          <nav class="sources" aria-label="Cloudflare research sources">
+            <a href="../research/edge-config-refresh.md">Shutter research note</a>
+            <a href="https://developers.cloudflare.com/workers/reference/how-workers-works/">How Workers works</a>
+            <a href="https://developers.cloudflare.com/workers/runtime-apis/context/">Context API</a>
+            <a href="https://developers.cloudflare.com/kv/concepts/how-kv-works/">How Workers KV works</a>
+          </nav>
+        </section>
+
+        <section id="ownership" class="section" aria-labelledby="ownership-title">
+          <div class="section-heading">
+            <p class="mono-label">Configuration ownership</p>
+            <div>
+              <h2 id="ownership-title">Three kinds of configuration. Three clear homes.</h2>
+              <p>
+                This does not add a new runtime system. It only stops one kind
+                of configuration from leaking into another kind.
+              </p>
+            </div>
+          </div>
+          <div class="ownership">
+            <article class="owner">
+              <span class="mono-label">Space-owned</span>
+              <h3>What one application can do</h3>
+              <p class="where">Postgres + /admin</p>
+              <ul>
+                <li>Public or private route class</li>
+                <li>Allowed source origins and resolvers</li>
+                <li>Quality policy</li>
+                <li>API tokens and capability keys</li>
+              </ul>
+            </article>
+            <article class="owner">
+              <span class="mono-label">Deployment-owned</span>
+              <h3>Where this Shutter instance runs</h3>
+              <p class="where">Railway + Cloudflare</p>
+              <ul>
+                <li>Regions and custom domains</li>
+                <li>R2 and S3 bindings</li>
+                <li>Provider credentials</li>
+                <li>imgproxy process allowlist</li>
+              </ul>
+            </article>
+            <article class="owner">
+              <span class="mono-label">Protocol-owned</span>
+              <h3>What Shutter v1 means</h3>
+              <p class="where">Code + contracts</p>
+              <ul>
+                <li>Versioned URL shapes</li>
+                <li>Capability purposes</li>
+                <li>Cache identity</li>
+                <li>Maximum lifetimes and fixed transforms</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section id="plans" class="section" aria-labelledby="plans-title">
+          <div class="section-heading">
+            <p class="mono-label">Implementation sequence</p>
+            <div>
+              <h2 id="plans-title">Finish configuration first. Add media delivery after.</h2>
+              <p>
+                Plans 01 through 03 are the current program. Plan 04 is later
+                deployment cleanup. Plan 05 adds the CDN-style media front door.
+              </p>
+            </div>
+          </div>
+
+          <div class="plans">
+            <article id="plan-01" class="plan" data-priority="now">
+              <div class="plan-number">01</div>
+              <div class="plan-title">
+                <h3>Space registry schema</h3>
+                <span class="status">Now · one PR</span>
+              </div>
+              <div class="plan-body">
+                <p><strong>Outcome:</strong> Postgres can store each Space policy and credential.</p>
+                <ul>
+                  <li>Use incrementing internal primary keys and unique business constraints.</li>
+                  <li>Make the public Space identifier and route class immutable.</li>
+                  <li>Decommission old Spaces. Do not delete or reuse their identifiers.</li>
+                  <li>Seal capability keys with AES-256-GCM.</li>
+                  <li>Add one async SpaceRegistry interface with Postgres and test adapters.</li>
+                </ul>
+                <a class="plan-link" href="01-space-registry-schema.md">Read the implementation plan →</a>
+              </div>
+            </article>
+
+            <article id="plan-02" class="plan" data-priority="now">
+              <div class="plan-number">02</div>
+              <div class="plan-title">
+                <h3>Registry cutover</h3>
+                <span class="status">Now · one PR</span>
+              </div>
+              <div class="plan-body">
+                <p><strong>Outcome:</strong> Runtime code no longer reads tenant policy from the repository or JSON environment values.</p>
+                <ul>
+                  <li>Control reads Postgres on every Space-scoped request.</li>
+                  <li>Edge pulls one atomic policy-and-key snapshot from Control.</li>
+                  <li>Each Edge isolate caches that snapshot for no more than 60 seconds.</li>
+                  <li>Executors receive only the origin rules in their claim.</li>
+                  <li>Use one maintenance window of up to 10 minutes. Do not add dual reads.</li>
+                  <li>Delete `packages/space-config` and replace real test identifiers.</li>
+                </ul>
+                <a class="plan-link" href="02-space-registry-cutover.md">Read the implementation plan →</a>
+              </div>
+            </article>
+
+            <article id="plan-03" class="plan" data-priority="now">
+              <div class="plan-number">03</div>
+              <div class="plan-title">
+                <h3>Admin surface</h3>
+                <span class="status">Now · one PR</span>
+              </div>
+              <div class="plan-body">
+                <p><strong>Outcome:</strong> A self-hoster creates and manages Spaces without code edits.</p>
+                <ul>
+                  <li>Keep `ADMIN_BOOTSTRAP_TOKEN` as a Railway `preserve()` value.</li>
+                  <li>Create, edit, and decommission Spaces from `/admin`.</li>
+                  <li>Do not show edit controls for the Space identifier or route class.</li>
+                  <li>Issue API tokens and capability keys with one-time secret display.</li>
+                  <li>Rotate capability keys with a manual application update and overlap window.</li>
+                  <li>Show Edge refresh generation and imgproxy allowlist coverage.</li>
+                  <li>Do not ask operators to paste policy or key JSON into Cloudflare.</li>
+                </ul>
+                <a class="plan-link" href="03-admin-surface.md">Read the implementation plan →</a>
+              </div>
+            </article>
+
+            <article id="plan-04" class="plan" data-priority="later">
+              <div class="plan-number">04</div>
+              <div class="plan-title">
+                <h3>Deployment portability</h3>
+                <span class="status">Later · separate PR</span>
+              </div>
+              <div class="plan-body">
+                <p><strong>Outcome:</strong> New self-hosters provide owner-specific deployment values without source edits.</p>
+                <ul>
+                  <li>Keep current Railway `preserve()` values until this plan has fresh-project tests.</li>
+                  <li>Move repository names, regions, domains, and storage names to a safe input path.</li>
+                  <li>Keep Railway TypeScript IaC as the desired project topology.</li>
+                  <li>Delete `check-phase2-config.mjs` after moving useful checks.</li>
+                  <li>Delete `verify-v1.mjs`; keep the Edge boundary and workspace test runner.</li>
+                </ul>
+                <a class="plan-link" href="04-deployment-portability.md">Read the implementation plan →</a>
+              </div>
+            </article>
+
+            <article id="plan-05" class="plan" data-priority="later">
+              <div class="plan-number">05</div>
+              <div class="plan-title">
+                <h3>Media delivery</h3>
+                <span class="status">After configuration</span>
+              </div>
+              <div class="plan-body">
+                <p><strong>Outcome:</strong> All supported media can use one Shutter hostname.</p>
+                <ul>
+                  <li>Add Source Delivery for unchanged original bytes.</li>
+                  <li>Support images, video range requests, and PDFs.</li>
+                  <li>Keep Image Optimization as an optional sibling route.</li>
+                  <li>Keep video posters and PDF covers as Master Previews.</li>
+                  <li>Use Source ID for cache and purge identity, not the locator.</li>
+                  <li>Do not copy authoritative originals into Shutter storage in v1.</li>
+                </ul>
+                <a class="plan-link" href="05-media-delivery.md">Read the implementation plan →</a>
+              </div>
+            </article>
+
+            <article id="plan-06" class="plan" data-priority="deferred">
+              <div class="plan-number">06</div>
+              <div class="plan-title">
+                <h3>Deferred operations</h3>
+                <span class="status">Not scheduled</span>
+              </div>
+              <div class="plan-body">
+                <p><strong>Outcome:</strong> Do not add operational machinery before measured need.</p>
+                <ul>
+                  <li>Real operator accounts and a separate admin hostname.</li>
+                  <li>Transactional encryption-key rotation tooling.</li>
+                  <li>KV or Durable Objects only if snapshot traffic becomes a real problem.</li>
+                  <li>More content types only after browser-safety rules exist.</li>
+                </ul>
+                <a class="plan-link" href="06-deferred.md">Read the deferred list →</a>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section id="cutover" class="section" aria-labelledby="cutover-title">
+          <div class="section-heading">
+            <p class="mono-label">Production change</p>
+            <div>
+              <h2 id="cutover-title">A simple cutover inside a 10-minute window.</h2>
+              <p>
+                The accepted downtime removes the need for dual-read code. Test
+                the import against a production copy before this window starts.
+              </p>
+            </div>
+          </div>
+          <ol class="cutover" aria-label="Six maintenance cutover steps">
+            <li class="cutover-step">
+              <span class="tick">T+00</span>
+              <strong>Pause traffic</strong>
+              <p>Start maintenance mode for Space routes.</p>
+            </li>
+            <li class="cutover-step">
+              <span class="tick">T+01</span>
+              <strong>Import</strong>
+              <p>Write current policy, token hashes, and keys to Postgres.</p>
+            </li>
+            <li class="cutover-step">
+              <span class="tick">T+03</span>
+              <strong>Compare</strong>
+              <p>Read the snapshot back and compare all old values.</p>
+            </li>
+            <li class="cutover-step">
+              <span class="tick">T+05</span>
+              <strong>Deploy</strong>
+              <p>Release Control, Executors, and Edge.</p>
+            </li>
+            <li class="cutover-step">
+              <span class="tick">T+08</span>
+              <strong>Prove</strong>
+              <p>Test old credentials plus public and private routes.</p>
+            </li>
+            <li class="cutover-step">
+              <span class="tick">T+10</span>
+              <strong>Resume</strong>
+              <p>End maintenance mode and remove old environment values.</p>
+            </li>
+          </ol>
+        </section>
+
+        <section id="media" class="section" aria-labelledby="media-title">
+          <div class="section-heading">
+            <p class="mono-label">Plan 05 direction</p>
+            <div>
+              <h2 id="media-title">One URL origin. Three media paths.</h2>
+              <p>
+                Shutter becomes the front door for supported media. It still
+                leaves uploads, source ownership, and the media catalog with the
+                consuming application.
+              </p>
+            </div>
+          </div>
+          <div class="media-flow" role="img" aria-label="Application-owned storage feeds one Shutter hostname. Shutter can pass original bytes, optimize images, or serve generated video and PDF previews.">
+            <div class="media-origin">
+              <span class="mono-label">Application-owned</span>
+              <h3>Source storage</h3>
+              <p>Immutable original images, videos, and PDFs.</p>
+            </div>
+            <div class="media-host">
+              <h3>Shutter Edge</h3>
+              <p>One public media origin with Space policy and authorization.</p>
+            </div>
+            <div class="media-branches">
+              <div>
+                <strong>Source Delivery</strong>
+                <p>Original bytes, `GET`, `HEAD`, video ranges, and PDF viewing.</p>
+              </div>
+              <div>
+                <strong>Image Optimization</strong>
+                <p>Optional resize and WebP output for image sources.</p>
+              </div>
+              <div>
+                <strong>Master Preview</strong>
+                <p>Video posters and PDF covers, then optional image resizing.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="rotation" class="section" aria-labelledby="rotation-title">
+          <div class="rotation-rule">
+            <h3 id="rotation-title">Manual key rotation</h3>
+            <p>
+              Add the new key to Shutter first. Then update the consuming
+              application to issue new capabilities with that key. Keep the old
+              key in Shutter for 24 hours, and then disable it. The application
+              owner coordinates both updates; Shutter needs no automatic handoff.
+            </p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <footer>
+      <div class="shell">
+        <p>Shutter configuration and media delivery plan</p>
+        <p><a href="README.md">Markdown plan index</a></p>
+      </div>
+    </footer>
+
+    <script>
+      const stage = document.getElementById("sim-stage");
+      const log = document.getElementById("sim-log");
+      const fetchCountOutput = document.getElementById("fetch-count");
+      const activeIsolateOutput = document.getElementById("active-isolate");
+      const client = document.getElementById("sim-client");
+      const control = document.getElementById("sim-control");
+      const database = document.getElementById("sim-db");
+      const isolateNames = ["a", "b", "c"];
+      let currentIsolateIndex = 0;
+      let fetchCount = 0;
+      let running = false;
+
+      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+      function isolateElement(index = currentIsolateIndex) {
+        return document.getElementById(`isolate-${isolateNames[index]}`);
+      }
+
+      function setActiveIsolate(index) {
+        currentIsolateIndex = index;
+        for (const [position, name] of isolateNames.entries()) {
+          document.getElementById(`isolate-${name}`).classList.toggle("active", position === index);
+        }
+        activeIsolateOutput.value = isolateNames[index].toUpperCase();
+      }
+
+      function setIsolateState(index, title, detail, age, dataAge) {
+        const isolate = isolateElement(index);
+        isolate.querySelector("strong").textContent = title;
+        isolate.querySelector("small").textContent = detail;
+        isolate.querySelector(".age").textContent = age;
+        isolate.dataset.age = dataAge;
+      }
+
+      function centerInStage(element) {
+        const stageRect = stage.getBoundingClientRect();
+        const rect = element.getBoundingClientRect();
+        return {
+          x: rect.left - stageRect.left + rect.width / 2 - 6,
+          y: rect.top - stageRect.top + rect.height / 2 - 6,
+        };
+      }
+
+      async function fly(from, to, color = "cyan") {
+        if (reduceMotion.matches) return;
+        const start = centerInStage(from);
+        const end = centerInStage(to);
+        const packet = document.createElement("span");
+        packet.className = "packet";
+        packet.style.background = color === "amber" ? "var(--amber)" : "var(--cyan)";
+        packet.style.boxShadow = `0 0 18px ${color === "amber" ? "var(--amber)" : "var(--cyan)"}`;
+        packet.style.left = "0";
+        packet.style.top = "0";
+        stage.append(packet);
+        const animation = packet.animate(
+          [
+            { transform: `translate3d(${start.x}px, ${start.y}px, 0)`, opacity: 0.35 },
+            { transform: `translate3d(${end.x}px, ${end.y}px, 0)`, opacity: 1 },
+          ],
+          { duration: 460, easing: "cubic-bezier(0.77, 0, 0.175, 1)", fill: "forwards" },
+        );
+        await animation.finished;
+        packet.remove();
+      }
+
+      async function requestToIsolate(isolate) {
+        await fly(client, isolate);
+      }
+
+      async function fetchSnapshot(isolate, background = false) {
+        fetchCount += 1;
+        fetchCountOutput.value = String(fetchCount);
+        isolate.classList.add("fetching");
+        log.textContent = background
+          ? "The request uses the valid snapshot. This isolate refreshes in the background."
+          : "This isolate waits for a new snapshot before it authorizes the request.";
+        await fly(isolate, control, "amber");
+        await fly(control, database, "amber");
+        await fly(database, control, "amber");
+        await fly(control, isolate, "amber");
+        isolate.classList.remove("fetching");
+        setIsolateState(currentIsolateIndex, "Fresh snapshot", "Local to this isolate", "0s", "fresh");
+      }
+
+      async function runScenario(name) {
+        if (running) return;
+        running = true;
+        const buttons = document.querySelectorAll("[data-scenario]");
+        for (const button of buttons) button.disabled = true;
+
+        try {
+          if (name === "new") {
+            const nextIndex = (currentIsolateIndex + 1) % isolateNames.length;
+            setActiveIsolate(nextIndex);
+            setIsolateState(nextIndex, "Cold", "No snapshot in this isolate", "—", "cold");
+          } else {
+            setActiveIsolate(0);
+          }
+
+          const isolate = isolateElement();
+          await requestToIsolate(isolate);
+
+          if (name === "cold" || name === "new") {
+            setIsolateState(currentIsolateIndex, "Cold miss", "Must call Control", "—", "cold");
+            await fetchSnapshot(isolate);
+            log.textContent = name === "new"
+              ? "The new isolate fetched its own copy. Other isolates kept their separate copies."
+              : "Isolate A now has one fresh module-level snapshot."
+          } else if (name === "warm") {
+            setIsolateState(0, "Warm hit", "No Control call", "20s", "fresh");
+            log.textContent = "At 20 seconds, isolate A uses its local snapshot. Control receives no request.";
+          } else if (name === "soft") {
+            setIsolateState(0, "Soft refresh", "Serve now, refresh behind", "50s", "soft");
+            await fetchSnapshot(isolate, true);
+            log.textContent = "At 50 seconds, the media request does not wait. The background refresh made the snapshot fresh again.";
+          } else if (name === "hard") {
+            setIsolateState(0, "Hard expiry", "Block until refresh", "60s", "expired");
+            await fetchSnapshot(isolate);
+            log.textContent = "At 60 seconds, isolate A must receive a valid snapshot before authorization. Failure returns 503.";
+          }
+        } finally {
+          for (const button of buttons) button.disabled = false;
+          running = false;
+        }
+      }
+
+      for (const button of document.querySelectorAll("[data-scenario]")) {
+        button.addEventListener("click", () => runScenario(button.dataset.scenario));
+      }
+    </script>
+  </body>
+</html>
