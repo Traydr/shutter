@@ -10,6 +10,7 @@ const server = {
 
   DATABASE_URL: optionalUrl,
   CAPABILITY_KEYS: optionalString,
+  SHUTTER_ENCRYPTION_KEY: optionalString,
   SPACE_API_TOKENS: optionalString,
 
   S3_ENDPOINT: optionalUrl,

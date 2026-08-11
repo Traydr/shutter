@@ -36,7 +36,7 @@ export interface SourceOriginRule {
 }
 
 export interface UploadThingResolverPolicy {
-  id: "uploadthing";
+  id: string;
   type: "uploadthing";
   allowedProjectIds: readonly string[];
 }
