@@ -4,6 +4,7 @@ import {
   type ExecutorProcessor,
   runExecutorOnce,
 } from "@shutter/executor-runtime";
+import type { Effect } from "effect";
 import { ProcessingFailure, processPdfPreview, runCommand } from "./processor.js";
 
 export type PdfExecutorConfig = ExecutorConfig;
@@ -24,6 +25,8 @@ const pdfProcessor: ExecutorProcessor = {
       : { retryable: true },
 };
 
-export function runPdfOnce(config: PdfExecutorConfig): Promise<"idle" | "processed"> {
+export function runPdfOnce(
+  config: PdfExecutorConfig,
+): Effect.Effect<"idle" | "processed", unknown> {
   return runExecutorOnce(config, pdfProcessor);
 }

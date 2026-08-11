@@ -25,6 +25,12 @@ async function visit(path) {
     }
     if (/\bBuffer\b/.test(source)) violations.push(`${entryPath}: uses Buffer`);
     if (/\bprocess(?:\.|\[)/.test(source)) violations.push(`${entryPath}: uses process`);
+    if (
+      entryPath.startsWith(join("apps", "edge", "src")) &&
+      /(?:from\s+|import\s*(?:\(\s*)?)["']@shutter\/protocol\/jobs(?:["'/])/u.test(source)
+    ) {
+      violations.push(`${entryPath}: imports @shutter/protocol/jobs`);
+    }
   }
 }
 

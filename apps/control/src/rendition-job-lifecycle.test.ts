@@ -1,12 +1,14 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { it } from "@effect/vitest";
+import { Effect, Fiber } from "effect";
+import { afterAll, beforeAll, beforeEach, describe, expect } from "vitest";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import {
   JOB_RETRY_WINDOW_SECONDS,
   MAX_ATTEMPTS,
-  type PostgresRenditionJobLifecycle,
   PROCESSING_LEASE_SECONDS,
   postgresSourceLockKey,
   RETRY_DELAYS_SECONDS,
+  type RenditionJobLifecycleShape,
 } from "./rendition-job-lifecycle.js";
 
 const start = new Date("2026-01-01T00:00:00.000Z");
@@ -26,7 +28,7 @@ const master = {
 
 describe("Postgres Rendition Job lifecycle", () => {
   let test: PostgresTestLifecycle;
-  let lifecycle: PostgresRenditionJobLifecycle;
+  let lifecycle: RenditionJobLifecycleShape;
 
   beforeAll(async () => {
     test = await createPostgresTestLifecycle();
@@ -44,169 +46,208 @@ describe("Postgres Rendition Job lifecycle", () => {
     expect(postgresSourceLockKey("a", "b\u0000c")).not.toBe(postgresSourceLockKey("a\u0000b", "c"));
   });
 
-  it("converges concurrent submissions and rejects stale completion tokens", async () => {
-    const [left, right] = await Promise.all([
-      lifecycle.submit(input, start),
-      lifecycle.submit({ ...input, sourceCapability: "replacement" }, start),
-    ]);
-    expect([left.disposition, right.disposition].sort()).toEqual(["created", "existing"]);
-
-    const claim = await lifecycle.claim("video", start);
-    expect(claim).toMatchObject({ attemptNumber: 1, executionCycle: 0 });
-    if (claim === undefined) throw new Error("expected a claim");
-    await expect(
-      lifecycle.heartbeat(identity, claim.processingToken, new Date(start.getTime() + 30_000)),
-    ).resolves.toEqual({ outcome: "accepted" });
-
-    await expect(lifecycle.complete(identity, "stale-token", master, start)).resolves.toEqual({
-      outcome: "stale_attempt",
-    });
-    await expect(
-      lifecycle.complete(identity, claim.processingToken, master, start),
-    ).resolves.toEqual({ outcome: "accepted" });
-    await expect(
-      lifecycle.heartbeat(identity, claim.processingToken, new Date(start.getTime() + 60_000)),
-    ).resolves.toEqual({ outcome: "stale_attempt" });
-    expect(await lifecycle.read(identity)).toMatchObject({
-      status: "ready",
-      representation: { status: "ready", master: { sourceId: "source-1", kind: "video" } },
-    });
-  });
-
-  it("claims one Rendition Job only once across concurrent connections", async () => {
-    await lifecycle.submit(input, start);
-    const claims = await Promise.all([
-      lifecycle.claim("video", start),
-      lifecycle.claim("video", start),
-    ]);
-    expect(claims.filter((claim) => claim !== undefined)).toHaveLength(1);
-  });
-
-  it("owns retry scheduling, terminal failure, and reactivation", async () => {
-    await lifecycle.submit(input, start);
-    let now = start;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-      const claim = await lifecycle.claim("video", now);
-      expect(claim).toMatchObject({ attemptNumber: attempt });
-      if (claim === undefined) throw new Error("expected a claim");
-      const failure = await lifecycle.fail(
-        identity,
-        claim.processingToken,
-        { retryable: true },
-        now,
+  it.effect("converges concurrent submissions and rejects stale completion tokens", () =>
+    Effect.gen(function* () {
+      const [left, right] = yield* Effect.all(
+        [
+          lifecycle.submit(input, start),
+          lifecycle.submit({ ...input, sourceCapability: "replacement" }, start),
+        ],
+        { concurrency: "unbounded" },
       );
-      expect(failure.outcome).toBe(attempt === MAX_ATTEMPTS ? "terminal" : "retry_scheduled");
-      const delay = RETRY_DELAYS_SECONDS[attempt - 1];
-      if (delay !== undefined) now = new Date(now.getTime() + delay * 1_000);
-    }
-    expect(await lifecycle.read(identity)).toMatchObject({
-      status: "failed",
-      representation: {
-        status: "failed",
-        failure: { code: "attempts_exhausted", action: "retry" },
-      },
-    });
+      expect([left.disposition, right.disposition].sort()).toEqual(["created", "existing"]);
 
-    const reactivated = await lifecycle.submit(input, new Date(now.getTime() + 1_000));
-    expect(reactivated).toMatchObject({
-      disposition: "reactivated",
-      job: { status: "pending", executionCycle: 1, attemptNumber: 0 },
-    });
-  });
+      const claim = yield* lifecycle.claim("video", start);
+      expect(claim).toMatchObject({ attemptNumber: 1, executionCycle: 0 });
+      if (claim === undefined) throw new Error("expected a claim");
+      expect(
+        yield* lifecycle.heartbeat(
+          identity,
+          claim.processingToken,
+          new Date(start.getTime() + 30_000),
+        ),
+      ).toEqual({ outcome: "accepted" });
 
-  it("maintains expiry and recovered leases in one ordered operation", async () => {
-    await lifecycle.submit(
-      { ...input, capabilityExpiresAt: new Date(start.getTime() + 60_000) },
-      start,
-    );
-    const expiredAt = new Date(start.getTime() + 61_000);
-    await expect(lifecycle.maintain(expiredAt, 100)).resolves.toEqual({
-      expiredPendingJobs: 1,
-      recoveredLeases: 0,
-      runnableKinds: [],
-    });
-
-    await test.pool.query("truncate table rendition_jobs");
-    await lifecycle.submit(input, start);
-    await lifecycle.claim("video", start);
-    const recoveredAt = new Date(start.getTime() + PROCESSING_LEASE_SECONDS * 1_000 + 1);
-    await expect(lifecycle.maintain(recoveredAt, 100)).resolves.toEqual({
-      expiredPendingJobs: 0,
-      recoveredLeases: 1,
-      runnableKinds: ["video"],
-    });
-  });
-
-  it("bounds retry deadlines by lifecycle policy", async () => {
-    await lifecycle.submit(
-      { ...input, capabilityExpiresAt: new Date(start.getTime() + 48 * 60 * 60 * 1_000) },
-      start,
-    );
-    const row = await test.pool.query<{ retry_deadline_at: Date }>(
-      "select retry_deadline_at from rendition_jobs",
-    );
-    expect(row.rows[0]?.retry_deadline_at).toEqual(
-      new Date(start.getTime() + JOB_RETRY_WINDOW_SECONDS * 1_000),
-    );
-  });
-
-  it("commits Source Purge invalidation before cleanup and never resurrects jobs", async () => {
-    await lifecycle.submit(input, start);
-    const claim = await lifecycle.claim("video", start);
-    if (claim === undefined) throw new Error("expected a claim");
-
-    await expect(
-      lifecycle.withInvalidatedSource(identity, async () => {
-        expect(await lifecycle.read(identity)).toBeUndefined();
-        throw new Error("edge purge unavailable");
-      }),
-    ).rejects.toThrow("edge purge unavailable");
-
-    expect(await lifecycle.read(identity)).toBeUndefined();
-    await expect(
-      lifecycle.complete(identity, claim.processingToken, master, start),
-    ).resolves.toEqual({ outcome: "stale_attempt" });
-    await expect(lifecycle.withInvalidatedSource(identity, async () => "retried")).resolves.toEqual(
-      { invalidatedJobs: 0, value: "retried" },
-    );
-  });
-
-  it("holds source exclusion across cleanup without blocking unrelated sources", async () => {
-    await lifecycle.submit(input, start);
-    const claim = await lifecycle.claim("video", start);
-    if (claim === undefined) throw new Error("expected a claim");
-
-    let releaseCleanup = () => {};
-    const cleanupGate = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
-    let cleanupStarted = () => {};
-    const started = new Promise<void>((resolve) => {
-      cleanupStarted = resolve;
-    });
-    const purge = lifecycle.withInvalidatedSource(identity, async () => {
-      cleanupStarted();
-      await cleanupGate;
-    });
-    await started;
-
-    let completionSettled = false;
-    const completion = lifecycle
-      .complete(identity, claim.processingToken, master, start)
-      .finally(() => {
-        completionSettled = true;
+      expect(yield* lifecycle.complete(identity, "stale-token", master, start)).toEqual({
+        outcome: "stale_attempt",
       });
-    let submissionSettled = false;
-    const submission = lifecycle.submit(input, start).finally(() => {
-      submissionSettled = true;
-    });
-    await lifecycle.submit({ ...input, sourceId: "unrelated-source" }, start);
-    expect(completionSettled).toBe(false);
-    expect(submissionSettled).toBe(false);
+      expect(yield* lifecycle.complete(identity, claim.processingToken, master, start)).toEqual({
+        outcome: "accepted",
+      });
+      expect(
+        yield* lifecycle.heartbeat(
+          identity,
+          claim.processingToken,
+          new Date(start.getTime() + 60_000),
+        ),
+      ).toEqual({ outcome: "stale_attempt" });
+      expect(yield* lifecycle.read(identity)).toMatchObject({
+        status: "ready",
+        representation: { status: "ready", master: { sourceId: "source-1", kind: "video" } },
+      });
+    }),
+  );
 
-    releaseCleanup();
-    await purge;
-    await expect(completion).resolves.toEqual({ outcome: "stale_attempt" });
-    await expect(submission).resolves.toMatchObject({ disposition: "created" });
-  });
+  it.effect("claims one Rendition Job only once across concurrent connections", () =>
+    Effect.gen(function* () {
+      yield* lifecycle.submit(input, start);
+      const claims = yield* Effect.all(
+        [lifecycle.claim("video", start), lifecycle.claim("video", start)],
+        { concurrency: "unbounded" },
+      );
+      expect(claims.filter((claim) => claim !== undefined)).toHaveLength(1);
+    }),
+  );
+
+  it.effect("owns retry scheduling, terminal failure, and reactivation", () =>
+    Effect.gen(function* () {
+      yield* lifecycle.submit(input, start);
+      let now = start;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+        const claim = yield* lifecycle.claim("video", now);
+        expect(claim).toMatchObject({ attemptNumber: attempt });
+        if (claim === undefined) throw new Error("expected a claim");
+        const failure = yield* lifecycle.fail(
+          identity,
+          claim.processingToken,
+          { retryable: true },
+          now,
+        );
+        expect(failure.outcome).toBe(attempt === MAX_ATTEMPTS ? "terminal" : "retry_scheduled");
+        const delay = RETRY_DELAYS_SECONDS[attempt - 1];
+        if (delay !== undefined) now = new Date(now.getTime() + delay * 1_000);
+      }
+      expect(yield* lifecycle.read(identity)).toMatchObject({
+        status: "failed",
+        representation: {
+          status: "failed",
+          failure: { code: "attempts_exhausted", action: "retry" },
+        },
+      });
+
+      const reactivated = yield* lifecycle.submit(input, new Date(now.getTime() + 1_000));
+      expect(reactivated).toMatchObject({
+        disposition: "reactivated",
+        job: { status: "pending", executionCycle: 1, attemptNumber: 0 },
+      });
+    }),
+  );
+
+  it.effect("maintains expiry and recovered leases in one ordered operation", () =>
+    Effect.gen(function* () {
+      yield* lifecycle.submit(
+        { ...input, capabilityExpiresAt: new Date(start.getTime() + 60_000) },
+        start,
+      );
+      const expiredAt = new Date(start.getTime() + 61_000);
+      expect(yield* lifecycle.maintain(expiredAt, 100)).toEqual({
+        expiredPendingJobs: 1,
+        recoveredLeases: 0,
+        runnableKinds: [],
+      });
+
+      yield* Effect.promise(() => test.pool.query("truncate table rendition_jobs"));
+      yield* lifecycle.submit(input, start);
+      yield* lifecycle.claim("video", start);
+      const recoveredAt = new Date(start.getTime() + PROCESSING_LEASE_SECONDS * 1_000 + 1);
+      expect(yield* lifecycle.maintain(recoveredAt, 100)).toEqual({
+        expiredPendingJobs: 0,
+        recoveredLeases: 1,
+        runnableKinds: ["video"],
+      });
+    }),
+  );
+
+  it.effect("bounds retry deadlines by lifecycle policy", () =>
+    Effect.gen(function* () {
+      yield* lifecycle.submit(
+        { ...input, capabilityExpiresAt: new Date(start.getTime() + 48 * 60 * 60 * 1_000) },
+        start,
+      );
+      const row = yield* Effect.promise(() =>
+        test.pool.query<{ retry_deadline_at: Date }>(
+          "select retry_deadline_at from rendition_jobs",
+        ),
+      );
+      expect(row.rows[0]?.retry_deadline_at).toEqual(
+        new Date(start.getTime() + JOB_RETRY_WINDOW_SECONDS * 1_000),
+      );
+    }),
+  );
+
+  it.effect("commits Source Purge invalidation before cleanup and never resurrects jobs", () =>
+    Effect.gen(function* () {
+      yield* lifecycle.submit(input, start);
+      const claim = yield* lifecycle.claim("video", start);
+      if (claim === undefined) throw new Error("expected a claim");
+
+      const error = yield* Effect.flip(
+        lifecycle.withInvalidatedSource(
+          identity,
+          Effect.gen(function* () {
+            expect(yield* lifecycle.read(identity)).toBeUndefined();
+            return yield* Effect.fail(new Error("edge purge unavailable"));
+          }),
+        ),
+      );
+      expect(error.message).toBe("edge purge unavailable");
+
+      expect(yield* lifecycle.read(identity)).toBeUndefined();
+      expect(yield* lifecycle.complete(identity, claim.processingToken, master, start)).toEqual({
+        outcome: "stale_attempt",
+      });
+      expect(yield* lifecycle.withInvalidatedSource(identity, Effect.succeed("retried"))).toEqual({
+        invalidatedJobs: 0,
+        value: "retried",
+      });
+    }),
+  );
+
+  it.effect("holds source exclusion across cleanup without blocking unrelated sources", () =>
+    Effect.gen(function* () {
+      yield* lifecycle.submit(input, start);
+      const claim = yield* lifecycle.claim("video", start);
+      if (claim === undefined) throw new Error("expected a claim");
+
+      let releaseCleanup = () => {};
+      const cleanupGate = new Promise<void>((resolve) => {
+        releaseCleanup = resolve;
+      });
+      let cleanupStarted = () => {};
+      const started = new Promise<void>((resolve) => {
+        cleanupStarted = resolve;
+      });
+      const purge = yield* Effect.forkChild(
+        lifecycle.withInvalidatedSource(
+          identity,
+          Effect.promise(async () => {
+            cleanupStarted();
+            await cleanupGate;
+          }),
+        ),
+      );
+      yield* Effect.promise(() => started);
+
+      let completionSettled = false;
+      const completion = yield* Effect.forkChild(
+        lifecycle
+          .complete(identity, claim.processingToken, master, start)
+          .pipe(Effect.ensuring(Effect.sync(() => (completionSettled = true)))),
+      );
+      let submissionSettled = false;
+      const submission = yield* Effect.forkChild(
+        lifecycle
+          .submit(input, start)
+          .pipe(Effect.ensuring(Effect.sync(() => (submissionSettled = true)))),
+      );
+      yield* lifecycle.submit({ ...input, sourceId: "unrelated-source" }, start);
+      expect(completionSettled).toBe(false);
+      expect(submissionSettled).toBe(false);
+
+      releaseCleanup();
+      yield* Fiber.join(purge);
+      expect(yield* Fiber.join(completion)).toEqual({ outcome: "stale_attempt" });
+      expect(yield* Fiber.join(submission)).toMatchObject({ disposition: "created" });
+    }),
+  );
 });

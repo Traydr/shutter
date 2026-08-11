@@ -1,4 +1,5 @@
 import type { S3Client } from "@aws-sdk/client-s3";
+import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import { createPdfExecutorApp } from "./app.js";
 
@@ -16,7 +17,7 @@ function config() {
 
 describe("PDF executor app", () => {
   it("authenticates a wake with the executor role token", async () => {
-    const run = vi.fn(async () => "idle" as const);
+    const run = vi.fn(() => Effect.succeed("idle" as const));
     const configured = createPdfExecutorApp(config(), run);
 
     const unauthorized = await configured.request("http://shutter.test/internal/v1/run-once", {
@@ -36,12 +37,18 @@ describe("PDF executor app", () => {
 
   it("runs at most one job invocation at a time", async () => {
     let finish: ((result: "processed") => void) | undefined;
-    const run = vi.fn(
-      () =>
-        new Promise<"processed">((resolve) => {
-          finish = resolve;
-        }),
-    );
+    let invocations = 0;
+    const run = vi.fn(() => {
+      invocations += 1;
+      return invocations === 1
+        ? Effect.promise(
+            () =>
+              new Promise<"processed">((resolve) => {
+                finish = resolve;
+              }),
+          )
+        : Effect.succeed("idle" as const);
+    });
     const configured = createPdfExecutorApp(config(), run);
     const wake = { method: "POST", headers: { authorization: `Bearer ${TOKEN}` } };
 
@@ -55,5 +62,10 @@ describe("PDF executor app", () => {
     const first = await firstPromise;
     expect(first.status).toBe(200);
     expect(run).toHaveBeenCalledOnce();
+
+    const afterRelease = await configured.request("http://shutter.test/internal/v1/run-once", wake);
+    expect(afterRelease.status).toBe(200);
+    await expect(afterRelease.json()).resolves.toEqual({ result: "idle" });
+    expect(run).toHaveBeenCalledTimes(2);
   });
 });

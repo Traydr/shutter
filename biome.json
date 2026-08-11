@@ -8,6 +8,7 @@
       "!!**/.wrangler",
       "!!**/dist",
       "!!**/node_modules",
+      "!!repos",
       "!!**/worker-configuration.d.ts"
     ]
   },

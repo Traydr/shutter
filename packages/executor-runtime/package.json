@@ -12,13 +12,14 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@effect/platform-node": "4.0.0-beta.103",
     "@aws-sdk/client-s3": "^3.1084.0",
-    "@hono/node-server": "2.0.8",
     "@shutter/protocol": "workspace:*",
     "@shutter/space-config": "workspace:*",
-    "hono": "4.12.28"
+    "effect": "4.0.0-beta.103"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.0-beta.103",
     "@types/node": "^22.18.0",
     "typescript": "6.0.3",
     "vitest": "4.1.4"

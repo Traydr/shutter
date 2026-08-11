@@ -1,8 +1,8 @@
 # V1 Rendition Job ledger
 
-Postgres has one application table: `rendition_jobs`. Drizzle migrations own its
-schema. No Space, Source, Asset, attempt-history, purge, or delivery-token tables
-exist in v1.
+Postgres has one application table: `rendition_jobs`. Effect SQL's `PgMigrator`
+owns its schema migrations. No Space, Source, Asset, attempt-history, purge, or
+delivery-token tables exist in v1.
 
 ## Identity
 

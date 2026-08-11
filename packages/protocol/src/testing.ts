@@ -1,10 +1,12 @@
+import type { Effect } from "effect";
 import { type IssueCapabilityOptions, issueSourceCapabilityWithIvInternal } from "./capability.js";
+import type { CapabilityError } from "./errors.js";
 import type { SourceCapabilityClaims } from "./types.js";
 
-export async function issueSourceCapabilityWithIv(
+export function issueSourceCapabilityWithIv(
   claims: SourceCapabilityClaims,
   options: IssueCapabilityOptions,
   iv: Uint8Array,
-): Promise<string> {
+): Effect.Effect<string, CapabilityError> {
   return issueSourceCapabilityWithIvInternal(claims, options, iv);
 }

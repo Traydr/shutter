@@ -31,13 +31,14 @@ Services are **fail-closed**: a missing variable does not crash startup, but the
 affected route returns 401 or 503 until it is configured. You can bring the
 stack up one capability at a time.
 
-Control reads configuration only through `apps/control/src/env/server.ts`;
-production modules do not touch `process.env` directly.
+Control modules depend on the `ControlConfig` service defined in
+`apps/control/src/env/server.ts`; production modules do not read `process.env`
+directly.
 
 ## Running the services
 
-Each Node service is a Hono server with a `/healthz` endpoint, and its port
-comes from `PORT`.
+Each Node service runs an Effect HTTP server with a `/healthz` endpoint, and its
+port comes from `PORT`.
 
 ```sh
 pnpm --filter @shutter/control dev         # control plane + Rendition Job API
@@ -52,6 +53,9 @@ To exercise the Rendition Job API end to end you need Postgres plus
 ```sh
 DATABASE_URL=... pnpm --filter @shutter/control db:migrate
 ```
+
+`db:migrate` runs the Effect SQL `PgMigrator`; there is no schema-generation
+command.
 
 Mint Source Capabilities for job submission with `issueSourceCapability` from
 `@shutter/protocol`. A capability's `locator` origin must be allowlisted by the
@@ -72,7 +76,7 @@ This is a runtime-version gap, not a code defect. The Worker is still fully
 exercised by:
 
 - `pnpm --filter @shutter/edge build` — vite build producing a deployable Worker
-- `pnpm --filter @shutter/edge test` — 16 tests on `vitest-pool-workers`' newer
+- `pnpm --filter @shutter/edge test` — 17 tests on `vitest-pool-workers`' newer
   workerd (`1.20260706.1`), which does support `2026-07-10`
 
 Running the dev server requires a newer miniflare/workerd (`>= 1.20260706`)
@@ -90,3 +94,10 @@ behind the vite plugin and wrangler.
   incompatible drift fails closed rather than degrading. Cross-consumer
   behavior is pinned by fixtures in `@shutter/testkit`.
 - **Formatting and linting** are Biome (`pnpm format`).
+
+## Local Effect reference
+
+`repos/effect` is a read-only, gitignored shallow clone pinned to the installed
+Effect version. Do not import from or edit it. Run
+`node scripts/sync-effect-reference.mjs` to refresh the reference after changing
+the pinned Effect version.

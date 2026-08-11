@@ -1,17 +1,26 @@
 import { env, reset, SELF } from "cloudflare:test";
-import { buildR2CacheKey, buildSourceCacheTag, verifySourceCapability } from "@shutter/protocol";
+import { it } from "@effect/vitest";
+import {
+  buildCanonicalCacheUrl,
+  buildR2CacheKey,
+  buildSourceCacheTag,
+  verifySourceCapability,
+} from "@shutter/protocol";
 import { issueSourceCapabilityWithIv } from "@shutter/protocol/testing";
 import {
   runCapabilityConformance,
   TEST_CAPABILITY_KEY,
   TEST_CAPABILITY_KID,
 } from "@shutter/testkit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { Layer, ManagedRuntime } from "effect";
+import { afterEach, describe, expect, vi } from "vitest";
 
 afterEach(async () => {
   vi.unstubAllGlobals();
   await reset();
 });
+
+const testRuntime = ManagedRuntime.make(Layer.empty);
 
 function tamper(value: string): string {
   const index = Math.floor(value.length / 2);
@@ -31,18 +40,20 @@ describe("edge app", () => {
   it("validates a private source capability before returning cached bytes", async () => {
     const now = Math.floor(Date.now() / 1000);
     const sourceId = "private-source";
-    const token = await issueSourceCapabilityWithIv(
-      {
-        space_id: "pane-view",
-        source_id: sourceId,
-        purpose: "image_source",
-        locator:
-          "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source.webp",
-        iat: now - 60,
-        exp: now + 3_600,
-      },
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      Uint8Array.from([11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]),
+    const token = await testRuntime.runPromise(
+      issueSourceCapabilityWithIv(
+        {
+          space_id: "pane-view",
+          source_id: sourceId,
+          purpose: "image_source",
+          locator:
+            "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source.webp",
+          iat: now - 60,
+          exp: now + 3_600,
+        },
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        Uint8Array.from([11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]),
+      ),
     );
     const identity = {
       routeClass: "private" as const,
@@ -67,29 +78,42 @@ describe("edge app", () => {
     );
     expect(first.status).toBe(200);
     expect(first.headers.get("cache-control")).toBe("private, no-store");
+    expect(first.headers.get("cache-tag")).toBeNull();
     expect(first.headers.get("x-shutter-cache")).toBe("r2-hit");
     expect(new TextDecoder().decode(await first.arrayBuffer())).toBe("private-source-rendition");
+
+    const internal = await caches.default.match(
+      new Request(await buildCanonicalCacheUrl(identity)),
+    );
+    expect(internal?.headers.get("cache-control")).toBe("public, max-age=86400");
+    expect(internal?.headers.get("cache-tag")).toBe(
+      await buildSourceCacheTag(identity.spaceId, identity.sourceId),
+    );
 
     const second = await SELF.fetch(
       `https://edge.shutter.test/v1/private/pane-view/source/${token}?w=640&q=75`,
     );
     expect(second.headers.get("x-shutter-cache")).toBe("edge-hit");
+    expect(second.headers.get("cache-control")).toBe("private, no-store");
+    expect(second.headers.get("cache-tag")).toBeNull();
   });
 
   it("validates a private capability before returning R2 or edge-cache bytes", async () => {
     const now = Math.floor(Date.now() / 1000);
     const sourceId = "private-master-source";
-    const token = await issueSourceCapabilityWithIv(
-      {
-        space_id: "pane-view",
-        source_id: sourceId,
-        purpose: "master_preview",
-        kind: "video",
-        iat: now - 60,
-        exp: now + 3_600,
-      },
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      Uint8Array.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+    const token = await testRuntime.runPromise(
+      issueSourceCapabilityWithIv(
+        {
+          space_id: "pane-view",
+          source_id: sourceId,
+          purpose: "master_preview",
+          kind: "video",
+          iat: now - 60,
+          exp: now + 3_600,
+        },
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        Uint8Array.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+      ),
     );
     const identity = {
       routeClass: "private" as const,
@@ -133,17 +157,19 @@ describe("edge app", () => {
     );
     vi.stubGlobal("fetch", origin);
     const now = Math.floor(Date.now() / 1000);
-    const token = await issueSourceCapabilityWithIv(
-      {
-        space_id: "pane-view",
-        source_id: "private-master-miss",
-        purpose: "master_preview",
-        kind: "pdf",
-        iat: now - 60,
-        exp: now + 3_600,
-      },
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      Uint8Array.from([1, 3, 5, 7, 9, 11, 2, 4, 6, 8, 10, 12]),
+    const token = await testRuntime.runPromise(
+      issueSourceCapabilityWithIv(
+        {
+          space_id: "pane-view",
+          source_id: "private-master-miss",
+          purpose: "master_preview",
+          kind: "pdf",
+          iat: now - 60,
+          exp: now + 3_600,
+        },
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        Uint8Array.from([1, 3, 5, 7, 9, 11, 2, 4, 6, 8, 10, 12]),
+      ),
     );
     const response = await SELF.fetch(
       `https://edge.shutter.test/v1/private/pane-view/master/${token}?w=640&q=75`,
@@ -226,6 +252,18 @@ describe("edge app", () => {
     expect(origin).toHaveBeenCalledOnce();
   });
 
+  it("reports an unexpected origin defect as unavailable", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("unexpected origin defect")));
+
+    const response = await SELF.fetch(
+      "https://edge.shutter.test/v1/public/ernesta/master/video/defect?w=640&q=75",
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.json()).toEqual({ error: { code: "service_unavailable" } });
+  });
+
   it("excludes a public located-source capability from canonical cached identity", async () => {
     const sourceId = "public-located-source";
     const identity = {
@@ -264,30 +302,34 @@ describe("edge app", () => {
     });
     vi.stubGlobal("fetch", origin);
     const now = Math.floor(Date.now() / 1000);
-    const privateToken = await issueSourceCapabilityWithIv(
-      {
-        space_id: "pane-view",
-        source_id: "private-source-miss",
-        purpose: "image_source",
-        locator:
-          "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source-miss.webp",
-        iat: now - 60,
-        exp: now + 3_600,
-      },
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      Uint8Array.from([2, 4, 6, 8, 10, 12, 1, 3, 5, 7, 9, 11]),
+    const privateToken = await testRuntime.runPromise(
+      issueSourceCapabilityWithIv(
+        {
+          space_id: "pane-view",
+          source_id: "private-source-miss",
+          purpose: "image_source",
+          locator:
+            "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source-miss.webp",
+          iat: now - 60,
+          exp: now + 3_600,
+        },
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        Uint8Array.from([2, 4, 6, 8, 10, 12, 1, 3, 5, 7, 9, 11]),
+      ),
     );
-    const locatedToken = await issueSourceCapabilityWithIv(
-      {
-        space_id: "ernesta",
-        source_id: "public-located-miss",
-        purpose: "image_source",
-        locator: "https://8w0z32yftd.ufs.sh/f/public-located-miss",
-        iat: now - 60,
-        exp: now + 3_600,
-      },
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      Uint8Array.from([3, 6, 9, 12, 2, 5, 8, 11, 1, 4, 7, 10]),
+    const locatedToken = await testRuntime.runPromise(
+      issueSourceCapabilityWithIv(
+        {
+          space_id: "ernesta",
+          source_id: "public-located-miss",
+          purpose: "image_source",
+          locator: "https://8w0z32yftd.ufs.sh/f/public-located-miss",
+          iat: now - 60,
+          exp: now + 3_600,
+        },
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        Uint8Array.from([3, 6, 9, 12, 2, 5, 8, 11, 1, 4, 7, 10]),
+      ),
     );
 
     const responses = await Promise.all([
@@ -351,12 +393,12 @@ describe("edge app", () => {
 });
 
 describe("workerd protocol conformance", () => {
-  it("matches the shared AES-GCM fixtures", async () => {
-    await runCapabilityConformance({
+  it.effect("matches the shared AES-GCM fixtures", () =>
+    runCapabilityConformance({
       issueWithIv: issueSourceCapabilityWithIv,
       verify: verifySourceCapability,
-    });
-  });
+    }),
+  );
 
   it("rejects unauthenticated Worker cache purge", async () => {
     const response = await SELF.fetch("https://edge.shutter.test/internal/v1/cache/purge", {

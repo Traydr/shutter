@@ -1,20 +1,20 @@
-import type { ServerEnv } from "./env/server.js";
-
-type ControlLoggingEnvironmentKey =
-  | "NODE_ENV"
-  | "OTEL_EXPORTER_OTLP_LOGS_ALLOWED_ENDPOINTS"
-  | "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"
-  | "OTEL_EXPORTER_OTLP_LOGS_HEADERS"
-  | "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL"
-  | "OTEL_EXPORTER_OTLP_LOGS_TIMEOUT"
-  | "RAILWAY_DEPLOYMENT_ID"
-  | "RAILWAY_ENVIRONMENT_NAME"
-  | "RAILWAY_GIT_COMMIT_SHA"
-  | "RAILWAY_REPLICA_ID"
-  | "RAILWAY_REPLICA_REGION";
+import type { ControlConfigShape } from "./env/server.js";
 
 export type ControlLoggingEnvironment = Readonly<
-  Partial<Pick<ServerEnv, ControlLoggingEnvironmentKey>>
+  Pick<
+    ControlConfigShape,
+    | "nodeEnv"
+    | "otlpLogsAllowedEndpoints"
+    | "otlpLogsEndpoint"
+    | "otlpLogsHeaders"
+    | "otlpLogsProtocol"
+    | "otlpLogsTimeout"
+    | "railwayDeploymentId"
+    | "railwayEnvironmentName"
+    | "railwayGitCommitSha"
+    | "railwayReplicaId"
+    | "railwayReplicaRegion"
+  >
 >;
 
 export interface OtlpLogsConfig {
@@ -77,7 +77,7 @@ function validateOpenObserveHeaders(headers: Readonly<Record<string, string>>): 
 }
 
 function timeoutMillis(environment: ControlLoggingEnvironment): number {
-  const value = environment.OTEL_EXPORTER_OTLP_LOGS_TIMEOUT;
+  const value = environment.otlpLogsTimeout;
   if (value === undefined) return MAX_OTLP_EXPORT_TIMEOUT_MILLIS;
   if (!/^[1-9]\d*$/u.test(value)) throw new Error("invalid OTLP timeout");
   const parsed = Number(value);
@@ -85,12 +85,8 @@ function timeoutMillis(environment: ControlLoggingEnvironment): number {
   return Math.min(parsed, MAX_OTLP_EXPORT_TIMEOUT_MILLIS);
 }
 
-// The approved endpoints are deployment configuration rather than a committed
-// constant, but they stay a separate variable from the endpoint itself: pinning
-// only works if redirecting exports requires changing two independently sealed
-// values. An absent or empty allowlist approves nothing and fails closed.
 function approvedEndpoints(environment: ControlLoggingEnvironment): readonly string[] {
-  const value = environment.OTEL_EXPORTER_OTLP_LOGS_ALLOWED_ENDPOINTS;
+  const value = environment.otlpLogsAllowedEndpoints;
   if (value === undefined || value.trim() === "") {
     throw new Error("missing approved OTLP endpoints");
   }
@@ -104,12 +100,9 @@ export function readOtlpLogsConfig(
   environment: ControlLoggingEnvironment,
   allowedEndpoints: readonly string[] = approvedEndpoints(environment),
 ): OtlpLogsConfig | undefined {
-  const configuredEndpoint = environment.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
+  const configuredEndpoint = environment.otlpLogsEndpoint;
   if (configuredEndpoint === undefined) return undefined;
-  if (
-    environment.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL !== undefined &&
-    environment.OTEL_EXPORTER_OTLP_LOGS_PROTOCOL !== "http/json"
-  ) {
+  if (environment.otlpLogsProtocol !== undefined && environment.otlpLogsProtocol !== "http/json") {
     throw new Error("unsupported OTLP protocol");
   }
 
@@ -117,7 +110,7 @@ export function readOtlpLogsConfig(
   const allowed = new Set(allowedEndpoints.map(normalizedEndpoint));
   if (!allowed.has(endpoint)) throw new Error("unapproved OTLP endpoint");
 
-  const headers = parseHeaders(environment.OTEL_EXPORTER_OTLP_LOGS_HEADERS);
+  const headers = parseHeaders(environment.otlpLogsHeaders);
   validateOpenObserveHeaders(headers);
   return { endpoint, headers, timeoutMillis: timeoutMillis(environment) };
 }

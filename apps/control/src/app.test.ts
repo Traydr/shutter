@@ -1,7 +1,9 @@
 import { buildMasterPreviewKey } from "@shutter/protocol";
+import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import { createControlApp } from "./app.js";
-import type { ControlLogger } from "./logging.js";
+import { buildImgproxyRequestEffect } from "./imgproxy.js";
+import type { ControlLoggerShape } from "./logging.js";
 
 const TOKEN = "a".repeat(32);
 const IMGPROXY = {
@@ -11,7 +13,14 @@ const IMGPROXY = {
   secret: "s".repeat(32),
 };
 
-const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
+const NOOP_LOGGER: ControlLoggerShape = { emit: () => Effect.void };
+const IMGPROXY_SERVICE = {
+  buildRequest: (rendition: Parameters<typeof buildImgproxyRequestEffect>[0]) =>
+    buildImgproxyRequestEffect(rendition, IMGPROXY),
+};
+const UNAVAILABLE_MASTER_STORE = {
+  presignGet: () => Effect.die(new Error("master store unavailable")),
+};
 
 function spikeUrl(): string {
   const url = new URL("http://shutter.test/internal/v1/spike/rendition");
@@ -33,8 +42,9 @@ describe("control app", () => {
     const control = createControlApp({
       logger: NOOP_LOGGER,
       originAuthToken: () => TOKEN,
-      imgproxyConfig: () => IMGPROXY,
+      imgproxy: IMGPROXY_SERVICE,
       fetch: vi.fn(),
+      masterStore: UNAVAILABLE_MASTER_STORE,
     });
     const url = spikeUrl();
 
@@ -58,8 +68,9 @@ describe("control app", () => {
     const control = createControlApp({
       logger: NOOP_LOGGER,
       originAuthToken: () => TOKEN,
-      imgproxyConfig: () => IMGPROXY,
+      imgproxy: IMGPROXY_SERVICE,
       fetch,
+      masterStore: UNAVAILABLE_MASTER_STORE,
     });
     const response = await control.request(spikeUrl(), {
       headers: { authorization: `Bearer ${TOKEN}` },
@@ -82,8 +93,9 @@ describe("control app", () => {
     const control = createControlApp({
       logger: NOOP_LOGGER,
       originAuthToken: () => TOKEN,
-      imgproxyConfig: () => IMGPROXY,
+      imgproxy: IMGPROXY_SERVICE,
       fetch,
+      masterStore: UNAVAILABLE_MASTER_STORE,
     });
     const missingSource = await control.request(
       "http://shutter.test/internal/v1/spike/rendition?key=cache/v1/private/pane-view/fp/source/w640-q75.webp&w=640&q=75",
@@ -99,8 +111,9 @@ describe("control app", () => {
     const control = createControlApp({
       logger: NOOP_LOGGER,
       originAuthToken: () => TOKEN,
-      imgproxyConfig: () => IMGPROXY,
+      imgproxy: IMGPROXY_SERVICE,
       fetch,
+      masterStore: UNAVAILABLE_MASTER_STORE,
     });
     const url = new URL(spikeUrl());
     url.searchParams.set("source", "https://evil.example/object.jpg");
@@ -113,12 +126,14 @@ describe("control app", () => {
   });
 
   it("authenticates and strictly validates master rendition requests", async () => {
-    const presignGet = vi.fn(async () => "https://r2.example.test/signed-master?signature=secret");
+    const presignGet = vi.fn(() =>
+      Effect.succeed("https://r2.example.test/signed-master?signature=secret"),
+    );
     const fetch = vi.fn(async () => new Response("master", { status: 200 }));
     const control = createControlApp({
       logger: NOOP_LOGGER,
       originAuthToken: () => TOKEN,
-      imgproxyConfig: () => IMGPROXY,
+      imgproxy: IMGPROXY_SERVICE,
       fetch,
       masterStore: { presignGet },
     });
@@ -160,9 +175,9 @@ describe("control app", () => {
     const control = createControlApp({
       logger: NOOP_LOGGER,
       originAuthToken: () => TOKEN,
-      imgproxyConfig: () => IMGPROXY,
       fetch: vi.fn(async () => new Response(null, { status: 502 })),
-      masterStore: { presignGet: async () => signed },
+      masterStore: { presignGet: () => Effect.succeed(signed) },
+      imgproxy: IMGPROXY_SERVICE,
     });
     const response = await control.request("http://shutter.test/internal/v1/master-rendition", {
       method: "POST",
@@ -184,8 +199,9 @@ describe("control app", () => {
     const control = createControlApp({
       logger: NOOP_LOGGER,
       originAuthToken: () => TOKEN,
-      imgproxyConfig: () => IMGPROXY,
+      imgproxy: IMGPROXY_SERVICE,
       fetch: vi.fn(),
+      masterStore: UNAVAILABLE_MASTER_STORE,
     });
     const response = await control.request("http://shutter.test/internal/v1/spike/rendition", {
       headers: { "x-request-id": "caller-controlled-secret" },
@@ -204,8 +220,9 @@ describe("control app", () => {
       originAuthToken: () => {
         throw new Error("sentinel-secret-error-message");
       },
-      imgproxyConfig: () => IMGPROXY,
+      imgproxy: IMGPROXY_SERVICE,
       fetch: vi.fn(),
+      masterStore: UNAVAILABLE_MASTER_STORE,
     });
 
     const response = await control.request("http://shutter.test/internal/v1/spike/rendition");

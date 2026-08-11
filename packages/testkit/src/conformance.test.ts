@@ -1,3 +1,4 @@
+import { it } from "@effect/vitest";
 import {
   buildCanonicalCacheUrl,
   buildMasterPreviewKey,
@@ -16,7 +17,7 @@ import {
   verifySourceCapability,
 } from "@shutter/protocol";
 import { issueSourceCapabilityWithIv } from "@shutter/protocol/testing";
-import { describe, expect, it } from "vitest";
+import { describe, expect } from "vitest";
 import {
   CACHE_IDENTITY_EXPECTED,
   CACHE_IDENTITY_FIXTURE,
@@ -25,12 +26,12 @@ import {
 } from "./index.js";
 
 describe("Node protocol conformance", () => {
-  it("matches the shared AES-GCM fixtures", async () => {
-    await runCapabilityConformance({
+  it.effect("matches the shared AES-GCM fixtures", () =>
+    runCapabilityConformance({
       issueWithIv: issueSourceCapabilityWithIv,
       verify: verifySourceCapability,
-    });
-  });
+    }),
+  );
 
   it("matches the canonical URL fixtures", () => {
     const rendition = { width: 640, quality: 75 };

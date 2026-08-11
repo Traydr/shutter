@@ -4,6 +4,7 @@ dist/
 .wrangler/
 .vite/
 coverage/
+repos/
 *.tsbuildinfo
 .env
 .env.*

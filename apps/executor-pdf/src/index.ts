@@ -1,5 +1,8 @@
 import { createExecutorConfigFromEnv, serveExecutorApp } from "@shutter/executor-runtime";
-import { createPdfExecutorApp } from "./app.js";
+import { Effect, Layer } from "effect";
+import { createPdfExecutorRoutes } from "./app.js";
 
-const app = createPdfExecutorApp(createExecutorConfigFromEnv());
-serveExecutorApp("pdf", app);
+const routes = Layer.unwrap(
+  createExecutorConfigFromEnv().pipe(Effect.map((config) => createPdfExecutorRoutes(config))),
+);
+serveExecutorApp(routes);

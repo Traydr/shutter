@@ -1,9 +1,11 @@
 import type {
+  CapabilityError,
   CapabilityKeyMaterial,
   RenditionCacheIdentity,
   SourceCapabilityClaims,
   VerifyCapabilityOptions,
 } from "@shutter/protocol";
+import { Effect } from "effect";
 
 export const TEST_CAPABILITY_KID = "fixture-key-2026-07";
 export const TEST_CAPABILITY_KEY = Uint8Array.from([
@@ -104,11 +106,11 @@ export interface CapabilityConformanceAdapter {
     claims: SourceCapabilityClaims,
     options: { kid: string; key: CapabilityKeyMaterial },
     iv: Uint8Array,
-  ): Promise<string>;
+  ): Effect.Effect<string, CapabilityError>;
   verify(
     token: string,
     options: VerifyCapabilityOptions<SourceCapabilityClaims["purpose"]>,
-  ): Promise<SourceCapabilityClaims>;
+  ): Effect.Effect<SourceCapabilityClaims, CapabilityError>;
 }
 
 function canonicalJson(value: unknown): string {
@@ -123,36 +125,42 @@ function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export async function runCapabilityConformance(
+export function runCapabilityConformance(
   adapter: CapabilityConformanceAdapter,
-): Promise<void> {
-  const keys = new Map<string, CapabilityKeyMaterial>([[TEST_CAPABILITY_KID, TEST_CAPABILITY_KEY]]);
+): Effect.Effect<void, CapabilityError> {
+  return Effect.gen(function* () {
+    const keys = new Map<string, CapabilityKeyMaterial>([
+      [TEST_CAPABILITY_KID, TEST_CAPABILITY_KEY],
+    ]);
 
-  for (const fixture of CAPABILITY_FIXTURES) {
-    const token = await adapter.issueWithIv(
-      fixture.claims,
-      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
-      fixture.iv,
-    );
-    if (token !== fixture.expectedToken) {
-      throw new Error(
-        `${fixture.name}: token fixture drifted\nexpected ${fixture.expectedToken}\nreceived ${token}`,
+    for (const fixture of CAPABILITY_FIXTURES) {
+      const token = yield* adapter.issueWithIv(
+        fixture.claims,
+        { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+        fixture.iv,
       );
-    }
+      if (token !== fixture.expectedToken) {
+        return yield* Effect.die(
+          new Error(
+            `${fixture.name}: token fixture drifted\nexpected ${fixture.expectedToken}\nreceived ${token}`,
+          ),
+        );
+      }
 
-    const verified = await adapter.verify(token, {
-      spaceId: fixture.claims.space_id,
-      expectedPurpose: fixture.claims.purpose,
-      expectedSourceId: fixture.claims.source_id,
-      ...(fixture.claims.purpose === "master_preview" || fixture.claims.purpose === "preview_job"
-        ? { expectedKind: fixture.claims.kind }
-        : {}),
-      keys,
-      now: TEST_CAPABILITY_NOW,
-      allowedSourceOrigins: TEST_SOURCE_ORIGINS,
-    });
-    if (canonicalJson(verified) !== canonicalJson(fixture.claims)) {
-      throw new Error(`${fixture.name}: decoded claims drifted`);
+      const verified = yield* adapter.verify(token, {
+        spaceId: fixture.claims.space_id,
+        expectedPurpose: fixture.claims.purpose,
+        expectedSourceId: fixture.claims.source_id,
+        ...(fixture.claims.purpose === "master_preview" || fixture.claims.purpose === "preview_job"
+          ? { expectedKind: fixture.claims.kind }
+          : {}),
+        keys,
+        now: TEST_CAPABILITY_NOW,
+        allowedSourceOrigins: TEST_SOURCE_ORIGINS,
+      });
+      if (canonicalJson(verified) !== canonicalJson(fixture.claims)) {
+        return yield* Effect.die(new Error(`${fixture.name}: decoded claims drifted`));
+      }
     }
-  }
+  });
 }
