@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Source Delivery range and cache prototype</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17211c;
+        --muted: #607067;
+        --line: #d8e0db;
+        --paper: #f5f7f4;
+        --accent: #1f6b4f;
+        --accent-soft: #e2f0e9;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--paper);
+        font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main { width: min(960px, calc(100% - 32px)); margin: 48px auto 80px; }
+      h1, h2, h3 { line-height: 1.15; }
+      h1 { margin-bottom: 12px; font-size: clamp(2rem, 5vw, 3.5rem); letter-spacing: -0.04em; }
+      h2 { margin-top: 0; font-size: 1.25rem; }
+      p { max-width: 72ch; }
+      .intro { color: var(--muted); font-size: 1.08rem; }
+      .panel {
+        margin-top: 28px;
+        padding: 24px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: white;
+      }
+      .state-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; }
+      .state-item { padding: 14px; border-radius: 10px; background: var(--paper); }
+      .label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+      .value { font-size: 1.05rem; font-weight: 650; }
+      .notice { margin-top: 16px; padding: 12px 14px; border-left: 4px solid var(--accent); background: var(--accent-soft); }
+      .buttons { display: flex; flex-wrap: wrap; gap: 10px; }
+      button {
+        border: 1px solid var(--accent);
+        border-radius: 999px;
+        padding: 9px 14px;
+        color: var(--accent);
+        background: white;
+        font: inherit;
+        font-weight: 650;
+        cursor: pointer;
+      }
+      button:hover, button:focus-visible { color: white; background: var(--accent); outline: none; }
+      button:disabled { border-color: var(--line); color: #8b9690; background: var(--paper); cursor: default; }
+      .tabs { display: flex; gap: 8px; margin-bottom: 18px; border-bottom: 1px solid var(--line); }
+      .tab { border: 0; border-radius: 8px 8px 0 0; }
+      .tab[aria-selected="true"] { color: white; background: var(--accent); }
+      .step { display: grid; grid-template-columns: 2rem 1fr; gap: 10px; align-items: start; margin-top: 12px; }
+      .step-number { display: grid; width: 1.75rem; height: 1.75rem; place-items: center; border-radius: 50%; background: var(--accent-soft); font-weight: 700; }
+      .step.done { opacity: 0.55; }
+      .step button { text-align: left; }
+      .verdict { border-color: var(--accent); }
+      code { padding: 0.1em 0.3em; border-radius: 4px; background: var(--paper); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Source Delivery range and cache prototype</h1>
+      <p class="intro">
+        This demo asks one question: can Shutter use one stable, locator-free cache entry for a complete Source,
+        let Cloudflare slice byte ranges from it, and stream cold or oversized ranges from the origin without
+        copying originals into the Rendition Store?
+      </p>
+
+      <section class="panel" aria-labelledby="state-title">
+        <h2 id="state-title">Current delivery state</h2>
+        <div class="state-grid" id="state"></div>
+        <div class="notice" id="notice" role="status"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="free-title">
+        <h2 id="free-title">Try any request</h2>
+        <p>Use these actions in any order. Private requests always authorize before the cache is checked.</p>
+        <div class="buttons" id="actions"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="walkthrough-title">
+        <h2 id="walkthrough-title">Guided walkthroughs</h2>
+        <div class="tabs" id="tabs" role="tablist"></div>
+        <div id="walkthrough"></div>
+      </section>
+
+      <section class="panel verdict" aria-labelledby="verdict-title">
+        <h2 id="verdict-title">Prototype verdict</h2>
+        <p>
+          Keep one complete-object Cache API entry, keyed by Space and Source identity. A warm entry can answer
+          full, conditional, and single-range requests. A cold range goes straight to the origin and is not stored,
+          because Cloudflare rejects <code>206</code> responses in <code>cache.put()</code>. Complete <code>200</code>
+          responses up to Cloudflare's 512 MB Cache API limit may populate the entry. Larger objects still stream
+          from the origin. Private requests authorize before every cache lookup. Source Purge removes the stable
+          entry by its existing Source tag. No original enters R2.
+        </p>
+      </section>
+    </main>
+
+    <script>
+      // Pure model. The page below only dispatches actions and renders returned state.
+      const SourceDeliveryModel = (() => {
+        const MAX_CACHE_BYTES = 512 * 1024 * 1024;
+
+        const initialState = () => ({
+          authorization: "not checked",
+          cacheEntry: "empty",
+          locatorRevision: 1,
+          originFetches: 0,
+          lastOutcome: "No request yet",
+          cacheResult: "none",
+          byteRangeOutcome: "none",
+        });
+
+        const completeObject = (size) =>
+          size <= MAX_CACHE_BYTES
+            ? { cacheEntry: "complete object", lastOutcome: "Origin returned 200; complete Source entered the stable cache." }
+            : { cacheEntry: "empty", lastOutcome: "Origin streamed the Source; it exceeds the 512 MB cache limit." };
+
+        const reduce = (state, action) => {
+          switch (action.type) {
+            case "PUBLIC_FULL": {
+              if (state.cacheEntry === "complete object") {
+                return { ...state, cacheResult: "hit", byteRangeOutcome: "full response", lastOutcome: "The stable cache served the complete Source." };
+              }
+              return {
+                ...state,
+                ...completeObject(action.size),
+                cacheResult: "miss",
+                byteRangeOutcome: "full response",
+                originFetches: state.originFetches + 1,
+              };
+            }
+            case "PUBLIC_RANGE": {
+              if (state.cacheEntry === "complete object") {
+                return { ...state, cacheResult: "hit", byteRangeOutcome: "206 sliced from cache", lastOutcome: "Cloudflare sliced the requested bytes from the complete cached Source." };
+              }
+              return { ...state, cacheResult: "miss", byteRangeOutcome: "206 from origin", originFetches: state.originFetches + 1, lastOutcome: "The cold range streamed from the origin and was not stored." };
+            }
+            case "PRIVATE_RANGE": {
+              if (!action.authorized) {
+                return { ...state, authorization: "denied", cacheResult: "not checked", byteRangeOutcome: "none", lastOutcome: "Authorization stopped the request before the cache lookup." };
+              }
+              const authorized = { ...state, authorization: "allowed" };
+              return reduce(authorized, { type: "PUBLIC_RANGE" });
+            }
+            case "CONDITIONAL": {
+              if (state.cacheEntry === "complete object") {
+                return { ...state, cacheResult: "hit", byteRangeOutcome: "304 from cache", lastOutcome: "The cached ETag answered the conditional request without an origin fetch." };
+              }
+              return { ...state, cacheResult: "miss", byteRangeOutcome: "304 or 200 from origin", originFetches: state.originFetches + 1, lastOutcome: "The origin evaluated the condition because the stable cache was empty." };
+            }
+            case "ROTATE_LOCATOR":
+              return { ...state, locatorRevision: state.locatorRevision + 1, lastOutcome: "The locator changed. The stable Space and Source cache identity did not." };
+            case "PURGE":
+              return { ...state, cacheEntry: "empty", cacheResult: "purged", byteRangeOutcome: "none", lastOutcome: "Source Purge removed the complete cached Source by tag." };
+            case "RESET":
+              return initialState();
+            default:
+              return state;
+          }
+        };
+
+        return { initialState, reduce, MAX_CACHE_BYTES };
+      })();
+
+      const actions = [
+        ["Public full Source (12 MB)", { type: "PUBLIC_FULL", size: 12 * 1024 * 1024 }],
+        ["Public oversized Source (700 MB)", { type: "PUBLIC_FULL", size: 700 * 1024 * 1024 }],
+        ["Public byte range", { type: "PUBLIC_RANGE" }],
+        ["Allowed private byte range", { type: "PRIVATE_RANGE", authorized: true }],
+        ["Denied private byte range", { type: "PRIVATE_RANGE", authorized: false }],
+        ["Conditional request", { type: "CONDITIONAL" }],
+        ["Rotate locator", { type: "ROTATE_LOCATOR" }],
+        ["Purge Source", { type: "PURGE" }],
+        ["Reset", { type: "RESET" }],
+      ];
+
+      const scenarios = [
+        {
+          title: "Warm video seek",
+          description: "Populate one complete entry, then seek twice. Watch the origin fetch count stay at one.",
+          steps: [actions[0], actions[2], actions[2]],
+        },
+        {
+          title: "Cold large video",
+          description: "A cold range and an oversized full response remain streamable without creating partial cache entries.",
+          steps: [actions[2], actions[1], actions[2]],
+        },
+        {
+          title: "Private boundary",
+          description: "A denied private request cannot observe a warm cache entry. An allowed request can use it.",
+          steps: [actions[0], actions[4], actions[3]],
+        },
+        {
+          title: "Locator and purge",
+          description: "A locator rotation keeps the stable entry. Source Purge removes it, so the next request returns to the origin.",
+          steps: [actions[0], actions[6], actions[2], actions[7], actions[2]],
+        },
+      ];
+
+      let state = SourceDeliveryModel.initialState();
+      let activeScenario = 0;
+      let activeStep = 0;
+
+      const dispatch = (action) => {
+        state = SourceDeliveryModel.reduce(state, action);
+        renderState();
+      };
+
+      const renderState = () => {
+        const values = [
+          ["Authorization", state.authorization],
+          ["Stable cache entry", state.cacheEntry],
+          ["Locator revision", `Revision ${state.locatorRevision}`],
+          ["Origin fetches", state.originFetches],
+          ["Cache result", state.cacheResult],
+          ["Byte-range outcome", state.byteRangeOutcome],
+        ];
+        document.querySelector("#state").innerHTML = values
+          .map(([label, value]) => `<div class="state-item"><span class="label">${label}</span><span class="value">${value}</span></div>`)
+          .join("");
+        document.querySelector("#notice").textContent = state.lastOutcome;
+      };
+
+      const renderActions = () => {
+        const root = document.querySelector("#actions");
+        actions.forEach(([label, action]) => {
+          const button = document.createElement("button");
+          button.textContent = label;
+          button.addEventListener("click", () => dispatch(action));
+          root.append(button);
+        });
+      };
+
+      const startScenario = (index) => {
+        activeScenario = index;
+        activeStep = 0;
+        state = SourceDeliveryModel.initialState();
+        renderState();
+        renderTabs();
+        renderWalkthrough();
+      };
+
+      const renderTabs = () => {
+        const root = document.querySelector("#tabs");
+        root.innerHTML = "";
+        scenarios.forEach((scenario, index) => {
+          const button = document.createElement("button");
+          button.className = "tab";
+          button.textContent = scenario.title;
+          button.setAttribute("role", "tab");
+          button.setAttribute("aria-selected", String(index === activeScenario));
+          button.addEventListener("click", () => startScenario(index));
+          root.append(button);
+        });
+      };
+
+      const renderWalkthrough = () => {
+        const scenario = scenarios[activeScenario];
+        const root = document.querySelector("#walkthrough");
+        root.innerHTML = `<h3>${scenario.title}</h3><p>${scenario.description}</p>`;
+        scenario.steps.forEach(([label, action], index) => {
+          const row = document.createElement("div");
+          row.className = `step${index < activeStep ? " done" : ""}`;
+          row.innerHTML = `<span class="step-number">${index + 1}</span>`;
+          const button = document.createElement("button");
+          button.textContent = label;
+          button.disabled = index !== activeStep;
+          button.addEventListener("click", () => {
+            dispatch(action);
+            activeStep += 1;
+            renderWalkthrough();
+          });
+          row.append(button);
+          root.append(row);
+        });
+      };
+
+      renderActions();
+      renderTabs();
+      renderWalkthrough();
+      renderState();
+    </script>
+  </body>
+</html>
