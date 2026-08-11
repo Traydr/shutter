@@ -1,8 +1,8 @@
 # V1 Rendition Job ledger
 
-Postgres has one application table: `rendition_jobs`. Drizzle migrations own its
-schema. No Space, Source, Asset, attempt-history, purge, or delivery-token tables
-exist in v1.
+`rendition_jobs` is the current-state job ledger. Drizzle migrations own its
+schema. Space Registry tables store policy and credentials separately. No
+Source, Asset, attempt-history, purge, or delivery-token tables exist in v1.
 
 ## Identity
 

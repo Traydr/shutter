@@ -4,6 +4,7 @@ import { createJobApi } from "./job-api.js";
 import type { ControlLogger } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import type { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
+import { MemorySpaceRegistry } from "./spaces/memory-registry.js";
 
 const KEY = Uint8Array.from({ length: 32 }, (_, index) => index);
 const KID = "test-key";
@@ -11,16 +12,17 @@ const SPACE_TOKEN = "s".repeat(32);
 const VIDEO_TOKEN = "v".repeat(32);
 const NOW = new Date("2026-07-11T00:00:00Z");
 const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
+let spaceRegistry: MemorySpaceRegistry;
 
 async function capability(): Promise<string> {
   const seconds = Math.floor(NOW.getTime() / 1_000);
   return issueSourceCapability(
     {
-      space_id: "pane-view",
+      space_id: "example-private",
       source_id: "source-1",
       purpose: "preview_job",
       kind: "video",
-      locator: "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/source-1.mp4",
+      locator: "https://sources.example.com/private/originals/source-1.mp4",
       iat: seconds - 60,
       exp: seconds + 3_600,
     },
@@ -38,8 +40,7 @@ function runtime(
     logger,
     lifecycle,
     now: () => NOW,
-    spaceApiTokens: () => new Map([["pane-view", [SPACE_TOKEN]]]),
-    capabilityKeys: () => new Map([["pane-view", new Map([[KID, KEY]])]]),
+    spaceRegistry,
     executorToken: (kind: "video" | "pdf") => (kind === "video" ? VIDEO_TOKEN : undefined),
     dispatch,
     ...(sourcePurge === undefined ? {} : { sourcePurge }),
@@ -53,6 +54,29 @@ describe("job API", () => {
   beforeAll(async () => {
     test = await createPostgresTestLifecycle();
     lifecycle = test.lifecycle;
+    spaceRegistry = new MemorySpaceRegistry({
+      now: () => NOW,
+      spaces: [
+        {
+          id: "example-private",
+          routeClass: "private",
+          qualities: [75],
+          defaultQuality: 75,
+          allowedSourceOrigins: [{ origin: "https://sources.example.com", pathPrefix: "/private" }],
+          resolvers: [],
+        },
+        {
+          id: "example-public",
+          routeClass: "public",
+          qualities: [75],
+          defaultQuality: 75,
+          allowedSourceOrigins: [{ origin: "https://sources.example.com" }],
+          resolvers: [],
+        },
+      ],
+    });
+    await spaceRegistry.issueApiToken("example-private", "test", SPACE_TOKEN);
+    await spaceRegistry.addCapabilityKey("example-private", KID, KEY);
   });
 
   afterAll(async () => test.close());
@@ -64,7 +88,8 @@ describe("job API", () => {
   it("submits, polls, claims, and completes one canonical video job", async () => {
     const dispatch = vi.fn(async () => {});
     const app = createJobApi(runtime(lifecycle, dispatch));
-    const resource = "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video";
+    const resource =
+      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video";
     const submitted = await app.request(resource, {
       method: "PUT",
       headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
@@ -82,12 +107,13 @@ describe("job API", () => {
     expect(claim.status).toBe(200);
     const work = await claim.json<Record<string, unknown>>();
     expect(work).not.toHaveProperty("sourceCapability");
-    expect(work.locator).toBe(
-      "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/source-1.mp4",
-    );
+    expect(work.locator).toBe("https://sources.example.com/private/originals/source-1.mp4");
+    expect(work.allowedSourceOrigins).toEqual([
+      { origin: "https://sources.example.com", pathPrefix: "/private" },
+    ]);
 
     const completed = await app.request(
-      "http://shutter.test/internal/v1/executors/video/jobs/pane-view/source-1/complete",
+      "http://shutter.test/internal/v1/executors/video/jobs/example-private/source-1/complete",
       {
         method: "POST",
         headers: { authorization: `Bearer ${VIDEO_TOKEN}`, "content-type": "application/json" },
@@ -128,7 +154,7 @@ describe("job API", () => {
     expect(unauthorized.status).toBe(401);
 
     const malformed = await app.request(
-      "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video",
+      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video",
       {
         method: "PUT",
         headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
@@ -147,7 +173,7 @@ describe("job API", () => {
       runtime(lifecycle, dispatch, undefined, { emit, async shutdown() {} }),
     );
     const response = await app.request(
-      "http://shutter.test/v1/spaces/pane-view/sources/source-1/previews/video",
+      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video",
       {
         method: "PUT",
         headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
@@ -163,12 +189,12 @@ describe("job API", () => {
       ),
     );
     expect(
-      await lifecycle.read({ spaceId: "pane-view", sourceId: "source-1", kind: "video" }),
+      await lifecycle.read({ spaceId: "example-private", sourceId: "source-1", kind: "video" }),
     ).toMatchObject({ status: "pending" });
   });
 
   it("authenticates, repeats, and sanitizes Source Purge", async () => {
-    const identity = { spaceId: "pane-view", sourceId: "source-1", kind: "video" as const };
+    const identity = { spaceId: "example-private", sourceId: "source-1", kind: "video" as const };
     await lifecycle.submit(
       {
         ...identity,
@@ -179,11 +205,11 @@ describe("job API", () => {
     );
     const purge = vi.fn(async () => {});
     const app = createJobApi(runtime(lifecycle, undefined, { purge }));
-    const url = "http://shutter.test/v1/spaces/pane-view/sources/source-1/purge";
+    const url = "http://shutter.test/v1/spaces/example-private/sources/source-1/purge";
     expect((await app.request(url, { method: "POST" })).status).toBe(401);
     expect(
       (
-        await app.request("http://shutter.test/v1/spaces/ernesta/sources/source-1/purge", {
+        await app.request("http://shutter.test/v1/spaces/example-public/sources/source-1/purge", {
           method: "POST",
           headers: { authorization: `Bearer ${SPACE_TOKEN}` },
         })
@@ -209,5 +235,24 @@ describe("job API", () => {
     });
     expect(failed.status).toBe(503);
     expect(await failed.json()).toEqual({ error: { code: "service_unavailable" } });
+  });
+
+  it("distinguishes a missing active Space from registry unavailability", async () => {
+    const app = createJobApi(runtime(lifecycle));
+    const missing = await app.request(
+      "http://shutter.test/v1/spaces/unknown/sources/source-1/previews/video",
+      { headers: { authorization: `Bearer ${SPACE_TOKEN}` } },
+    );
+    expect(missing.status).toBe(404);
+
+    const unavailable = vi
+      .spyOn(spaceRegistry, "getActiveSpacePolicy")
+      .mockRejectedValue(new Error("database unavailable"));
+    const failed = await app.request(
+      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video",
+      { headers: { authorization: `Bearer ${SPACE_TOKEN}` } },
+    );
+    expect(failed.status).toBe(503);
+    unavailable.mockRestore();
   });
 });

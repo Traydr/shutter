@@ -6,9 +6,71 @@ import {
   TEST_CAPABILITY_KEY,
   TEST_CAPABILITY_KID,
 } from "@shutter/testkit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetEdgeConfigForTest } from "./config-snapshot.js";
+
+function snapshotResponse(): Response {
+  return Response.json({
+    schemaVersion: "v1",
+    generation: 1,
+    generatedAt: new Date().toISOString(),
+    spaces: [
+      {
+        id: "example-public",
+        routeClass: "public",
+        qualities: [30, 50, 75],
+        defaultQuality: 75,
+        allowedSourceOrigins: [{ origin: "https://example-project.ufs.sh", pathPrefix: "/f" }],
+        resolvers: [
+          {
+            id: "uploadthing",
+            type: "uploadthing",
+            allowedProjectIds: ["example-project"],
+          },
+        ],
+      },
+      {
+        id: "example-private",
+        routeClass: "private",
+        qualities: [30, 75, 80],
+        defaultQuality: 75,
+        allowedSourceOrigins: [{ origin: "https://sources.example.com", pathPrefix: "/private" }],
+        resolvers: [],
+      },
+    ],
+    capabilityKeys: {
+      "example-public": {
+        [TEST_CAPABILITY_KID]: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      },
+      "example-private": {
+        [TEST_CAPABILITY_KID]: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      },
+    },
+  });
+}
+
+function configFetch(
+  origin?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    if (
+      new URL(input instanceof Request ? input.url : input.toString()).pathname ===
+      "/internal/v1/edge/config"
+    ) {
+      return snapshotResponse();
+    }
+    if (origin !== undefined) return origin(input, init);
+    throw new Error("unexpected origin request");
+  };
+}
+
+beforeEach(() => {
+  resetEdgeConfigForTest();
+  vi.stubGlobal("fetch", configFetch());
+});
 
 afterEach(async () => {
+  resetEdgeConfigForTest();
   vi.unstubAllGlobals();
   await reset();
 });
@@ -22,7 +84,7 @@ function tamper(value: string): string {
 describe("edge app", () => {
   it("fails a malformed private source capability closed", async () => {
     const response = await SELF.fetch(
-      "https://edge.shutter.test/v1/private/pane-view/source/not-a-capability?w=640&q=75",
+      "https://edge.shutter.test/v1/private/example-private/source/not-a-capability?w=640&q=75",
     );
     expect(response.status).toBe(403);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
@@ -33,11 +95,10 @@ describe("edge app", () => {
     const sourceId = "private-source";
     const token = await issueSourceCapabilityWithIv(
       {
-        space_id: "pane-view",
+        space_id: "example-private",
         source_id: sourceId,
         purpose: "image_source",
-        locator:
-          "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source.webp",
+        locator: "https://sources.example.com/private/originals/private-source.webp",
         iat: now - 60,
         exp: now + 3_600,
       },
@@ -46,7 +107,7 @@ describe("edge app", () => {
     );
     const identity = {
       routeClass: "private" as const,
-      spaceId: "pane-view",
+      spaceId: "example-private",
       sourceId,
       input: { type: "source" as const },
       width: 640,
@@ -57,13 +118,13 @@ describe("edge app", () => {
     });
 
     const tampered = await SELF.fetch(
-      `https://edge.shutter.test/v1/private/pane-view/source/${tamper(token)}?w=640&q=75`,
+      `https://edge.shutter.test/v1/private/example-private/source/${tamper(token)}?w=640&q=75`,
     );
     expect(tampered.status).toBe(403);
     expect(await tampered.text()).not.toContain("private-source-rendition");
 
     const first = await SELF.fetch(
-      `https://edge.shutter.test/v1/private/pane-view/source/${token}?w=640&q=75`,
+      `https://edge.shutter.test/v1/private/example-private/source/${token}?w=640&q=75`,
     );
     expect(first.status).toBe(200);
     expect(first.headers.get("cache-control")).toBe("private, no-store");
@@ -71,7 +132,7 @@ describe("edge app", () => {
     expect(new TextDecoder().decode(await first.arrayBuffer())).toBe("private-source-rendition");
 
     const second = await SELF.fetch(
-      `https://edge.shutter.test/v1/private/pane-view/source/${token}?w=640&q=75`,
+      `https://edge.shutter.test/v1/private/example-private/source/${token}?w=640&q=75`,
     );
     expect(second.headers.get("x-shutter-cache")).toBe("edge-hit");
   });
@@ -81,7 +142,7 @@ describe("edge app", () => {
     const sourceId = "private-master-source";
     const token = await issueSourceCapabilityWithIv(
       {
-        space_id: "pane-view",
+        space_id: "example-private",
         source_id: sourceId,
         purpose: "master_preview",
         kind: "video",
@@ -93,7 +154,7 @@ describe("edge app", () => {
     );
     const identity = {
       routeClass: "private" as const,
-      spaceId: "pane-view",
+      spaceId: "example-private",
       sourceId,
       input: { type: "master" as const, kind: "video" as const },
       width: 640,
@@ -104,13 +165,13 @@ describe("edge app", () => {
     });
 
     const tampered = await SELF.fetch(
-      `https://edge.shutter.test/v1/private/pane-view/master/${tamper(token)}?w=640&q=75`,
+      `https://edge.shutter.test/v1/private/example-private/master/${tamper(token)}?w=640&q=75`,
     );
     expect(tampered.status).toBe(403);
     expect(await tampered.text()).not.toContain("private-rendition");
 
     const first = await SELF.fetch(
-      `https://edge.shutter.test/v1/private/pane-view/master/${token}?w=640&q=75`,
+      `https://edge.shutter.test/v1/private/example-private/master/${token}?w=640&q=75`,
     );
     expect(first.status).toBe(200);
     expect(first.headers.get("cache-control")).toBe("private, no-store");
@@ -118,7 +179,7 @@ describe("edge app", () => {
     expect(new TextDecoder().decode(await first.arrayBuffer())).toBe("private-rendition");
 
     const second = await SELF.fetch(
-      `https://edge.shutter.test/v1/private/pane-view/master/${token}?w=640&q=75`,
+      `https://edge.shutter.test/v1/private/example-private/master/${token}?w=640&q=75`,
     );
     expect(second.headers.get("x-shutter-cache")).toBe("edge-hit");
     expect(new TextDecoder().decode(await second.arrayBuffer())).toBe("private-rendition");
@@ -131,11 +192,11 @@ describe("edge app", () => {
           headers: { "content-type": "image/webp" },
         }),
     );
-    vi.stubGlobal("fetch", origin);
+    vi.stubGlobal("fetch", configFetch(origin));
     const now = Math.floor(Date.now() / 1000);
     const token = await issueSourceCapabilityWithIv(
       {
-        space_id: "pane-view",
+        space_id: "example-private",
         source_id: "private-master-miss",
         purpose: "master_preview",
         kind: "pdf",
@@ -146,7 +207,7 @@ describe("edge app", () => {
       Uint8Array.from([1, 3, 5, 7, 9, 11, 2, 4, 6, 8, 10, 12]),
     );
     const response = await SELF.fetch(
-      `https://edge.shutter.test/v1/private/pane-view/master/${token}?w=640&q=75`,
+      `https://edge.shutter.test/v1/private/example-private/master/${token}?w=640&q=75`,
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
@@ -162,7 +223,7 @@ describe("edge app", () => {
     for (const kind of ["video", "pdf"] as const) {
       const identity = {
         routeClass: "public" as const,
-        spaceId: "ernesta",
+        spaceId: "example-public",
         sourceId: `public/${kind}`,
         input: { type: "master" as const, kind },
         width: 640,
@@ -172,13 +233,13 @@ describe("edge app", () => {
         httpMetadata: { contentType: "image/webp" },
       });
       const first = await SELF.fetch(
-        `https://edge.shutter.test/v1/public/ernesta/master/${kind}/public%2F${kind}?w=640&q=75`,
+        `https://edge.shutter.test/v1/public/example-public/master/${kind}/public%2F${kind}?w=640&q=75`,
       );
       expect(first.status).toBe(200);
       expect(first.headers.get("x-shutter-cache")).toBe("r2-hit");
       expect(await first.text()).toBe(`${kind}-master`);
       const second = await SELF.fetch(
-        `https://edge.shutter.test/v1/public/ernesta/master/${kind}/public%2F${kind}?w=640&q=75`,
+        `https://edge.shutter.test/v1/public/example-public/master/${kind}/public%2F${kind}?w=640&q=75`,
       );
       expect(second.headers.get("x-shutter-cache")).toBe("edge-hit");
     }
@@ -186,24 +247,24 @@ describe("edge app", () => {
 
   it("normalizes public master requests and rejects route and kind confusion", async () => {
     const normalized = await SELF.fetch(
-      "https://edge.shutter.test/v1/public/ernesta/master/video/source?w=639",
+      "https://edge.shutter.test/v1/public/example-public/master/video/source?w=639",
       { redirect: "manual" },
     );
     expect(normalized.status).toBe(308);
     expect(normalized.headers.get("location")).toBe(
-      "https://edge.shutter.test/v1/public/ernesta/master/video/source?w=640&q=75",
+      "https://edge.shutter.test/v1/public/example-public/master/video/source?w=640&q=75",
     );
     expect(
       (
         await SELF.fetch(
-          "https://edge.shutter.test/v1/public/ernesta/master/image/source?w=640&q=75",
+          "https://edge.shutter.test/v1/public/example-public/master/image/source?w=640&q=75",
         )
       ).status,
     ).toBe(404);
     expect(
       (
         await SELF.fetch(
-          "https://edge.shutter.test/v1/public/pane-view/master/video/source?w=640&q=75",
+          "https://edge.shutter.test/v1/public/example-private/master/video/source?w=640&q=75",
         )
       ).status,
     ).toBe(404);
@@ -216,9 +277,9 @@ describe("edge app", () => {
           headers: { "content-type": "image/webp" },
         }),
     );
-    vi.stubGlobal("fetch", origin);
+    vi.stubGlobal("fetch", configFetch(origin));
     const response = await SELF.fetch(
-      "https://edge.shutter.test/v1/public/ernesta/master/video/public-miss?w=640&q=75",
+      "https://edge.shutter.test/v1/public/example-public/master/video/public-miss?w=640&q=75",
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("x-shutter-cache")).toBe("origin");
@@ -230,7 +291,7 @@ describe("edge app", () => {
     const sourceId = "public-located-source";
     const identity = {
       routeClass: "public" as const,
-      spaceId: "ernesta",
+      spaceId: "example-public",
       sourceId,
       input: { type: "source" as const },
       width: 640,
@@ -241,7 +302,7 @@ describe("edge app", () => {
     });
 
     const response = await SELF.fetch(
-      `https://edge.shutter.test/v1/public/ernesta/located/${sourceId}/not-a-capability?w=640&q=75`,
+      `https://edge.shutter.test/v1/public/example-public/located/${sourceId}/not-a-capability?w=640&q=75`,
     );
 
     expect(response.status).toBe(200);
@@ -252,7 +313,7 @@ describe("edge app", () => {
 
   it("fails a public located-source miss closed before contacting the origin", async () => {
     const response = await SELF.fetch(
-      "https://edge.shutter.test/v1/public/ernesta/located/missing/not-a-capability?w=640&q=75",
+      "https://edge.shutter.test/v1/public/example-public/located/missing/not-a-capability?w=640&q=75",
     );
     expect(response.status).toBe(403);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
@@ -262,15 +323,14 @@ describe("edge app", () => {
     const origin = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       return new Response("rendered-source", { headers: { "content-type": "image/webp" } });
     });
-    vi.stubGlobal("fetch", origin);
+    vi.stubGlobal("fetch", configFetch(origin));
     const now = Math.floor(Date.now() / 1000);
     const privateToken = await issueSourceCapabilityWithIv(
       {
-        space_id: "pane-view",
+        space_id: "example-private",
         source_id: "private-source-miss",
         purpose: "image_source",
-        locator:
-          "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/private-source-miss.webp",
+        locator: "https://sources.example.com/private/originals/private-source-miss.webp",
         iat: now - 60,
         exp: now + 3_600,
       },
@@ -279,10 +339,10 @@ describe("edge app", () => {
     );
     const locatedToken = await issueSourceCapabilityWithIv(
       {
-        space_id: "ernesta",
+        space_id: "example-public",
         source_id: "public-located-miss",
         purpose: "image_source",
-        locator: "https://8w0z32yftd.ufs.sh/f/public-located-miss",
+        locator: "https://example-project.ufs.sh/f/public-located-miss",
         iat: now - 60,
         exp: now + 3_600,
       },
@@ -292,13 +352,13 @@ describe("edge app", () => {
 
     const responses = await Promise.all([
       SELF.fetch(
-        `https://edge.shutter.test/v1/private/pane-view/source/${privateToken}?w=640&q=75`,
+        `https://edge.shutter.test/v1/private/example-private/source/${privateToken}?w=640&q=75`,
       ),
       SELF.fetch(
-        `https://edge.shutter.test/v1/public/ernesta/located/public-located-miss/${locatedToken}?w=640&q=75`,
+        `https://edge.shutter.test/v1/public/example-public/located/public-located-miss/${locatedToken}?w=640&q=75`,
       ),
       SELF.fetch(
-        "https://edge.shutter.test/v1/public/ernesta/resolver/uploadthing/8w0z32yftd%2Fresolver-miss?w=640&q=75",
+        "https://edge.shutter.test/v1/public/example-public/resolver/uploadthing/example-project%2Fresolver-miss?w=640&q=75",
       ),
     ]);
     expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
@@ -311,40 +371,40 @@ describe("edge app", () => {
   });
 
   it("serves an allowlisted UploadThing resolver reference from canonical public cache identity", async () => {
-    const sourceId = "8w0z32yftd/file_key-1";
+    const sourceId = "example-project/file_key-1";
     const identity = {
       routeClass: "public" as const,
-      spaceId: "ernesta",
+      spaceId: "example-public",
       sourceId,
       input: { type: "source" as const },
       width: 640,
       quality: 75,
     };
-    await env.RENDITION_STORE.put(await buildR2CacheKey(identity), "ernesta-rendition", {
+    await env.RENDITION_STORE.put(await buildR2CacheKey(identity), "example-public-rendition", {
       httpMetadata: { contentType: "image/webp" },
     });
 
     const response = await SELF.fetch(
-      "https://edge.shutter.test/v1/public/ernesta/resolver/uploadthing/8w0z32yftd%2Ffile_key-1?w=640&q=75",
+      "https://edge.shutter.test/v1/public/example-public/resolver/uploadthing/example-project%2Ffile_key-1?w=640&q=75",
     );
 
     expect(response.status).toBe(200);
     expect(response.headers.get("x-shutter-cache")).toBe("r2-hit");
-    expect(new TextDecoder().decode(await response.arrayBuffer())).toBe("ernesta-rendition");
+    expect(new TextDecoder().decode(await response.arrayBuffer())).toBe("example-public-rendition");
   });
 
   it("normalizes public resolver parameters and rejects unallowlisted projects", async () => {
     const normalized = await SELF.fetch(
-      "https://edge.shutter.test/v1/public/ernesta/resolver/uploadthing/8w0z32yftd%2Ffile_key-1?w=639",
+      "https://edge.shutter.test/v1/public/example-public/resolver/uploadthing/example-project%2Ffile_key-1?w=639",
       { redirect: "manual" },
     );
     expect(normalized.status).toBe(308);
     expect(normalized.headers.get("location")).toBe(
-      "https://edge.shutter.test/v1/public/ernesta/resolver/uploadthing/8w0z32yftd%2Ffile_key-1?w=640&q=75",
+      "https://edge.shutter.test/v1/public/example-public/resolver/uploadthing/example-project%2Ffile_key-1?w=640&q=75",
     );
 
     const rejected = await SELF.fetch(
-      "https://edge.shutter.test/v1/public/ernesta/resolver/uploadthing/notallowed%2Ffile_key-1?w=640&q=75",
+      "https://edge.shutter.test/v1/public/example-public/resolver/uploadthing/notallowed%2Ffile_key-1?w=640&q=75",
     );
     expect(rejected.status).toBe(404);
   });
@@ -380,7 +440,7 @@ describe("workerd protocol conformance", () => {
   });
 
   it("purges Worker Cache API tags when authorized", async () => {
-    const tag = await buildSourceCacheTag("pane-view", "private-source");
+    const tag = await buildSourceCacheTag("example-private", "private-source");
     const response = await SELF.fetch("https://edge.shutter.test/internal/v1/cache/purge", {
       method: "POST",
       headers: {

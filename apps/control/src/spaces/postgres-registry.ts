@@ -12,6 +12,7 @@ import {
 import type { CapabilityKeyEncryption } from "./encryption.js";
 import { loadSpaceRecords } from "./postgres-policy.js";
 import type {
+  ActiveSpaceAuthorization,
   ApiTokenSummary,
   CapabilityKeySummary,
   EdgeSpaceSnapshot,
@@ -21,6 +22,7 @@ import type {
   SpacePolicyUpdate,
   SpaceRecord,
   SpaceRegistry,
+  SpaceRegistryTransaction,
 } from "./registry.js";
 import { SpaceRegistryError } from "./registry.js";
 
@@ -150,14 +152,33 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   readonly #pool: Pool;
   readonly #encryption: CapabilityKeyEncryption | undefined;
   readonly #now: () => Date;
+  readonly #transactionClient: PoolClient | undefined;
 
   constructor(
     pool: Pool,
-    options: { encryption?: CapabilityKeyEncryption; now?: () => Date } = {},
+    options: {
+      encryption?: CapabilityKeyEncryption;
+      now?: () => Date;
+      transactionClient?: PoolClient;
+    } = {},
   ) {
     this.#pool = pool;
     this.#encryption = options.encryption;
     this.#now = options.now ?? (() => new Date());
+    this.#transactionClient = options.transactionClient;
+  }
+
+  async withTransaction<T>(work: (registry: SpaceRegistryTransaction) => Promise<T>): Promise<T> {
+    if (this.#transactionClient !== undefined) return work(this);
+    return transaction(this.#pool, (client) =>
+      work(
+        new PostgresSpaceRegistry(this.#pool, {
+          ...(this.#encryption === undefined ? {} : { encryption: this.#encryption }),
+          now: this.#now,
+          transactionClient: client,
+        }),
+      ),
+    );
   }
 
   async getActiveSpacePolicy(spaceId: string): Promise<SpacePolicy | undefined> {
@@ -165,48 +186,60 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     return record?.value.policy;
   }
 
-  async listSpaces(): Promise<readonly SpaceRecord[]> {
-    return (await loadSpaceRecords(this.#pool)).map((record) => record.value);
-  }
-
-  async loadEdgeSnapshot(): Promise<EdgeSpaceSnapshot> {
-    const encryption = this.#capabilityKeyEncryption();
+  async getActiveSpaceAuthorization(
+    spaceId: string,
+  ): Promise<ActiveSpaceAuthorization | undefined> {
     const client = await this.#pool.connect();
     try {
       await client.query("begin isolation level repeatable read read only");
-      const metadata = await client.query<GenerationRow>(
-        `select generation, updated_at from space_registry_metadata where id = 1`,
+      const [record] = await loadSpaceRecords(client, { activeOnly: true, spaceId });
+      if (record === undefined) {
+        await client.query("commit");
+        return undefined;
+      }
+      const encryption = this.#capabilityKeyEncryption();
+      const result = await client.query<CapabilityKeyRow>(
+        `select id, space_id, $2::text as public_space_id, key_id, sealed_nonce, sealed_key,
+          accepted_at, disabled_at
+         from space_capability_keys
+         where space_id = $1 and disabled_at is null
+         order by id`,
+        [record.recordId, spaceId],
       );
-      const generation = metadata.rows[0];
-      if (generation === undefined) throw new Error("Space Registry metadata is not initialized");
-      const records = await loadSpaceRecords(client, { activeOnly: true });
-      const keys = await client.query<CapabilityKeyRow>(
-        `select keys.id, keys.space_id, spaces.space_id as public_space_id, keys.key_id,
-          keys.sealed_nonce, keys.sealed_key, keys.accepted_at, keys.disabled_at
-         from space_capability_keys keys
-         join spaces on spaces.id = keys.space_id
-         where spaces.status = 'active' and keys.disabled_at is null
-         order by keys.id`,
-      );
-      const capabilityKeys = new Map<string, Map<string, Uint8Array>>();
-      for (const record of records) capabilityKeys.set(record.value.policy.id, new Map());
-      for (const key of keys.rows) {
-        capabilityKeys.get(key.public_space_id)?.set(
+      const capabilityKeys = new Map<string, Uint8Array>();
+      for (const key of result.rows) {
+        capabilityKeys.set(
           key.key_id,
-          encryption.open(key.public_space_id, key.key_id, {
+          encryption.open(spaceId, key.key_id, {
             nonce: key.sealed_nonce,
             ciphertext: key.sealed_key,
           }),
         );
       }
       await client.query("commit");
-      return {
-        schemaVersion: "v1",
-        generation: generation.generation,
-        generatedAt: generation.updated_at,
-        spaces: records.map((record) => record.value.policy),
-        capabilityKeys,
-      };
+      return { policy: record.value.policy, capabilityKeys };
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listSpaces(): Promise<readonly SpaceRecord[]> {
+    return (await loadSpaceRecords(this.#pool)).map((record) => record.value);
+  }
+
+  async loadEdgeSnapshot(): Promise<EdgeSpaceSnapshot> {
+    if (this.#transactionClient !== undefined) {
+      return this.#loadEdgeSnapshot(this.#transactionClient);
+    }
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin isolation level repeatable read read only");
+      const snapshot = await this.#loadEdgeSnapshot(client);
+      await client.query("commit");
+      return snapshot;
     } catch (error) {
       await client.query("rollback");
       throw error;
@@ -218,7 +251,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   async createSpace(policy: SpacePolicy): Promise<RegistryMutation<SpaceRecord>> {
     const parsed = parseSpacePolicy(policy);
     try {
-      return await transaction(this.#pool, async (client) => {
+      return await this.#write(async (client) => {
         const now = this.#now();
         const inserted = await client.query<{ id: number }>(
           `insert into spaces
@@ -248,7 +281,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     spaceId: string,
     update: SpacePolicyUpdate,
   ): Promise<RegistryMutation<SpaceRecord>> {
-    return transaction(this.#pool, async (client) => {
+    return this.#write(async (client) => {
       const recordId = await lockActiveSpace(client, spaceId);
       const [stored] = await loadSpaceRecords(client, { spaceId });
       if (stored === undefined || stored.recordId !== recordId) {
@@ -276,7 +309,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   }
 
   async decommissionSpace(spaceId: string): Promise<RegistryMutation<SpaceRecord>> {
-    return transaction(this.#pool, async (client) => {
+    return this.#write(async (client) => {
       const recordId = await lockActiveSpace(client, spaceId);
       const [stored] = await loadSpaceRecords(client, { spaceId });
       if (stored === undefined || stored.recordId !== recordId) {
@@ -312,7 +345,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     const token = suppliedToken ?? createApiToken();
     const hash = apiTokenHash(token);
     try {
-      return await transaction(this.#pool, async (client) => {
+      return await this.#write(async (client) => {
         const recordId = await lockActiveSpace(client, spaceId);
         const now = this.#now();
         const inserted = await client.query<ApiTokenRow>(
@@ -340,7 +373,8 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
       if (error instanceof SpaceRegistryError && error.code === "invalid") return false;
       else throw error;
     }
-    const result = await this.#pool.query<Pick<ApiTokenRow, "id" | "token_hash"> & { id: number }>(
+    const database = this.#transactionClient ?? this.#pool;
+    const result = await database.query<Pick<ApiTokenRow, "id" | "token_hash"> & { id: number }>(
       `select tokens.id, tokens.token_hash
        from space_api_tokens tokens
        join spaces on spaces.id = tokens.space_id
@@ -350,7 +384,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     );
     const match = result.rows.find((candidate) => apiTokenHashMatches(hash, candidate.token_hash));
     if (match === undefined) return false;
-    void this.#pool
+    void database
       .query(`update space_api_tokens set last_used_at = $2 where id = $1 and revoked_at is null`, [
         match.id,
         this.#now(),
@@ -374,7 +408,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     spaceId: string,
     tokenId: number,
   ): Promise<RegistryMutation<ApiTokenSummary>> {
-    return transaction(this.#pool, async (client) => {
+    return this.#write(async (client) => {
       const recordId = await lockActiveSpace(client, spaceId);
       const now = this.#now();
       const result = await client.query<ApiTokenRow>(
@@ -403,7 +437,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     const encryption = this.#capabilityKeyEncryption();
     const sealed = encryption.seal(spaceId, keyId, key);
     try {
-      return await transaction(this.#pool, async (client) => {
+      return await this.#write(async (client) => {
         const recordId = await lockActiveSpace(client, spaceId);
         const now = this.#now();
         const result = await client.query<CapabilityKeyRow>(
@@ -440,7 +474,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     spaceId: string,
     keyId: string,
   ): Promise<RegistryMutation<CapabilityKeySummary>> {
-    return transaction(this.#pool, async (client) => {
+    return this.#write(async (client) => {
       const recordId = await lockActiveSpace(client, spaceId);
       const now = this.#now();
       const result = await client.query<CapabilityKeyRow>(
@@ -464,5 +498,47 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
       throw new SpaceRegistryError("unavailable", "Capability Key encryption is not configured");
     }
     return this.#encryption;
+  }
+
+  #write<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.#transactionClient === undefined
+      ? transaction(this.#pool, work)
+      : work(this.#transactionClient);
+  }
+
+  async #loadEdgeSnapshot(client: PoolClient): Promise<EdgeSpaceSnapshot> {
+    const encryption = this.#capabilityKeyEncryption();
+    const metadata = await client.query<GenerationRow>(
+      `select generation, updated_at from space_registry_metadata where id = 1`,
+    );
+    const generation = metadata.rows[0];
+    if (generation === undefined) throw new Error("Space Registry metadata is not initialized");
+    const records = await loadSpaceRecords(client, { activeOnly: true });
+    const keys = await client.query<CapabilityKeyRow>(
+      `select keys.id, keys.space_id, spaces.space_id as public_space_id, keys.key_id,
+        keys.sealed_nonce, keys.sealed_key, keys.accepted_at, keys.disabled_at
+       from space_capability_keys keys
+       join spaces on spaces.id = keys.space_id
+       where spaces.status = 'active' and keys.disabled_at is null
+       order by keys.id`,
+    );
+    const capabilityKeys = new Map<string, Map<string, Uint8Array>>();
+    for (const record of records) capabilityKeys.set(record.value.policy.id, new Map());
+    for (const key of keys.rows) {
+      capabilityKeys.get(key.public_space_id)?.set(
+        key.key_id,
+        encryption.open(key.public_space_id, key.key_id, {
+          nonce: key.sealed_nonce,
+          ciphertext: key.sealed_key,
+        }),
+      );
+    }
+    return {
+      schemaVersion: "v1",
+      generation: generation.generation,
+      registryUpdatedAt: generation.updated_at,
+      spaces: records.map((record) => record.value.policy),
+      capabilityKeys,
+    };
   }
 }

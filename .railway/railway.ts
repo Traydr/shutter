@@ -19,7 +19,6 @@ const workspaceWatchPatterns = ["/package.json", "/pnpm-lock.yaml", "/pnpm-works
 const executorWatchPatterns = [
   "/packages/executor-runtime/**",
   "/packages/protocol/**",
-  "/packages/space-config/**",
   ...workspaceWatchPatterns,
 ];
 
@@ -89,7 +88,7 @@ export default defineRailway(() => {
       builder: "RAILPACK",
       buildEnvironment: "V3",
       buildCommand: "pnpm --filter @shutter/control... build",
-      watchPatterns: ["/apps/control/**", ...workspaceWatchPatterns],
+      watchPatterns: ["/apps/control/**", "/packages/protocol/**", ...workspaceWatchPatterns],
     },
     start: "pnpm --filter @shutter/control start",
     preDeploy: "pnpm --filter @shutter/control db:migrate",
@@ -100,11 +99,11 @@ export default defineRailway(() => {
     networking: { privateNetworkEndpoint: "shutter-control" },
     domains: [{ domain: "shutter-control.traydr.dev", port: nodePort }],
     env: {
-      CAPABILITY_KEYS: preserve(),
       CLOUDFLARE_CACHE_PURGE_TOKEN: preserve(),
       CLOUDFLARE_ZONE_ID: preserve(),
       DATABASE_URL: Jobs.env.DATABASE_URL,
       EDGE_BASE_URL: preserve(),
+      EDGE_CONFIG_TOKEN: preserve(),
       IMGPROXY_BASE_URL: `http://\${{Shutter-Imgproxy.RAILWAY_PRIVATE_DOMAIN}}:${imgproxyPort}`,
       IMGPROXY_KEY: preserve(),
       IMGPROXY_SALT: preserve(),
@@ -120,7 +119,6 @@ export default defineRailway(() => {
       PDF_EXECUTOR_TOKEN: preserve(),
       PORT: String(nodePort),
       SHUTTER_ENCRYPTION_KEY: preserve(),
-      SPACE_API_TOKENS: preserve(),
       VIDEO_EXECUTOR_BASE_URL: `http://\${{Shutter-Executor-Video.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
       VIDEO_EXECUTOR_TOKEN: preserve(),
       ...s3Env,

@@ -40,7 +40,7 @@ describe("Source Purge", () => {
   }
 
   it("deletes every paginated prefix before purging Worker and zone cache tags", async () => {
-    const identity = { spaceId: "pane-view", sourceId: "source/one", kind: "video" as const };
+    const identity = { spaceId: "example-private", sourceId: "source/one", kind: "video" as const };
     await lifecycle.submit(
       {
         ...identity,
@@ -51,7 +51,7 @@ describe("Source Purge", () => {
     );
     const events: string[] = [];
     let publicPages = 0;
-    const tag = await buildSourceCacheTag("pane-view", "source/one");
+    const tag = await buildSourceCacheTag("example-private", "source/one");
     const send = vi.fn(async (command: ListObjectsV2Command | DeleteObjectsCommand) => {
       if (command instanceof ListObjectsV2Command) {
         events.push(`list:${command.input.Prefix}`);
@@ -87,7 +87,7 @@ describe("Source Purge", () => {
     });
     const sourcePurge = createPurge(fetch, send);
 
-    await sourcePurge.purge({ spaceId: "pane-view", sourceId: "source/one" });
+    await sourcePurge.purge({ spaceId: "example-private", sourceId: "source/one" });
     expect(await lifecycle.read(identity)).toBeUndefined();
     expect(events.filter((event) => event === "worker" || event === "tag")).toEqual([
       "worker",
@@ -109,9 +109,9 @@ describe("Source Purge", () => {
           : { Errors: [{ Key: "object", Code: "InternalError" }] },
       ),
     );
-    await expect(deleteFails.purge({ spaceId: "pane-view", sourceId: "source" })).rejects.toThrow(
-      "rendition deletion failed",
-    );
+    await expect(
+      deleteFails.purge({ spaceId: "example-private", sourceId: "source" }),
+    ).rejects.toThrow("rendition deletion failed");
 
     const workerFetch = vi.fn(async () => new Response(null, { status: 503 }));
     const workerFails = createPurge(
@@ -122,14 +122,14 @@ describe("Source Purge", () => {
           : { Errors: [] },
       ),
     );
-    await expect(workerFails.purge({ spaceId: "pane-view", sourceId: "source" })).rejects.toThrow(
-      "worker cache purge failed",
-    );
+    await expect(
+      workerFails.purge({ spaceId: "example-private", sourceId: "source" }),
+    ).rejects.toThrow("worker cache purge failed");
     expect(workerFetch).toHaveBeenCalledTimes(1);
   });
 
   it("retries safely after a Cloudflare failure", async () => {
-    const identity = { spaceId: "pane-view", sourceId: "source", kind: "pdf" as const };
+    const identity = { spaceId: "example-private", sourceId: "source", kind: "pdf" as const };
     await lifecycle.submit(
       {
         ...identity,
@@ -150,12 +150,12 @@ describe("Source Purge", () => {
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(Response.json({ success: true }));
     const sourcePurge = createPurge(fetch, send);
-    await expect(sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" })).rejects.toThrow(
-      "cache tag purge failed",
-    );
+    await expect(
+      sourcePurge.purge({ spaceId: "example-private", sourceId: "source" }),
+    ).rejects.toThrow("cache tag purge failed");
     expect(await lifecycle.read(identity)).toBeUndefined();
     await expect(
-      sourcePurge.purge({ spaceId: "pane-view", sourceId: "source" }),
+      sourcePurge.purge({ spaceId: "example-private", sourceId: "source" }),
     ).resolves.toBeUndefined();
     expect(fetch).toHaveBeenCalledTimes(4);
   });

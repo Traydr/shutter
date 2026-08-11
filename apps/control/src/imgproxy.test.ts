@@ -5,7 +5,7 @@ describe("imgproxy request signing", () => {
   it("locks the signed, width-only WebP request shape", () => {
     const request = buildImgproxyRequest(
       {
-        sourceUrl: "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/test image.jpg?token=one",
+        sourceUrl: "https://sources.example.com/private/test image.jpg?token=one",
         width: 640,
         quality: 75,
       },
@@ -18,7 +18,7 @@ describe("imgproxy request signing", () => {
     );
 
     expect(request.url).toBe(
-      "http://shutter-imgproxy.railway.internal:8080/EfOk8WqaN520nOwdb8C-aaCdIF-AgvkhBFXvTCToe20/rs:fit:640:0:0/q:75/aHR0cHM6Ly90My5zdG9yYWdlYXBpLmRldi9iYWxhbmNlZC13cmFwLW9jeWl3d2V4aGFvL3Rlc3QgaW1hZ2UuanBnP3Rva2VuPW9uZQ.webp",
+      "http://shutter-imgproxy.railway.internal:8080/r5Knpd_ndnZRzYwoSB9U5jHdr6TSx5ziK0vWptLQkoA/rs:fit:640:0:0/q:75/aHR0cHM6Ly9zb3VyY2VzLmV4YW1wbGUuY29tL3ByaXZhdGUvdGVzdCBpbWFnZS5qcGc_dG9rZW49b25l.webp",
     );
     expect(request.headers.get("authorization")).toBe(`Bearer ${"s".repeat(32)}`);
   });

@@ -129,7 +129,10 @@ Executors.
   "outputKey": "masters/v1/demo-private/<fingerprint>/video.webp",
   "processingToken": "opaque-token",
   "executionCycle": 0,
-  "attemptNumber": 1
+  "attemptNumber": 1,
+  "allowedSourceOrigins": [
+    { "origin": "https://objects.example.com", "pathPrefix": "/demo-private-bucket" }
+  ]
 }
 ```
 

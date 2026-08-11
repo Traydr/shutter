@@ -41,13 +41,15 @@ and deliberately sends 301 requests.
 
 ## Verified configuration inventory (2026-07-12)
 
-- Control contains structurally valid `CAPABILITY_KEYS` and `SPACE_API_TOKENS`
-  entries for `demo-public` and `demo-private`, plus the zone ID and purge token.
+- Postgres contains the active Space policies, API-token hashes, and encrypted
+  Capability Keys. Control has `SHUTTER_ENCRYPTION_KEY`, the zone ID, and the
+  purge token.
 - Control and both Executors address the same R2 endpoint and bucket; Executor
   role-token references match Control.
 - Control and imgproxy share the signing key, salt, and bearer secret.
-- Edge declares and has `CAPABILITY_KEYS`, `ORIGIN_AUTH_TOKEN`, and
-  `ORIGIN_BASE_URL`, and binds `RENDITION_STORE` to `shutter-renditions`.
+- Edge declares `EDGE_CONFIG_TOKEN`, `ORIGIN_AUTH_TOKEN`, and `ORIGIN_BASE_URL`.
+  Its snapshot token matches Control, and `RENDITION_STORE` binds to
+  `shutter-renditions`.
 - The live imgproxy allowlist still needs the reviewed Railway IaC update that
   adds the exact R2 hostname before first-request Master Preview rendering.
 

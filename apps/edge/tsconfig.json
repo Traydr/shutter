@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["src/app.ts", "src/index.ts", "worker-configuration.d.ts"]
+  "include": ["src/app.ts", "src/config-snapshot.ts", "src/index.ts", "worker-configuration.d.ts"]
 }

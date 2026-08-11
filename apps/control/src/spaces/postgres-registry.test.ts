@@ -6,6 +6,7 @@ import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "../post
 import { CapabilityKeyEncryption } from "./encryption.js";
 import { PostgresSpaceRegistry } from "./postgres-registry.js";
 import { SpaceRegistryError } from "./registry.js";
+import { importRegistry, parseRegistryImport } from "./registry-import.js";
 
 const now = new Date("2026-08-11T12:00:00.000Z");
 const publicPolicy = {
@@ -172,7 +173,7 @@ describe("PostgresSpaceRegistry", () => {
     expect(snapshot).toMatchObject({
       schemaVersion: "v1",
       generation: 3,
-      generatedAt: now,
+      registryUpdatedAt: now,
       spaces: [publicPolicy, privatePolicy],
     });
     expect(snapshot.capabilityKeys.get(privatePolicy.id)?.get("key-1")).toEqual(
@@ -197,5 +198,21 @@ describe("PostgresSpaceRegistry", () => {
     await expect(unconfigured.getActiveSpacePolicy(privatePolicy.id)).resolves.toEqual(
       privatePolicy,
     );
+  });
+
+  it("rolls back the complete cutover import when one credential conflicts", async () => {
+    const token = "test_api_token_abcdefghijklmnopqrstuvwxyz0123456789";
+    const input = parseRegistryImport({
+      schemaVersion: "v1",
+      spaces: [publicPolicy, privatePolicy].map((policy) => ({
+        policy,
+        apiTokens: [{ label: "duplicate", token }],
+        capabilityKeys: [],
+      })),
+    });
+
+    await expect(importRegistry(registry, input)).rejects.toMatchObject({ code: "conflict" });
+    await expect(registry.listSpaces()).resolves.toEqual([]);
+    await expect(registry.loadEdgeSnapshot()).resolves.toMatchObject({ generation: 0 });
   });
 });

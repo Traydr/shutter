@@ -124,6 +124,7 @@ export interface ExecutorClaim {
   processingToken: string;
   executionCycle: number;
   attemptNumber: number;
+  allowedSourceOrigins: readonly SourceOriginRule[];
 }
 
 export interface ExecutorHeartbeatRequest {

@@ -6,12 +6,12 @@ import {
   normalizeRenditionQuery,
   operationalEvent,
   ProtocolError,
-  parseCapabilityKeyRegistry,
   type RenditionCacheIdentity,
+  type SpacePolicy,
   verifySourceCapability,
 } from "@shutter/protocol";
-import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
+import { getEdgeConfig } from "./config-snapshot.js";
 
 declare module "hono" {
   interface ExecutionContext {
@@ -22,9 +22,6 @@ declare module "hono" {
 const PRIVATE_EDGE_TTL_SECONDS = 86_400;
 const PUBLIC_BROWSER_TTL_SECONDS = 86_400;
 const PUBLIC_EDGE_TTL_SECONDS = 2_592_000;
-
-type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
-let keyRegistryCache: { raw: string; registry: KeyRegistry } | undefined;
 
 async function emitRenditionEvent(
   identity: RenditionCacheIdentity,
@@ -43,13 +40,6 @@ async function emitRenditionEvent(
       },
     }),
   );
-}
-
-function parseKeyRegistry(value: string): KeyRegistry {
-  if (keyRegistryCache?.raw === value) return keyRegistryCache.registry;
-  const registry = parseCapabilityKeyRegistry(value);
-  keyRegistryCache = { raw: value, registry };
-  return registry;
 }
 
 function protocolFailure(error: unknown): Response {
@@ -246,12 +236,10 @@ async function publicLocatedRendition(
   bindings: CloudflareBindings,
   identity: RenditionCacheIdentity,
   capability: string,
+  policy: SpacePolicy,
+  keys: ReadonlyMap<string, Uint8Array>,
 ): Promise<Response> {
   return deliverRendition(bindings, identity, async () => {
-    const policy = getSpacePolicy(identity.spaceId);
-    if (policy === undefined || policy.routeClass !== "public")
-      throw new ProtocolError("space_mismatch", "Shutter Space is not public");
-    const keys = parseKeyRegistry(bindings.CAPABILITY_KEYS).get(identity.spaceId) ?? new Map();
     const claims = await verifySourceCapability(capability, {
       spaceId: identity.spaceId,
       expectedPurpose: "image_source",
@@ -383,7 +371,8 @@ app.post("/internal/v1/cache/purge", async (context) => {
 app.get("/v1/public/:spaceId/resolver/:resolverId/*", async (context) => {
   try {
     const spaceId = context.req.param("spaceId");
-    const policy = getSpacePolicy(spaceId);
+    const snapshot = await getEdgeConfig(context.env, context.executionCtx);
+    const policy = snapshot.policyFor(spaceId);
     if (policy === undefined || policy.routeClass !== "public") return notFound();
     const resolverId = context.req.param("resolverId");
     const resolver = policy.resolvers.find((candidate) => candidate.id === resolverId);
@@ -429,10 +418,11 @@ app.get("/v1/public/:spaceId/resolver/:resolverId/*", async (context) => {
 app.get("/v1/private/:spaceId/master/:capability", async (context) => {
   try {
     const spaceId = context.req.param("spaceId");
-    const policy = getSpacePolicy(spaceId);
+    const snapshot = await getEdgeConfig(context.env, context.executionCtx);
+    const policy = snapshot.policyFor(spaceId);
     if (policy === undefined || policy.routeClass !== "private") return notFound();
     const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
-    const keys = parseKeyRegistry(context.env.CAPABILITY_KEYS).get(spaceId) ?? new Map();
+    const keys = snapshot.keysFor(spaceId);
     const claims = await verifySourceCapability(context.req.param("capability"), {
       spaceId,
       expectedPurpose: "master_preview",
@@ -456,7 +446,8 @@ app.get("/v1/private/:spaceId/master/:capability", async (context) => {
 app.get("/v1/public/:spaceId/master/:kind/:sourceId", async (context) => {
   try {
     const spaceId = context.req.param("spaceId");
-    const policy = getSpacePolicy(spaceId);
+    const snapshot = await getEdgeConfig(context.env, context.executionCtx);
+    const policy = snapshot.policyFor(spaceId);
     if (policy === undefined || policy.routeClass !== "public") return notFound();
     const kind = context.req.param("kind");
     if (kind !== "video" && kind !== "pdf") return notFound();
@@ -480,10 +471,11 @@ app.get("/v1/public/:spaceId/master/:kind/:sourceId", async (context) => {
 app.get("/v1/private/:spaceId/source/:capability", async (context) => {
   try {
     const spaceId = context.req.param("spaceId");
-    const policy = getSpacePolicy(spaceId);
+    const snapshot = await getEdgeConfig(context.env, context.executionCtx);
+    const policy = snapshot.policyFor(spaceId);
     if (policy === undefined || policy.routeClass !== "private") return notFound();
     const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
-    const keys = parseKeyRegistry(context.env.CAPABILITY_KEYS).get(spaceId) ?? new Map();
+    const keys = snapshot.keysFor(spaceId);
     const claims = await verifySourceCapability(context.req.param("capability"), {
       spaceId,
       expectedPurpose: "image_source",
@@ -512,7 +504,8 @@ app.get("/v1/private/:spaceId/source/:capability", async (context) => {
 app.get("/v1/public/:spaceId/located/:sourceId/:capability", async (context) => {
   try {
     const spaceId = context.req.param("spaceId");
-    const policy = getSpacePolicy(spaceId);
+    const snapshot = await getEdgeConfig(context.env, context.executionCtx);
+    const policy = snapshot.policyFor(spaceId);
     if (policy === undefined || policy.routeClass !== "public") return notFound();
     const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
@@ -527,6 +520,8 @@ app.get("/v1/public/:spaceId/located/:sourceId/:capability", async (context) => 
         quality: query.quality,
       },
       context.req.param("capability"),
+      policy,
+      snapshot.keysFor(spaceId),
     );
   } catch (error) {
     return protocolFailure(error);

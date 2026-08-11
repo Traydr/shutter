@@ -16,10 +16,9 @@ provider evidence required to close Phase 2.
 
 3. List the lifecycle rules and confirm the only object-expiration prefix is
    `cache/`, with an age of 2,592,000 seconds. No `masters/` rule may exist.
-4. Set Worker secrets `CAPABILITY_KEYS`, `ORIGIN_BASE_URL`, and
-   `ORIGIN_AUTH_TOKEN`. `CAPABILITY_KEYS` is JSON shaped as
-   `{ "space-id": { "kid": "unpadded-base64url-32-byte-key" } }` and may
-   contain overlapping verification keys.
+4. Set Worker secrets `EDGE_CONFIG_TOKEN`, `ORIGIN_BASE_URL`, and
+   `ORIGIN_AUTH_TOKEN`. Set the same `EDGE_CONFIG_TOKEN` on Control. It is a
+   dedicated credential for the read-only Edge snapshot endpoint.
 5. Deploy the Worker. The configuration intentionally has no `nodejs_compat`.
 6. Create a rate-limiting rule for `/v1/`, keyed by client IP, at 300 requests
    per 10 seconds with a 10-second block.
@@ -40,9 +39,33 @@ provider evidence required to close Phase 2.
    The imgproxy key and salt are hex encoded.
 4. Give Control a public HTTPS origin and put that exact URL in the Worker's
    `ORIGIN_BASE_URL`. Keep imgproxy private-only.
-5. Configure Control's `CAPABILITY_KEYS` and `SPACE_API_TOKENS` registries for
-   every enabled Space. Configure `CLOUDFLARE_ZONE_ID` and a token restricted to
-   Cache Purge on that specific zone as `CLOUDFLARE_CACHE_PURGE_TOKEN`.
+5. Run the Space Registry migrations. Create each Space, API token, and
+   Capability Key in Postgres. Configure `SHUTTER_ENCRYPTION_KEY`,
+   `CLOUDFLARE_ZONE_ID`, and a token restricted to Cache Purge on that specific
+   zone as `CLOUDFLARE_CACHE_PURGE_TOKEN`.
+
+## Registry cutover
+
+Use a maintenance window. Stop Space-scoped traffic, then run the tested import
+against a reviewed JSON file that is stored outside the repository:
+
+```sh
+pnpm --filter @shutter/control build
+DATABASE_URL=... SHUTTER_ENCRYPTION_KEY=... \
+  pnpm --filter @shutter/control db:import-spaces ./private-space-import.json
+```
+
+The file contains `schemaVersion: "v1"` and a `spaces` array. Each entry has a
+`policy`, `apiTokens` entries with `label` and `token`, and `capabilityKeys`
+entries with `keyId` and a 32-byte hex or base64url `key`. The command reads the
+snapshot back and verifies every imported token and key. It is one-shot: use an
+empty migrated database and do not rerun it.
+
+Deploy Control, the Executors, and then Edge. Verify one existing API token and
+capability plus one public and private route before traffic resumes. Keep the
+previous Worker version and its old Cloudflare Space values for several days.
+Rollback Edge by deploying that version; do not revert Postgres. Delete the old
+Cloudflare values only after the new snapshot path is stable.
 
 ## Live evidence
 

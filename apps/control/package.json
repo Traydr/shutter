@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "db:import-spaces": "node dist/import-spaces.js",
     "db:migrate": "node dist/migrate.js",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
@@ -21,7 +22,6 @@
     "@opentelemetry/resources": "2.10.0",
     "@opentelemetry/sdk-logs": "0.221.0",
     "@shutter/protocol": "workspace:*",
-    "@shutter/space-config": "workspace:*",
     "@t3-oss/env-core": "^0.13.11",
     "drizzle-orm": "^0.45.2",
     "hono": "4.12.28",

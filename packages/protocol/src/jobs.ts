@@ -1,4 +1,5 @@
 import { ProtocolError } from "./errors.js";
+import { parseSourceOriginRules, SpacePolicyValidationError } from "./space-policy.js";
 import type {
   ExecutorClaim,
   ExecutorCompleteRequest,
@@ -8,6 +9,7 @@ import type {
   JobFailureCode,
   PreviewJobSubmission,
   RenditionKind,
+  SourceOriginRule,
 } from "./types.js";
 import { FAILURE_ACTIONS } from "./types.js";
 
@@ -75,6 +77,7 @@ function requireSafeInteger(record: Record<string, unknown>, key: string): numbe
 export function parseExecutorClaim(input: unknown): ExecutorClaim {
   const record = requireObject(input, "executor claim");
   const expectedKeys = [
+    "allowedSourceOrigins",
     "attemptNumber",
     "executionCycle",
     "kind",
@@ -87,6 +90,15 @@ export function parseExecutorClaim(input: unknown): ExecutorClaim {
   if (Object.keys(record).sort().join(",") !== expectedKeys.join(",")) {
     throw new ProtocolError("request_invalid", "executor claim has unexpected fields");
   }
+  let allowedSourceOrigins: readonly SourceOriginRule[];
+  try {
+    allowedSourceOrigins = parseSourceOriginRules(record.allowedSourceOrigins);
+  } catch (error) {
+    if (error instanceof SpacePolicyValidationError) {
+      throw new ProtocolError("request_invalid", "allowedSourceOrigins is invalid");
+    }
+    throw error;
+  }
   return {
     spaceId: requireString(record, "spaceId"),
     sourceId: requireString(record, "sourceId"),
@@ -96,6 +108,7 @@ export function parseExecutorClaim(input: unknown): ExecutorClaim {
     processingToken: requireString(record, "processingToken"),
     executionCycle: requireSafeInteger(record, "executionCycle"),
     attemptNumber: requireSafeInteger(record, "attemptNumber"),
+    allowedSourceOrigins,
   };
 }
 
