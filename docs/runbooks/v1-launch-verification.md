@@ -10,9 +10,12 @@ data unless the disposable purge mode is explicitly confirmed.
    presence of `CLOUDFLARE_ZONE_ID` and `CLOUDFLARE_CACHE_PURGE_TOKEN`.
 2. Deploy Control, then the video and PDF Executors, then imgproxy.
 3. Deploy Edge only after Control health and authenticated origin probes pass.
-4. Run offline verification with `pnpm verify:v1`.
-5. Run the opt-in live modes below against disposable sources before changing a
-   consumer provider switch.
+4. Run `pnpm check`. The maintained Node and Worker integration tests cover
+   route transitions, private fail-closed behavior, job recovery, repeated
+   purge, and configuration invariants.
+5. Follow the live acceptance checklist in
+   [self-hosting.md](./self-hosting.md) against disposable sources before
+   changing a consumer provider switch.
 
 Executors are serverless and may cold-start. A pending job with a missed wake is
 expected to be recovered by Control's five-minute sweep; do not treat one cold
@@ -20,24 +23,12 @@ start as job loss.
 
 ## Live verification
 
-Live commands fail before network access unless `SHUTTER_VERIFY_LIVE=1` and all
-mode-specific variables are present. Values must be supplied through the shell
-or secret manager and must not be pasted into logs or committed.
-
-```sh
-SHUTTER_VERIFY_LIVE=1 pnpm verify:v1:live -- --mode routes
-SHUTTER_VERIFY_LIVE=1 pnpm verify:v1:live -- --mode jobs
-SHUTTER_VERIFY_LIVE=1 pnpm verify:v1:live -- --mode recovery
-SHUTTER_VERIFY_LIVE=1 pnpm verify:v1:live -- --mode gallery
-SHUTTER_VERIFY_LIVE=1 SHUTTER_CONFIRM_DISPOSABLE_PURGE=yes pnpm verify:v1:live -- --mode purge
-```
-
-Routes, jobs, and recovery consume a non-empty `SHUTTER_VERIFY_SCENARIOS` JSON
-array containing request descriptions and expected status/cache outcomes.
-Purge additionally requires `SHUTTER_CONTROL_BASE_URL`, `SHUTTER_SPACE_ID`,
-`SHUTTER_SPACE_API_TOKEN`, and an explicitly disposable
-`SHUTTER_DISPOSABLE_SOURCE_ID`. Gallery requires `SHUTTER_VERIFY_GALLERY_URL`
-and deliberately sends 301 requests.
+The old live verifier accepted a caller-provided list of requests and checked
+that list against itself. It did not own safe fixtures or prove full behavior.
+Use the maintained integration suite for deterministic coverage. Use the
+self-hosting runbook for provider evidence, one public Space, one private Space,
+and an explicitly disposable purge target. Keep credentials out of shell logs
+and the repository.
 
 ## Verified configuration inventory (2026-07-12)
 
@@ -48,8 +39,8 @@ and deliberately sends 301 requests.
   role-token references match Control.
 - Control and imgproxy share the signing key, salt, and bearer secret.
 - Edge declares `EDGE_CONFIG_TOKEN`, `ORIGIN_AUTH_TOKEN`, and `ORIGIN_BASE_URL`.
-  Its snapshot token matches Control, and `RENDITION_STORE` binds to
-  `shutter-renditions`.
+  Its snapshot token matches Control, and `RENDITION_STORE` binds to the
+  deployment's Rendition Store bucket.
 - The live imgproxy allowlist still needs the reviewed Railway IaC update that
   adds the exact R2 hostname before first-request Master Preview rendering.
 

@@ -8,6 +8,7 @@ export default defineConfig({
       "apps/executor-video/src/**/*.test.ts",
       "apps/executor-pdf/src/**/*.test.ts",
       "packages/*/src/**/*.test.ts",
+      "test/**/*.test.ts",
     ],
   },
 });

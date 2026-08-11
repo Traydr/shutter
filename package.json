@@ -12,17 +12,17 @@
     "build": "pnpm -r --sort --if-present build",
     "build:packages": "pnpm -r --filter './packages/*' --sort --if-present build",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "deploy:edge": "pnpm --filter @shutter/edge run deploy",
+    "deploy:edge": "node --experimental-strip-types scripts/deployment-config.mjs render-edge && pnpm --filter @shutter/edge run deploy",
+    "deployment:apply": "node --experimental-strip-types scripts/deployment-config.mjs apply",
+    "deployment:plan": "node --experimental-strip-types scripts/deployment-config.mjs plan",
     "format": "biome check --write .",
-    "lint": "biome ci . && pnpm lint:edge-boundary && pnpm lint:phase2-config",
+    "lint": "biome ci . && pnpm lint:edge-boundary",
     "lint:edge-boundary": "node scripts/check-edge-boundary.mjs",
-    "lint:phase2-config": "node scripts/check-phase2-config.mjs",
     "test": "node scripts/run-workspace-tests.mjs",
     "test:node": "pnpm build:packages && vitest run --config vitest.node.config.ts",
     "test:worker": "pnpm build:packages && pnpm --filter @shutter/edge test",
-    "typecheck": "pnpm build:packages && pnpm -r --sort --if-present typecheck",
-    "verify:v1": "node scripts/verify-v1.mjs --mode offline",
-    "verify:v1:live": "node scripts/verify-v1.mjs"
+    "typecheck": "pnpm typecheck:deployment && pnpm build:packages && pnpm -r --sort --if-present typecheck",
+    "typecheck:deployment": "tsc -p tsconfig.deployment.json"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",

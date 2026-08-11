@@ -295,7 +295,7 @@ pnpm install --frozen-lockfile
 pnpm check
 ```
 
-`pnpm check` runs formatting, the runtime-boundary and config lints, TypeScript,
+`pnpm check` runs formatting, the runtime-boundary lint, configuration tests, TypeScript,
 the Node and `workerd` test suites, and every application build. The Control
 tests start a throwaway Postgres through testcontainers, so `pnpm test` needs a
 running container runtime (Docker, OrbStack, or Podman).
@@ -344,10 +344,11 @@ tenant configuration. See the [Space administration
 runbook](./docs/runbooks/space-administration.md) for creation, policy changes,
 credential rotation, decommissioning, and imgproxy allowlist updates.
 
-Deployment-specific values — custom domains, the imgproxy source allowlist,
-storage credentials, and the OTLP endpoint — are not in this repo. See
-[`.railway/railway.ts`](./.railway/railway.ts) for the shape and
-[the runbooks](./docs/runbooks/) for the operational procedures.
+Deployment-specific values — custom domains, regions, repository and storage
+names, the imgproxy source allowlist, and credentials — are not in source. The
+[self-hosting runbook](./docs/runbooks/self-hosting.md) describes the public
+input file, fresh and imported Railway modes, reviewed plan, secret bootstrap,
+and live acceptance checks.
 
 </details>
 

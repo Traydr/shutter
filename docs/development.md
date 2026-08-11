@@ -89,9 +89,10 @@ behind the vite plugin and wrangler.
 - **Edge runtime boundary.** `scripts/check-edge-boundary.mjs` fails the build
   if Worker code imports Node APIs. The Worker runs on Web standards only and
   must not enable `nodejs_compat`.
-- **Reviewed infrastructure.** `scripts/check-phase2-config.mjs` guards the R2
-  lifecycle rule, the Worker's R2 binding and custom domain, the pinned imgproxy
-  image, and the imgproxy SSRF guards.
+- **Reviewed infrastructure.** Normal configuration tests guard the R2
+  lifecycle rule, both fresh and imported Railway graphs, the Worker's R2
+  binding, the pinned imgproxy image, and the imgproxy SSRF guards. Run the
+  [self-hosting wizard](./runbooks/self-hosting.md) to supply deployment values.
 - **Versioned protocol.** URLs and capabilities carry an explicit `v1`, so
   incompatible drift fails closed rather than degrading. Cross-consumer
   behavior is pinned by fixtures in `@shutter/testkit`.

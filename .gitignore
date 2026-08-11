@@ -9,3 +9,5 @@ coverage/
 .env.*
 !.env.example
 .dev.vars
+.railway/deployment.env
+apps/edge/wrangler.deploy.jsonc

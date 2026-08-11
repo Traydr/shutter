@@ -41,8 +41,8 @@ Shutter code or paste Space policy JSON into Cloudflare.
   every 60 seconds in each isolate. If Control does not answer, Edge continues
   with the last valid snapshot for up to 10 minutes and then returns `503`.
   Workers KV is not required.
-- `ADMIN_BOOTSTRAP_TOKEN` and other deployment values stay `preserve()`d in
-  Railway IaC until plan 04.
+- Imported deployments preserve `ADMIN_BOOTSTRAP_TOKEN` and other existing
+  values. Fresh deployments add credentials only after the first topology apply.
 - Capability-key rotation is manual. Add the new key to Shutter, update the
   application, wait for old capabilities to expire, and disable the old key.
 - Plan 04 deletes `check-phase2-config.mjs` and `verify-v1.mjs`. The Edge
