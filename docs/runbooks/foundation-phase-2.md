@@ -41,6 +41,7 @@ provider evidence required to close Phase 2.
    `ORIGIN_BASE_URL`. Keep imgproxy private-only.
 5. Run the Space Registry migrations. Create each Space, API token, and
    Capability Key in Postgres. Configure `SHUTTER_ENCRYPTION_KEY`,
+   `ADMIN_BOOTSTRAP_TOKEN`,
    `CLOUDFLARE_ZONE_ID`, and a token restricted to Cache Purge on that specific
    zone as `CLOUDFLARE_CACHE_PURGE_TOKEN`.
 

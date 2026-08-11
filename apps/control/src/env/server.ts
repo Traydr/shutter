@@ -11,6 +11,7 @@ const server = {
   DATABASE_URL: optionalUrl,
   SHUTTER_ENCRYPTION_KEY: optionalString,
   EDGE_CONFIG_TOKEN: optionalString,
+  ADMIN_BOOTSTRAP_TOKEN: optionalString,
 
   S3_ENDPOINT: optionalUrl,
   S3_REGION: z.string().min(1).default("auto"),
@@ -27,6 +28,7 @@ const server = {
   IMGPROXY_KEY: optionalString,
   IMGPROXY_SALT: optionalString,
   IMGPROXY_SECRET: optionalString,
+  IMGPROXY_ALLOWED_SOURCES: optionalString,
 
   VIDEO_EXECUTOR_BASE_URL: optionalUrl,
   VIDEO_EXECUTOR_TOKEN: optionalString,

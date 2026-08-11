@@ -2,6 +2,7 @@ import {
   CONTROL_HTTP_ROUTES,
   type ParsedEdgeConfigSnapshot,
   parseEdgeConfigSnapshot,
+  serializeEdgeConfigRefreshReport,
 } from "@shutter/protocol";
 
 const SOFT_REFRESH_MS = 45_000;
@@ -98,16 +99,48 @@ async function fetchSnapshot(bindings: CloudflareBindings): Promise<CachedSnapsh
   }
 }
 
-function refresh(bindings: CloudflareBindings): Promise<CachedSnapshot> {
+function refresh(
+  bindings: CloudflareBindings,
+  executionContext: WaitUntilContext,
+): Promise<CachedSnapshot> {
   if (refreshInFlight !== undefined) return refreshInFlight;
   const pending = fetchSnapshot(bindings);
   refreshInFlight = pending;
+  executionContext.waitUntil(
+    pending
+      .then((result) => reportRefresh(bindings, result.snapshot.generation))
+      .catch(() => undefined),
+  );
   void pending
     .finally(() => {
       if (refreshInFlight === pending) refreshInFlight = undefined;
     })
     .catch(() => undefined);
   return pending;
+}
+
+async function reportRefresh(bindings: CloudflareBindings, generation: number): Promise<void> {
+  const url = new URL(CONTROL_HTTP_ROUTES.edgeConfigRefresh, bindings.ORIGIN_BASE_URL);
+  if (url.protocol !== "https:") return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${bindings.EDGE_CONFIG_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(serializeEdgeConfigRefreshReport(generation)),
+      cache: "no-store",
+      redirect: "manual",
+      signal: controller.signal,
+    });
+  } catch {
+    // Refresh reporting is advisory and cannot make a valid snapshot unavailable.
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function withinFailureGrace(snapshot: CachedSnapshot, now: number): boolean {
@@ -123,16 +156,12 @@ export async function getEdgeConfig(
     const age = now - cached.fetchedAt;
     if (age < SOFT_REFRESH_MS) return cached.snapshot;
     if (age < REQUIRED_REFRESH_MS) {
-      executionContext.waitUntil(
-        refresh(bindings)
-          .then(() => undefined)
-          .catch(() => undefined),
-      );
+      void refresh(bindings, executionContext);
       return cached.snapshot;
     }
   }
   try {
-    return (await refresh(bindings)).snapshot;
+    return (await refresh(bindings, executionContext)).snapshot;
   } catch {
     if (cached !== undefined && withinFailureGrace(cached, Date.now())) return cached.snapshot;
     throw new EdgeConfigUnavailableError();

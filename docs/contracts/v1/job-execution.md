@@ -51,6 +51,9 @@ complete failures must not delete until Control accepts fail for that token.
 - A claim response supplies the authenticated Executor with the Source Locator,
   allowed source-origin rules, deterministic output key, and processing token
   for that attempt.
+- A job accepted while its Space is active can still be claimed after the Space
+  is decommissioned. Control uses the retained policy and currently accepted
+  Capability Keys only for that unfinished work; new submissions remain blocked.
 - Executors hold Source Locators and the small origin-policy fragment only in
   process memory. They never receive a Space capability key or the full Space
   registry.

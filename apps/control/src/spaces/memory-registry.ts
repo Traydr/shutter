@@ -15,6 +15,7 @@ import type {
   EdgeSpaceSnapshot,
   IssuedApiToken,
   IssuedCapabilityKey,
+  RegistryGeneration,
   RegistryMutation,
   SpacePolicyUpdate,
   SpaceRecord,
@@ -125,16 +126,33 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     return record?.status === "active" ? parseSpacePolicy(record.policy) : undefined;
   }
 
+  async getGeneration(): Promise<RegistryGeneration> {
+    return { generation: this.#generation, updatedAt: new Date(this.#generatedAt) };
+  }
+
   async getActiveSpaceAuthorization(
     spaceId: string,
   ): Promise<ActiveSpaceAuthorization | undefined> {
     const policy = await this.getActiveSpacePolicy(spaceId);
     if (policy === undefined) return undefined;
+    return { policy, capabilityKeys: this.#activeCapabilityKeys(spaceId) };
+  }
+
+  async getSpaceAuthorization(spaceId: string): Promise<ActiveSpaceAuthorization | undefined> {
+    const record = this.#spaces.get(spaceId);
+    if (record === undefined) return undefined;
+    return {
+      policy: parseSpacePolicy(record.policy),
+      capabilityKeys: this.#activeCapabilityKeys(spaceId),
+    };
+  }
+
+  #activeCapabilityKeys(spaceId: string): ReadonlyMap<string, Uint8Array> {
     const capabilityKeys = new Map<string, Uint8Array>();
     for (const key of this.#keys.get(spaceId) ?? []) {
       if (key.disabledAt === undefined) capabilityKeys.set(key.keyId, Uint8Array.from(key.key));
     }
-    return { policy, capabilityKeys };
+    return capabilityKeys;
   }
 
   async listSpaces(): Promise<readonly SpaceRecord[]> {

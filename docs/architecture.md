@@ -159,6 +159,17 @@ credential history belong in the Postgres Space Registry. Tenant values are not
 source code or deployment variables. Control reads Postgres for every
 Space-scoped request and does not keep a policy cache.
 
+Control also renders the small `/admin` operator surface. It uses a short-lived
+session derived from an operator-managed bootstrap credential and protects every
+write with a same-origin CSRF check. The interface calls the same Space Registry
+contract as runtime code. Full API tokens and Capability Keys appear only in the
+response that creates them; later pages show only their audit summaries.
+
+Decommissioning blocks new Space-scoped requests and removes the Space from
+Edge snapshots. Executor claims for jobs accepted before decommissioning can
+still read the retained policy and currently accepted Capability Keys, so the
+status change does not strand unfinished work.
+
 Control returns one atomic, versioned snapshot to Edge. Each Edge isolate keeps
 the last parsed snapshot for at most 60 seconds before it must refresh. It starts
 a background refresh after 45 seconds. If Control is unavailable, Edge can use
@@ -166,6 +177,10 @@ the last snapshot for at most 10 minutes after Control generated it. This keeps
 cache hits available during a short outage while putting a strict bound on
 stale authorization. Executors receive only the allowed source-origin rules in
 each claim; they do not load the registry.
+
+After a successful refresh, Edge reports its generation to Control with the
+dedicated snapshot credential. Control retains the latest report in process for
+operator visibility; it is advisory and does not take part in authorization.
 
 Deployment configuration, such as service URLs, the imgproxy allowlist, storage
 credentials, and the dedicated Edge snapshot credential, belongs in Railway and

@@ -101,10 +101,12 @@ export default defineRailway(() => {
     env: {
       CLOUDFLARE_CACHE_PURGE_TOKEN: preserve(),
       CLOUDFLARE_ZONE_ID: preserve(),
+      ADMIN_BOOTSTRAP_TOKEN: preserve(),
       DATABASE_URL: Jobs.env.DATABASE_URL,
       EDGE_BASE_URL: preserve(),
       EDGE_CONFIG_TOKEN: preserve(),
       IMGPROXY_BASE_URL: `http://\${{Shutter-Imgproxy.RAILWAY_PRIVATE_DOMAIN}}:${imgproxyPort}`,
+      IMGPROXY_ALLOWED_SOURCES: Imgproxy.env.IMGPROXY_ALLOWED_SOURCES,
       IMGPROXY_KEY: preserve(),
       IMGPROXY_SALT: preserve(),
       IMGPROXY_SECRET: preserve(),

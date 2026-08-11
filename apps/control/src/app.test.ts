@@ -1,6 +1,7 @@
-import { buildMasterPreviewKey } from "@shutter/protocol";
+import { buildMasterPreviewKey, parseEdgeConfigSnapshot } from "@shutter/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { createControlApp } from "./app.js";
+import { EdgeRefreshTracker } from "./edge-refresh-status.js";
 import type { ControlLogger } from "./logging.js";
 import { MemorySpaceRegistry } from "./spaces/memory-registry.js";
 
@@ -277,6 +278,161 @@ describe("control app", () => {
         "test-key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
       },
     });
+  });
+
+  it("records authenticated Edge refresh reports for the admin surface", async () => {
+    const tracker = new EdgeRefreshTracker(() => new Date("2026-08-11T12:00:00.000Z"));
+    const control = createControlApp({
+      logger: NOOP_LOGGER,
+      originAuthToken: () => TOKEN,
+      edgeConfigToken: () => TOKEN,
+      edgeRefreshTracker: tracker,
+      imgproxyConfig: () => IMGPROXY,
+      fetch: vi.fn(),
+      spaceRegistry: SPACE_REGISTRY,
+    });
+    const url = "https://shutter.test/internal/v1/edge/config/refresh";
+    expect(
+      (
+        await control.request(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ generation: 4 }),
+        })
+      ).status,
+    ).toBe(401);
+    expect(
+      (
+        await control.request(url, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${TOKEN}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ generation: 4, extra: true }),
+        })
+      ).status,
+    ).toBe(400);
+    const accepted = await control.request(url, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ generation: 4 }),
+    });
+    expect(accepted.status).toBe(204);
+    expect(tracker.latest()).toEqual({
+      generation: 4,
+      refreshedAt: new Date("2026-08-11T12:00:00.000Z"),
+    });
+  });
+
+  it("mounts the separately authenticated admin application", async () => {
+    const control = createControlApp({
+      logger: NOOP_LOGGER,
+      originAuthToken: () => TOKEN,
+      adminBootstrapToken: () => "admin_bootstrap_token_abcdefghijklmnopqrstuvwxyz",
+      imgproxyAllowedSources: () => "https://sources.example.com",
+      imgproxyConfig: () => IMGPROXY,
+      fetch: vi.fn(),
+      spaceRegistry: SPACE_REGISTRY,
+    });
+    const response = await control.request("https://shutter.test/admin");
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Manage Spaces");
+  });
+
+  it("creates a Space through admin, observes Edge refresh, and renders without code configuration", async () => {
+    const registry = new MemorySpaceRegistry();
+    const tracker = new EdgeRefreshTracker(() => new Date("2026-08-11T12:00:00.000Z"));
+    const adminToken = "admin_bootstrap_token_abcdefghijklmnopqrstuvwxyz";
+    const fetch = vi.fn(
+      async () =>
+        new Response(Uint8Array.from([82, 73, 70, 70]), {
+          headers: { "content-type": "image/webp" },
+        }),
+    );
+    const control = createControlApp({
+      logger: NOOP_LOGGER,
+      originAuthToken: () => TOKEN,
+      edgeConfigToken: () => TOKEN,
+      adminBootstrapToken: () => adminToken,
+      imgproxyAllowedSources: () => "https://sources.example.com",
+      edgeRefreshTracker: tracker,
+      imgproxyConfig: () => IMGPROXY,
+      fetch,
+      spaceRegistry: registry,
+    });
+    const login = await control.request("https://shutter.test/admin/login", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: adminToken }),
+    });
+    const cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
+    const dashboard = await control.request("https://shutter.test/admin", {
+      headers: { cookie },
+    });
+    const csrf = /name="csrf" value="([^"]+)"/u.exec(await dashboard.text())?.[1] ?? "";
+    const created = await control.request("https://shutter.test/admin/spaces", {
+      method: "POST",
+      headers: {
+        cookie,
+        origin: "https://shutter.test",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        csrf,
+        spaceId: "admin-created",
+        routeClass: "public",
+        qualities: "75",
+        defaultQuality: "75",
+        allowedSourceOrigins: "https://sources.example.com/media",
+        resolvers: "",
+      }),
+    });
+    expect(created.status).toBe(303);
+
+    const snapshotResponse = await control.request("https://shutter.test/internal/v1/edge/config", {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const snapshot = parseEdgeConfigSnapshot(await snapshotResponse.json());
+    expect(snapshot.policyFor("admin-created")).toBeDefined();
+    expect(
+      (
+        await control.request("https://shutter.test/internal/v1/edge/config/refresh", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${TOKEN}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ generation: snapshot.generation }),
+        })
+      ).status,
+    ).toBe(204);
+
+    const renditionUrl = new URL("https://shutter.test/internal/v1/spike/rendition");
+    renditionUrl.searchParams.set(
+      "key",
+      "cache/v1/public/admin-created/fingerprint/source/w640-q75.webp",
+    );
+    renditionUrl.searchParams.set("source", "https://sources.example.com/media/image.jpg");
+    renditionUrl.searchParams.set("w", "640");
+    renditionUrl.searchParams.set("q", "75");
+    const rendition = await control.request(renditionUrl, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(rendition.status).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
+
+    const refreshedDashboard = await control.request("https://shutter.test/admin", {
+      headers: { cookie },
+    });
+    const refreshedBody = await refreshedDashboard.text();
+    expect(refreshedBody).toContain("Latest Edge refresh");
+    expect(refreshedBody).toContain(
+      `Registry generation</div><div class="metric">${snapshot.generation}`,
+    );
   });
 
   it("contains uncaught failures behind a generic error body", async () => {

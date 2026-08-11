@@ -18,6 +18,7 @@ import type {
   EdgeSpaceSnapshot,
   IssuedApiToken,
   IssuedCapabilityKey,
+  RegistryGeneration,
   RegistryMutation,
   SpacePolicyUpdate,
   SpaceRecord,
@@ -186,13 +187,33 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     return record?.value.policy;
   }
 
+  async getGeneration(): Promise<RegistryGeneration> {
+    const result = await this.#pool.query<GenerationRow>(
+      `select generation, updated_at from space_registry_metadata where id = 1`,
+    );
+    const row = result.rows[0];
+    if (row === undefined) throw new Error("Space Registry metadata is not initialized");
+    return { generation: row.generation, updatedAt: row.updated_at };
+  }
+
   async getActiveSpaceAuthorization(
     spaceId: string,
+  ): Promise<ActiveSpaceAuthorization | undefined> {
+    return this.#spaceAuthorization(spaceId, true);
+  }
+
+  async getSpaceAuthorization(spaceId: string): Promise<ActiveSpaceAuthorization | undefined> {
+    return this.#spaceAuthorization(spaceId, false);
+  }
+
+  async #spaceAuthorization(
+    spaceId: string,
+    activeOnly: boolean,
   ): Promise<ActiveSpaceAuthorization | undefined> {
     const client = await this.#pool.connect();
     try {
       await client.query("begin isolation level repeatable read read only");
-      const [record] = await loadSpaceRecords(client, { activeOnly: true, spaceId });
+      const [record] = await loadSpaceRecords(client, { activeOnly, spaceId });
       if (record === undefined) {
         await client.query("commit");
         return undefined;
@@ -374,7 +395,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
       else throw error;
     }
     const database = this.#transactionClient ?? this.#pool;
-    const result = await database.query<Pick<ApiTokenRow, "id" | "token_hash"> & { id: number }>(
+    const result = await database.query<Pick<ApiTokenRow, "id" | "token_hash">>(
       `select tokens.id, tokens.token_hash
        from space_api_tokens tokens
        join spaces on spaces.id = tokens.space_id
@@ -384,6 +405,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     );
     const match = result.rows.find((candidate) => apiTokenHashMatches(hash, candidate.token_hash));
     if (match === undefined) return false;
+    // Usage metadata is advisory and must not delay or fail authentication.
     void database
       .query(`update space_api_tokens set last_used_at = $2 where id = $1 and revoked_at is null`, [
         match.id,

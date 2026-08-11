@@ -323,6 +323,7 @@ server from booting.
 | `DATABASE_URL` | Postgres for the Space Registry and Rendition Job ledger |
 | `SHUTTER_ENCRYPTION_KEY` | Master key for Capability Keys stored in the Space Registry |
 | `EDGE_CONFIG_TOKEN` | Dedicated credential shared by Control and Edge for snapshot reads |
+| `ADMIN_BOOTSTRAP_TOKEN` | Bootstrap login for Control's server-rendered `/admin` interface |
 | `S3_ENDPOINT`, `S3_BUCKET`, `S3_*` | Rendition Store, shared verbatim with imgproxy and both Executors |
 | `IMGPROXY_BASE_URL`, `IMGPROXY_KEY`, `IMGPROXY_SALT`, `IMGPROXY_SECRET` | On-demand image rendering |
 | `EDGE_BASE_URL`, `ORIGIN_AUTH_TOKEN` | Delivery edge; the token must match the Worker's value exactly |
@@ -337,9 +338,11 @@ See [`.env.example`](./.env.example) for the annotated full set.
 <details>
 <summary>Spaces and deployment values</summary>
 
-Space policies, API tokens, and Capability Keys are records in Postgres. They
-are changed through the Space Registry and are not deployment variables or
-checked-in tenant configuration.
+Space policies, API tokens, and Capability Keys are records in Postgres. Manage
+them at Control's `/admin` page; they are not deployment variables or checked-in
+tenant configuration. See the [Space administration
+runbook](./docs/runbooks/space-administration.md) for creation, policy changes,
+credential rotation, decommissioning, and imgproxy allowlist updates.
 
 Deployment-specific values — custom domains, the imgproxy source allowlist,
 storage credentials, and the OTLP endpoint — are not in this repo. See

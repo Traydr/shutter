@@ -24,6 +24,7 @@ export function registerSpaceRegistryContract(
 
     it("owns the active Space lifecycle and generation", async () => {
       await expect(registry.createSpace(contractPolicy)).resolves.toMatchObject({ generation: 1 });
+      await expect(registry.getGeneration()).resolves.toMatchObject({ generation: 1 });
       await expect(registry.getActiveSpacePolicy(contractPolicy.id)).resolves.toEqual(
         contractPolicy,
       );
@@ -57,6 +58,25 @@ export function registerSpaceRegistryContract(
       expect(
         (await registry.loadEdgeSnapshot()).capabilityKeys.get(contractPolicy.id)?.has("key-1"),
       ).toBe(false);
+    });
+
+    it("retains authorization policy for work accepted before decommissioning", async () => {
+      await registry.createSpace(contractPolicy);
+      await registry.addCapabilityKey(
+        contractPolicy.id,
+        "key-1",
+        Uint8Array.from({ length: 32 }, (_, index) => index),
+      );
+      await registry.decommissionSpace(contractPolicy.id);
+      await expect(
+        registry.getActiveSpaceAuthorization(contractPolicy.id),
+      ).resolves.toBeUndefined();
+      await expect(registry.getSpaceAuthorization(contractPolicy.id)).resolves.toMatchObject({
+        policy: contractPolicy,
+      });
+      expect(
+        (await registry.getSpaceAuthorization(contractPolicy.id))?.capabilityKeys.get("key-1"),
+      ).toHaveLength(32);
     });
   });
 }
