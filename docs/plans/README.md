@@ -37,8 +37,10 @@ Shutter code or paste Space policy JSON into Cloudflare.
   uses a new Space and a new identifier.
 - Control reads Postgres on each Space-scoped request. It has no policy cache in
   the first version.
-- Edge fetches one atomic configuration snapshot from Control and keeps it for
-  at most 60 seconds in each isolate. Workers KV is not required.
+- Edge fetches one atomic configuration snapshot from Control and refreshes it
+  every 60 seconds in each isolate. If Control does not answer, Edge continues
+  with the last valid snapshot for up to 10 minutes and then returns `503`.
+  Workers KV is not required.
 - `ADMIN_BOOTSTRAP_TOKEN` and other deployment values stay `preserve()`d in
   Railway IaC until plan 04.
 - Capability-key rotation is manual. Add the new key to Shutter, update the

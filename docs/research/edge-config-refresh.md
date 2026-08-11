@@ -8,22 +8,38 @@ keys from Control at request time.
 Workers KV is **not required**. Keep one parsed, immutable configuration
 snapshot in module scope in each Worker isolate and treat it as an opportunistic
 cache, not durable state. Refresh it from an authenticated Control endpoint on
-demand, with a 60-second hard lifetime.
+demand.
 
-Use a soft refresh point before the hard expiry, for example:
+Use two separate values. The refresh interval controls how quickly an
+intentional change reaches Edge. The failure tolerance controls how long Edge
+continues when Control does not answer.
 
 - From 0 through 45 seconds, use the snapshot.
 - From 45 through 60 seconds, use the still-valid snapshot and start one
   background refresh for that isolate.
 - At 60 seconds, or on a cold isolate, wait for a refresh before authorizing the
-  request. If it does not produce a valid snapshot, return `503`.
+  request.
+- If the refresh fails, continue with the last valid snapshot for up to 10
+  minutes after Control generated it, and try the refresh again on each request.
+- After 10 minutes with no valid snapshot, return `503`.
 
-This is strict fail-closed behavior. It bounds use of removed origins, policies,
-or verification keys to at most 60 seconds, but it also means that a Control
-outage longer than the lifetime eventually stops Space-scoped Edge traffic. An
-explicit stale grace period could trade revocation latency for availability; an
-unbounded stale-while-revalidate fallback cannot honestly be called strict
-fail-closed.
+This is bounded fail-closed behavior. A change reaches Edge in 60 seconds or
+less in normal operation. Use of a removed origin, policy, or verification key
+is limited to 10 minutes, and only when Control is unavailable.
+
+A 60-second failure tolerance was the first proposal. It was rejected because
+Edge answers most requests without Control: an edge-cache hit and an R2 hit both
+return with no origin call. A 60-second tolerance would stop those cached
+responses about one minute after a Control outage starts, although they do not
+need Control. The 10-minute value keeps a bound on stale configuration and keeps
+cached delivery available through a short Control outage.
+
+An unbounded stale-while-revalidate fallback is a different choice. It cannot
+honestly be called fail-closed, and it is not used here.
+
+For an immediate removal, disable the key or Space in Control and deploy the
+Worker. A deployment starts new isolates, and each new isolate pulls a new
+snapshot.
 
 ## Why isolate memory is sufficient
 
@@ -109,7 +125,7 @@ refresh outcome, and an allowlisted failure code.
 
 | Storage | Assessment |
 | --- | --- |
-| Isolate memory | Recommended. Fast, transient, and sufficient for a 60-second best-effort cache. It is duplicated per isolate and disappears on eviction, which the cold-refresh path must already handle. |
+| Isolate memory | Recommended. Fast, transient, and sufficient for a best-effort cache with a 60-second refresh interval. It is duplicated per isolate and disappears on eviction, which the cold-refresh path must already handle. |
 | Cache API | Do not use for capability keys. It is an HTTP response cache local to one data center, does not replicate or use Tiered Cache, and local deletion does not purge other data centers. Persisting the key response would also require overriding the `no-store` treatment Cloudflare recommends for secret assets. It offers little origin-load benefit over isolate memory while leaving secret-bearing response objects in distributed caches. |
 | Workers KV | Technically capable but unnecessary. KV encrypts values at rest and in transit and is intended for read-heavy configuration. It is nevertheless persistent, globally distributed secret storage with an additional API/operator surface. Reads are eventually consistent: updates can take 60 seconds or more to appear in other locations, including cached negative reads. Using KV would therefore not give a stronger 60-second revocation bound. |
 | Durable Object | Could coordinate a globally named snapshot with stronger consistency, but adds a stateful service and a network hop. Consider it only if measured per-isolate refresh traffic becomes a real Control load problem. |
@@ -157,8 +173,9 @@ Source: [Workers limits](https://developers.cloudflare.com/workers/platform/limi
 | --- | --- |
 | Valid snapshot younger than 60 seconds | Use it. A failed soft refresh does not fail the current request. |
 | Cold isolate or snapshot at least 60 seconds old | Await one refresh for that isolate. |
-| Fetch timeout, network error, non-success status, oversized body, invalid schema/key, or inconsistent generation | Do not install it. Use the previous snapshot only if it is still younger than 60 seconds; otherwise return `503` with `Cache-Control: private, no-store`. |
-| Valid snapshot does not contain the requested Space | Return `404`. This is different from registry unavailability. |
+| Fetch timeout, network error, non-success status, oversized body, invalid schema/key, or inconsistent generation | Do not install it. Use the previous snapshot if it is still younger than 10 minutes, and try again on the next request. |
+| No valid snapshot younger than 10 minutes | Return `503` with `Cache-Control: private, no-store`. |
+| Snapshot younger than 10 minutes does not contain the requested Space | Return `404`. This is different from registry unavailability. |
 | Valid snapshot exists but capability validation fails | Preserve the existing protocol-specific `403` behavior. |
 
 The live value should be replaced only after the entire candidate has validated.

@@ -84,10 +84,21 @@ requests worldwide.
 - From 45 through 60 seconds, use it and start one background refresh for that
   isolate with `ctx.waitUntil()`.
 - At 60 seconds, or on a cold isolate, wait for Control before authorization.
-- If refresh fails and no snapshot younger than 60 seconds exists, return
-  `503` with `Cache-Control: private, no-store`.
-- Return `404` only when a fresh valid snapshot confirms that the Space is
-  absent.
+- If the refresh fails, continue with the last valid snapshot for up to 10
+  minutes after Control generated it. Try the refresh again on each request.
+- After 10 minutes with no valid snapshot, return `503` with
+  `Cache-Control: private, no-store`.
+- Return `404` only when a snapshot inside the 10-minute window confirms that
+  the Space is absent.
+
+The refresh interval and the failure tolerance are separate values. The 60-second
+interval controls how quickly an intentional change reaches Edge. The 10-minute
+tolerance controls how long Edge continues when Control does not answer.
+
+This distinction is necessary because Edge serves most requests without Control.
+An edge-cache hit and an R2 hit both return from `deliverRendition` with no
+origin call. A short failure tolerance would stop those cached responses during
+a Control outage, although they do not need Control.
 
 Each cold isolate can call Control independently. Duplicate refreshes are safe.
 Use a plain-data single-flight promise only as an isolate-local optimization,
@@ -113,11 +124,27 @@ Use one short, explicit maintenance window:
 4. Deploy Control, Executors, and Edge with the new registry path.
 5. Confirm one old capability, one API token, one public route, and one private
    route.
-6. End maintenance mode and remove the old environment values.
+6. End maintenance mode. Remove the old Control environment values, but keep the
+   Cloudflare values for the rollback path below.
 
 Do not ship a fallback to the checked-in registry. The import utility is a
 cutover tool, not a permanent operator interface. Remove it after the cutover
 or keep it outside runtime packages as a tested one-shot migration artifact.
+
+Keep a rollback path for some days after the cutover. The cutover changes the
+data source and the Edge configuration mechanism at the same time. A rollback
+path lets you undo the Edge change alone.
+
+1. Keep the current `SPACE_POLICIES` and `CAPABILITY_KEYS` values in Cloudflare.
+   Do not delete them in step 6.
+2. Keep the previous Worker version available to deploy.
+3. If the Edge refresh fails after the cutover, deploy the previous Worker
+   version. Edge then reads its environment values again, and Postgres stays the
+   source for Control.
+4. Delete the Cloudflare values after the new refresh path is stable.
+
+This rollback covers Edge only. Control, the Executors, and the database keep
+the new registry.
 
 ### 7. Delete tenant configuration from the repository
 
@@ -144,8 +171,10 @@ Record the three ownership classes:
 - Deployment configuration belongs in Railway and Cloudflare settings.
 - Protocol invariants belong in versioned code and contracts.
 
-Add an ADR for the database-backed Space registry and the strict 60-second Edge
-snapshot rule. Keep script cleanup in plan 04.
+Add an ADR for the database-backed Space registry and the Edge snapshot rule.
+The ADR must record both values and the reason for the difference: a 60-second
+refresh interval, and a 10-minute failure tolerance that keeps cached delivery
+available through a short Control outage. Keep script cleanup in plan 04.
 
 ## Verification
 
@@ -153,7 +182,8 @@ Run `pnpm check`, then test:
 
 - Postgres unavailable versus Space absent (`503` versus `404`);
 - cold Edge isolates and several independent isolates;
-- concurrent refresh, soft refresh, hard expiry, and isolate eviction;
+- concurrent refresh, soft refresh, the 10-minute grace period, expiry after the
+  grace period, and isolate eviction;
 - invalid, oversized, timed-out, or mismatched snapshots;
 - an API token and capability issued before cutover;
 - public and private end-to-end requests; and
@@ -165,3 +195,10 @@ Import correctness is the main cutover risk. A wrong capability key breaks
 private URLs that are still valid. The Edge snapshot also contains every
 capability key, so its endpoint credential, response, and logs need strict
 treatment.
+
+The 10-minute failure tolerance has a cost. If Control does not answer, Edge can
+use a removed origin, policy, or capability key for up to 10 minutes. This
+applies only when Control is unavailable. In normal operation, a change reaches
+Edge in 60 seconds or less. To remove a compromised key immediately, disable it
+in Control and deploy the Worker. A deployment starts new isolates, and each new
+isolate pulls a new snapshot.
