@@ -9,6 +9,7 @@ import {
 
 export const OPERATIONAL_EVENT_NAMES = [
   "edge.rendition",
+  "edge.source_delivery",
   "edge.failure",
   "control.job.submitted",
   "control.dispatch.failed",
@@ -38,6 +39,16 @@ export type OperationalEventName = (typeof OPERATIONAL_EVENT_NAMES)[number];
 export interface OperationalEventFields {
   routeClass?: RouteClass;
   cacheOutcome?: "edge-hit" | "r2-hit" | "origin";
+  mediaClass?: "image" | "video" | "pdf";
+  byteRangeOutcome?: "none" | "edge-hit" | "origin" | "unsatisfied";
+  originFetchResult?:
+    | "not-requested"
+    | "complete"
+    | "partial"
+    | "not-modified"
+    | "unsatisfied"
+    | "rejected"
+    | "failed";
   kind?: RenditionKind;
   executionCycle?: number;
   attemptNumber?: number;
@@ -111,6 +122,17 @@ const FIELD_SANITIZERS = {
   processingTokenHash: matching(HASH),
   routeClass: oneOf("public", "private"),
   cacheOutcome: oneOf("edge-hit", "r2-hit", "origin"),
+  mediaClass: oneOf("image", "video", "pdf"),
+  byteRangeOutcome: oneOf("none", "edge-hit", "origin", "unsatisfied"),
+  originFetchResult: oneOf(
+    "not-requested",
+    "complete",
+    "partial",
+    "not-modified",
+    "unsatisfied",
+    "rejected",
+    "failed",
+  ),
   kind: oneOf("video", "pdf"),
   executionCycle: (value) => (isNonNegativeInteger(value) ? value : undefined),
   attemptNumber: (value) => (isNonNegativeInteger(value) ? value : undefined),

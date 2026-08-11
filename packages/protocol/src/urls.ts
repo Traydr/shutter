@@ -32,6 +32,26 @@ export function buildPublicLocatedSourceUrl(
   return `/v1/public/${segment(spaceId)}/located/${segment(sourceId)}/${segment(capability)}?${renditionQuery(parameters)}`;
 }
 
+export function buildPublicResolverDeliveryUrl(
+  spaceId: string,
+  resolverId: string,
+  sourceRef: string,
+): string {
+  return `/v1/public/${segment(spaceId)}/delivery/resolver/${segment(resolverId)}/${segment(sourceRef)}`;
+}
+
+export function buildPublicLocatedDeliveryUrl(
+  spaceId: string,
+  sourceId: string,
+  capability: string,
+): string {
+  return `/v1/public/${segment(spaceId)}/delivery/located/${segment(sourceId)}/${segment(capability)}`;
+}
+
+export function buildPrivateDeliveryUrl(spaceId: string, capability: string): string {
+  return `/v1/private/${segment(spaceId)}/delivery/${segment(capability)}`;
+}
+
 export function buildPublicMasterUrl(
   spaceId: string,
   kind: RenditionKind,

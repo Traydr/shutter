@@ -12,6 +12,12 @@ export interface RenditionCacheIdentity {
   quality: number;
 }
 
+export interface SourceDeliveryCacheIdentity {
+  routeClass: RouteClass;
+  spaceId: string;
+  sourceId: string;
+}
+
 export async function sourceFingerprint(spaceId: string, sourceId: string): Promise<string> {
   const framed = frameStrings([PROTOCOL_VERSION, spaceId, sourceId]);
   const digest = await crypto.subtle.digest("SHA-256", framed);
@@ -57,4 +63,14 @@ export async function buildSourceCacheTag(spaceId: string, sourceId: string): Pr
 export async function buildCanonicalCacheUrl(identity: RenditionCacheIdentity): Promise<string> {
   const key = await buildR2CacheKey(identity);
   return new URL(`/${key}`, "https://cache.shutter.invalid").toString();
+}
+
+export async function buildSourceDeliveryCacheUrl(
+  identity: SourceDeliveryCacheIdentity,
+): Promise<string> {
+  const fingerprint = await sourceFingerprint(identity.spaceId, identity.sourceId);
+  return new URL(
+    `/source/v1/${identity.routeClass}/${encodeURIComponent(identity.spaceId)}/${fingerprint}`,
+    "https://cache.shutter.invalid",
+  ).toString();
 }

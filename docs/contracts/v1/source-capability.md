@@ -18,7 +18,7 @@ never reuse an IV with the same key.
 type CommonClaims = {
   space_id: string;
   source_id: string;
-  purpose: "image_source" | "master_preview" | "preview_job";
+  purpose: "image_source" | "source_delivery" | "master_preview" | "preview_job";
   iat: number;
   exp: number;
 };
@@ -33,6 +33,11 @@ purpose mismatch, and claims outside configured size limits.
 ```ts
 type ImageSourceClaims = CommonClaims & {
   purpose: "image_source";
+  locator: string;
+};
+
+type SourceDeliveryClaims = CommonClaims & {
+  purpose: "source_delivery";
   locator: string;
 };
 
@@ -53,8 +58,9 @@ allowlist and global source-safety rules. `master_preview` never contains an
 original locator. Rendition width and quality are outside every capability and
 are constrained by the Space Rendition Policy.
 
-The three purposes are non-interchangeable. A route validates purpose before
+The four purposes are non-interchangeable. A route validates purpose before
 performing a cache lookup, R2 read, job mutation, or source fetch. The sole
-exception is the intentionally public located-source route: it checks public
-edge and R2 cache entries first, then decrypts and validates `image_source` only
-if it must fetch the application-owned original.
+exception is the intentionally public located Image Optimization route: it
+checks public edge and R2 cache entries first, then decrypts and validates
+`image_source` only if it must fetch the application-owned original. Public
+located Source Delivery validates `source_delivery` before its cache lookup.

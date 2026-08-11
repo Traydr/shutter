@@ -3,14 +3,18 @@ import {
   buildMasterPreviewKey,
   buildMasterPurgePrefix,
   buildPreviewJobUrl,
+  buildPrivateDeliveryUrl,
   buildPrivateMasterUrl,
   buildPrivateSourceUrl,
+  buildPublicLocatedDeliveryUrl,
   buildPublicLocatedSourceUrl,
   buildPublicMasterUrl,
+  buildPublicResolverDeliveryUrl,
   buildPublicResolverUrl,
   buildR2CacheKey,
   buildR2CachePurgePrefix,
   buildSourceCacheTag,
+  buildSourceDeliveryCacheUrl,
   buildSourcePurgeUrl,
   sourceFingerprint,
   verifySourceCapability,
@@ -21,6 +25,7 @@ import {
   CACHE_IDENTITY_EXPECTED,
   CACHE_IDENTITY_FIXTURE,
   runCapabilityConformance,
+  SOURCE_DELIVERY_CACHE_IDENTITY_FIXTURE,
   URL_FIXTURES,
 } from "./index.js";
 
@@ -40,11 +45,20 @@ describe("Node protocol conformance", () => {
     expect(
       buildPublicLocatedSourceUrl("example-public", "source/one", "capability.token", rendition),
     ).toBe(URL_FIXTURES.publicLocated);
+    expect(
+      buildPublicResolverDeliveryUrl("example-public", "uploadthing", "project/file one"),
+    ).toBe(URL_FIXTURES.publicResolverDelivery);
+    expect(buildPublicLocatedDeliveryUrl("example-public", "source/one", "capability.token")).toBe(
+      URL_FIXTURES.publicLocatedDelivery,
+    );
     expect(buildPublicMasterUrl("example-public", "video", "source/one", rendition)).toBe(
       URL_FIXTURES.publicMaster,
     );
     expect(buildPrivateSourceUrl("example-private", "capability.token", rendition)).toBe(
       URL_FIXTURES.privateSource,
+    );
+    expect(buildPrivateDeliveryUrl("example-private", "capability.token")).toBe(
+      URL_FIXTURES.privateDelivery,
     );
     expect(buildPrivateMasterUrl("example-private", "capability.token", rendition)).toBe(
       URL_FIXTURES.privateMaster,
@@ -84,6 +98,9 @@ describe("Node protocol conformance", () => {
     ).resolves.toBe(CACHE_IDENTITY_EXPECTED.cacheTag);
     await expect(buildCanonicalCacheUrl(CACHE_IDENTITY_FIXTURE)).resolves.toBe(
       CACHE_IDENTITY_EXPECTED.canonicalUrl,
+    );
+    await expect(buildSourceDeliveryCacheUrl(SOURCE_DELIVERY_CACHE_IDENTITY_FIXTURE)).resolves.toBe(
+      CACHE_IDENTITY_EXPECTED.sourceDeliveryUrl,
     );
   });
 });

@@ -144,13 +144,14 @@ permit them to claim only their own job kind; they are neither capability
 issuers nor long-term capability-key holders.
 
 V1 Source Capabilities are a strict discriminated union. `image_source`
-authorizes Image Optimization of an application-owned original and includes its
-Source Locator. `master_preview` authorizes delivery and resizing of an existing
-video or PDF Master Preview, binds its kind, and contains no original locator.
+authorizes Image Optimization of an application-owned original.
+`source_delivery` authorizes unchanged Source Delivery. Both include a Source
+Locator. `master_preview` authorizes delivery and resizing of an existing video
+or PDF Master Preview, binds its kind, and contains no original locator.
 `preview_job` authorizes materialization of one video or PDF kind and includes
 the original locator. A route accepts only its designated purpose; capabilities
-cannot be exchanged between image delivery, stored-preview delivery, and job
-submission.
+cannot be exchanged between Source Delivery, Image Optimization, stored-preview
+delivery, and job submission.
 
 ## Space configuration
 
@@ -189,10 +190,12 @@ parser rules remain protocol invariants in code and contracts.
 
 ## Storage
 
-Source Objects remain in application-owned storage. Shutter does not proxy or
+Source Objects remain in application-owned storage. Shutter does not accept or
 coordinate uploads, store source Bucket credentials, or copy originals into its
-own storage. A Rendition Job may retain the source reference and output metadata
-needed for execution, but those operational records do not form a media catalog.
+Rendition Store. Source Delivery can stream an allowlisted Source Object through
+the Worker and keep a complete object in the ephemeral Cloudflare cache. A
+Rendition Job may retain the source reference and output metadata needed for
+execution, but those operational records do not form a media catalog.
 
 Every source request separates an immutable application-issued Source ID from a
 replaceable Source Locator. The Source ID drives cache keys, job idempotency,
@@ -206,7 +209,15 @@ location and fails closed when no project allowlist exists. Private Railway or
 R2 objects use encrypted Source Capabilities that bind the Source ID to a
 presigned HTTPS locator. Shutter accepts no arbitrary unsigned source URL.
 
-Shutter owns a separate Rendition Store containing only generated or cached
+Source Delivery and Image Optimization are sibling v1 routes. Source Delivery
+supports only `GET` and `HEAD` and accepts no transformation query. It allows a
+small set of image, video, and PDF content types and forwards only bounded media
+metadata, range metadata, validators, and modification dates. A complete object
+with a valid length of at most 512 MB can use the Cloudflare Cache API. Warm
+range and conditional requests use that complete entry. Cold ranges and larger
+objects stream from the origin and do not enter R2.
+
+Shutter owns a separate Rendition Store containing only generated Rendition
 bytes. Object keys are deterministic from the Shutter Space, Source ID,
 rendition kind, and normalized parameters. Applications retain the
 meaningful relationship between their media records and returned Rendition

@@ -39,7 +39,7 @@ describe("Source Purge", () => {
     });
   }
 
-  it("deletes every paginated prefix before purging Worker and zone cache tags", async () => {
+  it("deletes Renditions and purges the shared Source Delivery cache tag", async () => {
     const identity = { spaceId: "example-private", sourceId: "source/one", kind: "video" as const };
     await lifecycle.submit(
       {

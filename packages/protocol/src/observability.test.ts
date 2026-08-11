@@ -45,4 +45,33 @@ describe("operational events", () => {
       httpRoute: "/v1/spaces/:spaceId/sources/:sourceId/previews/:kind",
     });
   });
+
+  it("keeps Source Delivery measurements bounded and redacted", async () => {
+    const event = await operationalEvent({
+      event: "edge.source_delivery",
+      spaceId: "example-private",
+      sourceId: "raw-source-id",
+      fields: {
+        routeClass: "private",
+        cacheOutcome: "edge-hit",
+        mediaClass: "video",
+        byteRangeOutcome: "edge-hit",
+        originFetchResult: "not-requested",
+        locator: "https://secret.example/source.mp4?signature=secret",
+        range: "bytes=123-456",
+      } as never,
+    });
+
+    expect(event).toMatchObject({
+      event: "edge.source_delivery",
+      routeClass: "private",
+      cacheOutcome: "edge-hit",
+      mediaClass: "video",
+      byteRangeOutcome: "edge-hit",
+      originFetchResult: "not-requested",
+    });
+    expect(JSON.stringify(event)).not.toContain("raw-source-id");
+    expect(JSON.stringify(event)).not.toContain("secret.example");
+    expect(JSON.stringify(event)).not.toContain("bytes=123-456");
+  });
 });
