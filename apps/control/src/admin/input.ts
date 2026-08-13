@@ -1,4 +1,5 @@
 import {
+  normalizeSourceOriginPathPrefix,
   parseSpacePolicy,
   type SourceOriginRule,
   type SourceResolverPolicy,
@@ -35,8 +36,8 @@ function origins(form: FormData): readonly SourceOriginRule[] {
     .map((line) => {
       const url = new URL(line);
       if (url.search !== "" || url.hash !== "") throw new AdminInputError();
-      const pathPrefix = url.pathname === "/" ? undefined : url.pathname.replace(/\/+$/u, "");
-      return { origin: url.origin, ...(pathPrefix === undefined ? {} : { pathPrefix }) };
+      const pathPrefix = normalizeSourceOriginPathPrefix(url.pathname);
+      return { origin: url.origin, ...(pathPrefix === "/" ? {} : { pathPrefix }) };
     });
 }
 

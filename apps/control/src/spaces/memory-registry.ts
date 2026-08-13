@@ -2,10 +2,12 @@ import { parseSpacePolicy, type SpacePolicy } from "@shutter/protocol";
 import {
   apiTokenDisplayPrefix,
   apiTokenHash,
-  apiTokenMatches,
+  apiTokenHashMatches,
   createApiToken,
   createCapabilityKey,
   encodeCapabilityKey,
+  isWellFormedApiToken,
+  validateApiToken,
   validateCapabilityKeyId,
 } from "./credentials.js";
 import type {
@@ -21,6 +23,7 @@ import type {
   SpaceRecord,
   SpaceRegistry,
   SpaceRegistryTransaction,
+  SpaceRequestAuthorization,
 } from "./registry.js";
 import { SpaceRegistryError } from "./registry.js";
 
@@ -155,6 +158,18 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     return capabilityKeys;
   }
 
+  async authorizeSpaceRequest(
+    spaceId: string,
+    token: string | undefined,
+  ): Promise<SpaceRequestAuthorization> {
+    const authorization = await this.getActiveSpaceAuthorization(spaceId);
+    if (authorization === undefined) return { outcome: "missing" };
+    if (token === undefined || !(await this.verifyApiToken(spaceId, token))) {
+      return { outcome: "unauthorized" };
+    }
+    return { outcome: "authorized", ...authorization };
+  }
+
   async listSpaces(): Promise<readonly SpaceRecord[]> {
     return [...this.#spaces.values()].map(copySpace);
   }
@@ -233,6 +248,7 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     if (label.trim().length === 0 || label.length > 128) {
       throw new SpaceRegistryError("invalid", "an API token label is required");
     }
+    if (suppliedToken !== undefined) validateApiToken(suppliedToken);
     const token = suppliedToken ?? createApiToken();
     const hash = apiTokenHash(token);
     if ([...this.#tokens.values()].flat().some((candidate) => candidate.hash === hash)) {
@@ -251,15 +267,11 @@ export class MemorySpaceRegistry implements SpaceRegistry {
 
   async verifyApiToken(spaceId: string, token: string): Promise<boolean> {
     if ((await this.getActiveSpacePolicy(spaceId)) === undefined) return false;
-    let match: StoredApiToken | undefined;
-    try {
-      match = (this.#tokens.get(spaceId) ?? []).find(
-        (candidate) => candidate.revokedAt === undefined && apiTokenMatches(token, candidate.hash),
-      );
-    } catch (error) {
-      if (error instanceof SpaceRegistryError && error.code === "invalid") return false;
-      throw error;
-    }
+    if (!isWellFormedApiToken(token)) return false;
+    const hash = apiTokenHash(token);
+    const match = (this.#tokens.get(spaceId) ?? []).find(
+      (candidate) => candidate.revokedAt === undefined && apiTokenHashMatches(hash, candidate.hash),
+    );
     if (match === undefined) return false;
     match.lastUsedAt = this.#now();
     return true;
@@ -274,7 +286,7 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     spaceId: string,
     tokenId: number,
   ): Promise<RegistryMutation<ApiTokenSummary>> {
-    this.#activeSpace(spaceId);
+    this.#space(spaceId);
     const token = (this.#tokens.get(spaceId) ?? []).find((candidate) => candidate.id === tokenId);
     if (token === undefined)
       throw new SpaceRegistryError("not_found", "the API token does not exist");
@@ -313,7 +325,7 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     spaceId: string,
     keyId: string,
   ): Promise<RegistryMutation<CapabilityKeySummary>> {
-    this.#activeSpace(spaceId);
+    this.#space(spaceId);
     const key = (this.#keys.get(spaceId) ?? []).find((candidate) => candidate.keyId === keyId);
     if (key === undefined) {
       throw new SpaceRegistryError("not_found", "the Capability Key does not exist");

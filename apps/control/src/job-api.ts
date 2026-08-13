@@ -67,13 +67,33 @@ function identityFromRoute(context: {
   };
 }
 
-async function authorizedSpace(
+/**
+ * The Space authorization ladder for application-facing routes: 404 only after
+ * a successful query confirms no active Space, 401 for a bad or missing API
+ * token, 503 when the registry itself failed. One resolved registry call per
+ * request; every route consumes the same closed union.
+ */
+async function spaceAccess(
   runtime: JobApiRuntime,
   spaceId: string,
-  authorization: string | undefined,
-): Promise<boolean> {
-  const token = bearer(authorization);
-  return token === undefined ? false : runtime.spaceRegistry.verifyApiToken(spaceId, token);
+  authorizationHeader: string | undefined,
+): Promise<{ response: Response } | { authorization: ActiveSpaceAuthorization }> {
+  try {
+    const result = await runtime.spaceRegistry.authorizeSpaceRequest(
+      spaceId,
+      bearer(authorizationHeader),
+    );
+    switch (result.outcome) {
+      case "missing":
+        return { response: requestFailure(404, "not_found") };
+      case "unauthorized":
+        return { response: requestFailure(401, "unauthorized") };
+      case "authorized":
+        return { authorization: { policy: result.policy, capabilityKeys: result.capabilityKeys } };
+    }
+  } catch {
+    return { response: requestFailure(503, "service_unavailable") };
+  }
 }
 
 function activeResponse(body: RenditionJobRepresentation, location: string): Response {
@@ -104,16 +124,8 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
   api.post(CONTROL_HTTP_ROUTES.sourcePurge, async (context) => {
     const spaceId = context.req.param("spaceId");
     const sourceId = context.req.param("sourceId");
-    try {
-      if ((await runtime.spaceRegistry.getActiveSpacePolicy(spaceId)) === undefined) {
-        return requestFailure(404, "not_found");
-      }
-      if (!(await authorizedSpace(runtime, spaceId, context.req.header("authorization")))) {
-        return requestFailure(401, "unauthorized");
-      }
-    } catch {
-      return requestFailure(503, "service_unavailable");
-    }
+    const access = await spaceAccess(runtime, spaceId, context.req.header("authorization"));
+    if ("response" in access) return access.response;
     const sourcePurge = runtime.sourcePurge;
     if (sourcePurge === undefined) return requestFailure(503, "service_unavailable");
     try {
@@ -127,16 +139,14 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
   api.put(CONTROL_HTTP_ROUTES.previewJob, async (context) => {
     const identity = identityFromRoute(context);
     if (identity === undefined) return requestFailure(404, "not_found");
+    const access = await spaceAccess(
+      runtime,
+      identity.spaceId,
+      context.req.header("authorization"),
+    );
+    if ("response" in access) return access.response;
+    const authorization = access.authorization;
     try {
-      const authorization = await runtime.spaceRegistry.getActiveSpaceAuthorization(
-        identity.spaceId,
-      );
-      if (authorization === undefined) return requestFailure(404, "not_found");
-      if (
-        !(await authorizedSpace(runtime, identity.spaceId, context.req.header("authorization")))
-      ) {
-        return requestFailure(401, "unauthorized");
-      }
       const submission = parsePreviewJobSubmission(await strictJson(context.req.raw));
       const now = runtime.now();
       const claims = await verifySourceCapability(submission.sourceCapability, {
@@ -197,18 +207,12 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
   api.get(CONTROL_HTTP_ROUTES.previewJob, async (context) => {
     const identity = identityFromRoute(context);
     if (identity === undefined) return requestFailure(404, "not_found");
-    try {
-      if ((await runtime.spaceRegistry.getActiveSpacePolicy(identity.spaceId)) === undefined) {
-        return requestFailure(404, "not_found");
-      }
-      if (
-        !(await authorizedSpace(runtime, identity.spaceId, context.req.header("authorization")))
-      ) {
-        return requestFailure(401, "unauthorized");
-      }
-    } catch {
-      return requestFailure(503, "service_unavailable");
-    }
+    const access = await spaceAccess(
+      runtime,
+      identity.spaceId,
+      context.req.header("authorization"),
+    );
+    if ("response" in access) return access.response;
     const record = await runtime.lifecycle.read(identity);
     if (record === undefined) return requestFailure(404, "not_found");
     return activeResponse(record.representation, new URL(context.req.url).pathname);

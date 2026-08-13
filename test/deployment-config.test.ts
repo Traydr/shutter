@@ -9,7 +9,7 @@ import {
   parseRailwayTarget,
 } from "../.railway/deployment-input.ts";
 import { buildRailwayProject } from "../.railway/railway.ts";
-import { createEdgeDeploymentConfig } from "../scripts/deployment-config.mjs";
+import { createEdgeDeploymentConfig } from "../scripts/deployment-config.ts";
 
 const commonEnvironment = {
   SHUTTER_PROJECT_NAME: "example-shutter",
@@ -32,13 +32,25 @@ function graphFor(environment: Record<string, string>) {
 
 function service(graph: ReturnType<typeof graphFor>, name: string) {
   const resource = graph.resources.find((entry) => entry.type === "service" && entry.name === name);
-  if (resource?.type !== "service") throw new Error(`Missing service ${name}`);
-  return resource;
+  if (
+    resource?.type !== "service" ||
+    !resource.variables ||
+    !resource.source ||
+    !resource.networking
+  ) {
+    throw new Error(`Missing service ${name}`);
+  }
+  return {
+    ...resource,
+    variables: resource.variables,
+    source: resource.source,
+    networking: resource.networking,
+  };
 }
 
 describe("deployment configuration", () => {
-  it("builds a fresh topology without preserved or imported values", () => {
-    const graph = graphFor({ ...commonEnvironment, SHUTTER_DEPLOYMENT_MODE: "fresh" });
+  it("builds an unseeded topology without preserved values", () => {
+    const graph = graphFor({ ...commonEnvironment });
     const control = service(graph, "Shutter-Control");
     const imgproxy = service(graph, "Shutter-Imgproxy");
 
@@ -58,12 +70,20 @@ describe("deployment configuration", () => {
       type: "literal",
       value: commonEnvironment.SHUTTER_IMGPROXY_ALLOWED_SOURCES,
     });
+    expect(control.variables.CLOUDFLARE_ZONE_ID).toMatchObject({
+      type: "literal",
+      value: "example-zone-id",
+    });
+    expect(control.variables.EDGE_BASE_URL).toMatchObject({
+      type: "literal",
+      value: "https://media.example.com",
+    });
   });
 
-  it("preserves unknown values and retains the named volume for an imported project", () => {
+  it("preserves only credentials once seeded, and declares the known volume", () => {
     const graph = graphFor({
       ...commonEnvironment,
-      SHUTTER_DEPLOYMENT_MODE: "imported",
+      SHUTTER_SECRETS_SEEDED: "true",
       SHUTTER_JOBS_VOLUME_NAME: "existing-jobs-volume",
     });
     const control = service(graph, "Shutter-Control");
@@ -75,21 +95,49 @@ describe("deployment configuration", () => {
       ),
     ).toBe(true);
     expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toEqual({ type: "preserve" });
-    expect(control.variables.S3_BUCKET).toEqual({ type: "preserve" });
-    expect(imgproxy.variables.IMGPROXY_ALLOWED_SOURCES).toEqual({ type: "preserve" });
+    expect(control.variables.SHUTTER_ENCRYPTION_KEY).toEqual({ type: "preserve" });
+    expect(control.variables.S3_ACCESS_KEY_ID).toEqual({ type: "preserve" });
+    // Non-secret values stay literals: changing the input must change the plan
+    // even after bootstrap, or Source purge targets a dead host.
+    expect(control.variables.S3_BUCKET).toMatchObject({
+      type: "literal",
+      value: "example-renditions",
+    });
+    expect(control.variables.EDGE_BASE_URL).toMatchObject({
+      type: "literal",
+      value: "https://media.example.com",
+    });
+    expect(control.variables.CLOUDFLARE_ZONE_ID).toMatchObject({
+      type: "literal",
+      value: "example-zone-id",
+    });
+    expect(imgproxy.variables.IMGPROXY_ALLOWED_SOURCES).toMatchObject({
+      type: "literal",
+      value: commonEnvironment.SHUTTER_IMGPROXY_ALLOWED_SOURCES,
+    });
   });
 
-  it("rejects ambiguous modes and imported projects without a volume", () => {
+  it("declares the volume for an unseeded project as soon as the name is known", () => {
+    const graph = graphFor({
+      ...commonEnvironment,
+      SHUTTER_JOBS_VOLUME_NAME: "discovered-jobs-volume",
+    });
+    const control = service(graph, "Shutter-Control");
+    expect(
+      graph.resources.some(
+        (entry) => entry.type === "volume" && entry.name === "discovered-jobs-volume",
+      ),
+    ).toBe(true);
+    expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toBeUndefined();
+  });
+
+  it("rejects ambiguous seeding state and invalid inputs", () => {
     expect(() =>
-      parseDeploymentInput({ ...commonEnvironment, SHUTTER_DEPLOYMENT_MODE: "existing" }),
-    ).toThrow("must be fresh or imported");
-    expect(() =>
-      parseDeploymentInput({ ...commonEnvironment, SHUTTER_DEPLOYMENT_MODE: "imported" }),
-    ).toThrow("SHUTTER_JOBS_VOLUME_NAME");
+      parseDeploymentInput({ ...commonEnvironment, SHUTTER_SECRETS_SEEDED: "maybe" }),
+    ).toThrow("must be true or false");
     expect(() =>
       parseDeploymentInput({
         ...commonEnvironment,
-        SHUTTER_DEPLOYMENT_MODE: "fresh",
         SHUTTER_R2_BUCKET: "Invalid_Bucket",
       }),
     ).toThrow("3-63 lowercase");
@@ -105,14 +153,14 @@ describe("deployment configuration", () => {
     expect(() => parseDeploymentEnvFile("SHUTTER_FRESH_TOPOLOGY_APPLIED=1\n")).toThrow(
       "Unsupported key",
     );
+    expect(() => parseDeploymentEnvFile("SHUTTER_DEPLOYMENT_MODE=fresh\n")).toThrow(
+      "Unsupported key",
+    );
   });
 
   it("renders owner-specific Worker values only into the ignored deployment config", async () => {
     const base = JSON.parse(await readFile("apps/edge/wrangler.jsonc", "utf8"));
-    const deployed = createEdgeDeploymentConfig(base, {
-      ...commonEnvironment,
-      SHUTTER_DEPLOYMENT_MODE: "fresh",
-    });
+    const deployed = createEdgeDeploymentConfig(base, { ...commonEnvironment });
 
     expect(base.name).toBe("shutter-edge-local");
     expect(base.routes).toBeUndefined();
@@ -125,61 +173,39 @@ describe("deployment configuration", () => {
     expect(deployed.compatibility_flags).toBeUndefined();
   });
 
-  it("models fresh bootstrap phases and the imported ready state", () => {
+  it("models the bootstrap phases", () => {
     const target = {
       SHUTTER_RAILWAY_PROJECT_ID: "3c9a6c56-1119-4167-9e3b-bc7eaee0a8c0",
       SHUTTER_RAILWAY_ENVIRONMENT_ID: "8fdf159b-2d2b-4a7e-83c5-045b5a89dd5d",
     };
-    expect(parseBootstrapState({ ...commonEnvironment, SHUTTER_DEPLOYMENT_MODE: "fresh" })).toEqual(
-      { mode: "fresh", phase: "unlinked" },
-    );
-    expect(
-      parseBootstrapState({
-        ...commonEnvironment,
-        SHUTTER_DEPLOYMENT_MODE: "fresh",
-        ...target,
-      }),
-    ).toEqual({ mode: "fresh", phase: "planned", ...parseRailwayTarget(target) });
-    expect(
-      parseBootstrapState({
-        ...commonEnvironment,
-        SHUTTER_DEPLOYMENT_MODE: "fresh",
-        SHUTTER_JOBS_VOLUME_NAME: "fresh-volume",
-        ...target,
-      }),
-    ).toEqual({
-      mode: "fresh",
-      phase: "provisioned",
-      jobsVolumeName: "fresh-volume",
+    expect(parseBootstrapState({ ...commonEnvironment })).toEqual({ phase: "unlinked" });
+    expect(parseBootstrapState({ ...commonEnvironment, ...target })).toEqual({
+      phase: "linked",
       ...parseRailwayTarget(target),
     });
     expect(
       parseBootstrapState({
         ...commonEnvironment,
-        SHUTTER_DEPLOYMENT_MODE: "imported",
-        SHUTTER_JOBS_VOLUME_NAME: "existing-volume",
+        SHUTTER_JOBS_VOLUME_NAME: "jobs-volume",
         ...target,
       }),
     ).toEqual({
-      mode: "imported",
-      phase: "ready",
-      jobsVolumeName: "existing-volume",
+      phase: "provisioned",
+      jobsVolumeName: "jobs-volume",
       ...parseRailwayTarget(target),
     });
   });
 
-  it("rejects partial or unbound fresh bootstrap state", () => {
+  it("rejects partial or unbound bootstrap state", () => {
     expect(() =>
       parseBootstrapState({
         ...commonEnvironment,
-        SHUTTER_DEPLOYMENT_MODE: "fresh",
         SHUTTER_RAILWAY_PROJECT_ID: "3c9a6c56-1119-4167-9e3b-bc7eaee0a8c0",
       }),
     ).toThrow("incomplete");
     expect(() =>
       parseBootstrapState({
         ...commonEnvironment,
-        SHUTTER_DEPLOYMENT_MODE: "fresh",
         SHUTTER_JOBS_VOLUME_NAME: "unbound-volume",
       }),
     ).toThrow("no Railway target");
@@ -220,7 +246,7 @@ describe("deployment configuration", () => {
       },
     ]);
 
-    const graph = graphFor({ ...commonEnvironment, SHUTTER_DEPLOYMENT_MODE: "fresh" });
+    const graph = graphFor({ ...commonEnvironment });
     const imgproxy = service(graph, "Shutter-Imgproxy");
     expect(imgproxy.source.image).toBe("ghcr.io/imgproxy/imgproxy:v4.0.3");
     for (const guard of [

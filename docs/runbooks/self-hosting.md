@@ -28,25 +28,36 @@ the first read-only plan. Every later plan, apply, and variable write verifies
 or explicitly names that target. The generated Wrangler file names the exact
 Cloudflare account from the R2 endpoint.
 
-## Fresh and imported modes
+## How the wizard tracks progress
 
-Use `fresh` only for an empty Railway project. The first graph omits all
-credentials and lets `postgres()` create its initial volume. Review the output
-of `pnpm deployment:plan`. The wizard pauses while the operator runs
+There is no fresh/imported mode. The wizard records two independent facts in
+the input file and derives everything from them and from live provider state:
+`SHUTTER_JOBS_VOLUME_NAME`, discovered from Railway itself once the Postgres
+volume exists, and `SHUTTER_SECRETS_SEEDED`, written once credential variables
+exist on the providers.
+
+For an empty Railway project, the first graph omits all credentials and lets
+`postgres()` create its initial volume. Review the output of
+`pnpm deployment:plan`. The wizard pauses while the operator runs
 `pnpm deployment:apply` in another terminal. It never performs that apply.
+After that apply, the wizard discovers and records the live volume name, so
+every later plan declares it and can never propose deleting database storage.
+For an existing live project, link it with `pnpm exec railway link` first; the
+wizard then discovers the same facts from the live project.
 
-After the first apply, the wizard generates independent 32-byte credentials
-with OpenSSL. It sends them to Railway with standard input and sends the shared
-Edge credentials to Wrangler with standard input. Provider-issued R2 and Cache
-Purge credentials are read without echo and sent the same way. The wizard does
-not write a credential to the input file or print a value in a plan. It then
-asks before redeploying all four Railway application services so their running
-processes receive the new values.
+The credential stage is idempotent. It reads Shutter-Control's live variables
+first and reuses every value that already exists — it never regenerates a live
+credential, so re-running the wizard cannot rotate `SHUTTER_ENCRYPTION_KEY` or
+any other secret. Only absent values are generated (independent 32-byte
+credentials from OpenSSL) or prompted for (provider-issued R2 and Cache Purge
+credentials, read without echo). Values reach Railway and Wrangler over
+standard input. The wizard does not write a credential to the input file or
+print a value in a plan. It then asks before redeploying all four Railway
+application services so their running processes receive the values.
 
-Use `imported` for an existing live project. Supply the existing Postgres
-volume name. Railway values use `preserve()`, and the wizard does not read,
-generate, or replace credentials. The named volume remains in the desired
-graph so a later plan cannot remove imported database storage.
+`pnpm deployment:apply` refuses to run while live credentials exist but the
+input does not yet record `SHUTTER_SECRETS_SEEDED=true`, so a plan built from
+stale input cannot propose deleting them.
 
 The input shape is documented in
 [`.railway/deployment.example.env`](../../.railway/deployment.example.env). Do

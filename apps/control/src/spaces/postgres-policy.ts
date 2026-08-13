@@ -1,5 +1,6 @@
 import { parseSpacePolicy } from "@shutter/protocol";
 import type { Pool, PoolClient } from "pg";
+import { transaction } from "../db/transaction.js";
 import type { SpaceRecord } from "./registry.js";
 
 interface SpaceRow {
@@ -32,11 +33,28 @@ export interface StoredSpaceRecord {
   value: SpaceRecord;
 }
 
-type Database = Pool | PoolClient;
+export interface LoadSpaceRecordsOptions {
+  activeOnly?: boolean;
+  spaceId?: string;
+}
+
+/**
+ * A policy spans three tables, so reading it from a pool without an enclosing
+ * transaction could observe different snapshots per statement. Pool reads go
+ * through one repeatable-read transaction instead.
+ */
+export async function loadSpaceRecordsFromPool(
+  pool: Pool,
+  options: LoadSpaceRecordsOptions = {},
+): Promise<readonly StoredSpaceRecord[]> {
+  return transaction(pool, (client) => loadSpaceRecords(client, options), {
+    mode: "repeatable read read only",
+  });
+}
 
 export async function loadSpaceRecords(
-  database: Database,
-  options: { activeOnly?: boolean; spaceId?: string } = {},
+  database: PoolClient,
+  options: LoadSpaceRecordsOptions = {},
 ): Promise<readonly StoredSpaceRecord[]> {
   const conditions: string[] = [];
   const parameters: string[] = [];

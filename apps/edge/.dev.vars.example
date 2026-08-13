@@ -9,5 +9,7 @@ EDGE_CONFIG_TOKEN=
 # Shared credential presented to the Railway origin. Must match Control's value.
 ORIGIN_AUTH_TOKEN=
 
-# Shutter Control, which fronts imgproxy and the Rendition Store.
-ORIGIN_BASE_URL=https://control.example.test
+# Shutter Control, which fronts imgproxy and the Rendition Store. Loopback
+# origins may use plain http so a local Worker can read config from a local
+# Control process; anything else must be https.
+ORIGIN_BASE_URL=http://localhost:3000
