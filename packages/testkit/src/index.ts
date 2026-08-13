@@ -2,6 +2,7 @@ import type {
   CapabilityKeyMaterial,
   RenditionCacheIdentity,
   SourceCapabilityClaims,
+  SourceDeliveryCacheIdentity,
   VerifyCapabilityOptions,
 } from "@shutter/protocol";
 
@@ -38,6 +39,20 @@ export const CAPABILITY_FIXTURES: readonly CapabilityFixture[] = Object.freeze([
       "v1.fixture-key-2026-07.AAECAwQFBgcICQoL.PCCla6SGp0TkJbWxk48RFfej9VHdCC8dWwLHqT8ab8dzc8ujxqUwolbNEozv4gdLgSwS7j_2k-sduwhpbZGFgYNZ5EDxuEsAezH1HYD6fItdqOVAHwInSsfMpvxIwIm9-8hpyoYksGq8Jg-KeEURT4lRUpvP50n1Lp4jovDEVCzTJnS2x-3kfHuOPdNevz_sU4yCWEV99mT4OpsD1b2LhPb06mbGlqEfwAbwyu6_9dL6oKtW_tkWgRG6s7NTuF3Hbtg2jPjUy839pXuzVJA",
   }),
   Object.freeze({
+    name: "source delivery",
+    claims: Object.freeze({
+      space_id: "fixture-space",
+      source_id: "delivery-source-01",
+      purpose: "source_delivery",
+      iat: 1_800_000_000,
+      exp: 1_800_003_600,
+      locator: "https://sources.example.test/objects/delivery.mp4?signature=test",
+    }),
+    iv: Uint8Array.from([36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47]),
+    expectedToken:
+      "v1.fixture-key-2026-07.JCUmJygpKissLS4v.iK3QrkItOHZQg0cvN_IvbbfjCc97fqJZuVNLa7OFsRtnifk3wzCn_LEkVVSOpaRLT5zjoAS0xGPCSE0UyIf4D2Ut3trQdSTsfxkGC9xYM-W4aMejBjeQwbtrf_jZivIVnRGjznvEERu9F3Zin-TN5R9MsCHI2yXYqTZWpZEzYzUFuKOeboRApvy13-ucipwMIBg1cidHItN7SH-rue4sH0MzbS5CIRl6rAdXK7ZAMwzjLbSBp3sGT-LY95bEvoApMiWo9HQ90fFFL6A4FughntrCU_YLWu-z",
+  }),
+  Object.freeze({
     name: "master preview",
     claims: Object.freeze({
       space_id: "fixture-space",
@@ -71,8 +86,12 @@ export const CAPABILITY_FIXTURES: readonly CapabilityFixture[] = Object.freeze([
 export const URL_FIXTURES = Object.freeze({
   publicResolver: "/v1/public/example-public/resolver/uploadthing/project%2Ffile%20one?w=640&q=75",
   publicLocated: "/v1/public/example-public/located/source%2Fone/capability.token?w=640&q=75",
+  publicResolverDelivery:
+    "/v1/public/example-public/delivery/resolver/uploadthing/project%2Ffile%20one",
+  publicLocatedDelivery: "/v1/public/example-public/delivery/located/source%2Fone/capability.token",
   publicMaster: "/v1/public/example-public/master/video/source%2Fone?w=640&q=75",
   privateSource: "/v1/private/example-private/source/capability.token?w=640&q=75",
+  privateDelivery: "/v1/private/example-private/delivery/capability.token",
   privateMaster: "/v1/private/example-private/master/capability.token?w=640&q=75",
   previewJob: "/v1/spaces/example-private/sources/source%2Fone/previews/pdf",
   sourcePurge: "/v1/spaces/example-private/sources/source%2Fone/purge",
@@ -87,6 +106,13 @@ export const CACHE_IDENTITY_FIXTURE: Readonly<RenditionCacheIdentity> = Object.f
   quality: 75,
 });
 
+export const SOURCE_DELIVERY_CACHE_IDENTITY_FIXTURE: Readonly<SourceDeliveryCacheIdentity> =
+  Object.freeze({
+    routeClass: "private",
+    spaceId: CACHE_IDENTITY_FIXTURE.spaceId,
+    sourceId: CACHE_IDENTITY_FIXTURE.sourceId,
+  });
+
 export const CACHE_IDENTITY_EXPECTED = Object.freeze({
   fingerprint: "iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc",
   r2Key:
@@ -97,6 +123,8 @@ export const CACHE_IDENTITY_EXPECTED = Object.freeze({
   cacheTag: "shutter-v1-iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc",
   canonicalUrl:
     "https://cache.shutter.invalid/cache/v1/private/example-private/iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc/master-video/w640-q75.webp",
+  sourceDeliveryUrl:
+    "https://cache.shutter.invalid/source/v1/private/example-private/iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc",
 });
 
 export interface CapabilityConformanceAdapter {

@@ -65,14 +65,28 @@ function validateKid(kid: string): void {
   }
 }
 
+const PURPOSE_CLAIM_SHAPES = {
+  image_source: { locator: true, kind: false },
+  source_delivery: { locator: true, kind: false },
+  master_preview: { locator: false, kind: true },
+  preview_job: { locator: true, kind: true },
+} as const satisfies Record<CapabilityPurpose, { locator: boolean; kind: boolean }>;
+
+function claimShape(purpose: CapabilityPurpose) {
+  return PURPOSE_CLAIM_SHAPES[purpose];
+}
+
 function expectedClaimKeys(purpose: CapabilityPurpose): readonly string[] {
-  if (purpose === "image_source") {
-    return ["exp", "iat", "locator", "purpose", "source_id", "space_id"];
-  }
-  if (purpose === "master_preview") {
-    return ["exp", "iat", "kind", "purpose", "source_id", "space_id"];
-  }
-  return ["exp", "iat", "kind", "locator", "purpose", "source_id", "space_id"];
+  const shape = claimShape(purpose);
+  return [
+    "exp",
+    "iat",
+    ...(shape.kind ? ["kind"] : []),
+    ...(shape.locator ? ["locator"] : []),
+    "purpose",
+    "source_id",
+    "space_id",
+  ];
 }
 
 export function validateSourceLocator(locator: string, rules: readonly SourceOriginRule[]): void {
@@ -167,14 +181,15 @@ function validateClaims(
     throw new ProtocolError("claims_invalid", "capability lifetime is invalid");
   }
 
-  if (options.expectedPurpose === "image_source" || options.expectedPurpose === "preview_job") {
+  const shape = claimShape(options.expectedPurpose);
+  if (shape.locator) {
     if (typeof record.locator !== "string") {
       throw new ProtocolError("claims_invalid", "this capability purpose requires a locator");
     }
     validateLocator(record.locator, options.allowedSourceOrigins ?? []);
   }
 
-  if (options.expectedPurpose === "master_preview" || options.expectedPurpose === "preview_job") {
+  if (shape.kind) {
     if (record.kind !== "video" && record.kind !== "pdf") {
       throw new ProtocolError("claims_invalid", "preview kind must be video or pdf");
     }
@@ -194,10 +209,19 @@ function canonicalClaimsJson(claims: SourceCapabilityClaims): string {
     iat: claims.iat,
     exp: claims.exp,
   };
-  if (claims.purpose === "image_source")
-    return JSON.stringify({ ...common, locator: claims.locator });
-  if (claims.purpose === "master_preview") return JSON.stringify({ ...common, kind: claims.kind });
-  return JSON.stringify({ ...common, kind: claims.kind, locator: claims.locator });
+  const shape = claimShape(claims.purpose);
+  const purposeClaims: { kind?: "video" | "pdf"; locator?: string } = {};
+  if (shape.kind) {
+    if (!("kind" in claims)) throw new ProtocolError("claims_invalid", "purpose requires kind");
+    purposeClaims.kind = claims.kind;
+  }
+  if (shape.locator) {
+    if (!("locator" in claims)) {
+      throw new ProtocolError("claims_invalid", "purpose requires locator");
+    }
+    purposeClaims.locator = claims.locator;
+  }
+  return JSON.stringify({ ...common, ...purposeClaims });
 }
 
 export async function issueSourceCapability(
@@ -219,8 +243,9 @@ export async function issueSourceCapabilityWithIvInternal(
   }
 
   // Issuance applies the same strict shape, lifetime, and locator checks as verification.
+  const shape = claimShape(claims.purpose);
   let issuanceOrigin = "https://invalid.shutter.invalid";
-  if (claims.purpose !== "master_preview") {
+  if (shape.locator && "locator" in claims) {
     try {
       issuanceOrigin = new URL(claims.locator).origin;
     } catch {
@@ -232,7 +257,7 @@ export async function issueSourceCapabilityWithIvInternal(
     expectedPurpose: claims.purpose,
     keys: new Map(),
     now: claims.iat,
-    allowedSourceOrigins: claims.purpose === "master_preview" ? [] : [{ origin: issuanceOrigin }],
+    allowedSourceOrigins: shape.locator ? [{ origin: issuanceOrigin }] : [],
   });
 
   const key = await importKey(options.key, "encrypt");

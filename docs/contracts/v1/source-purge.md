@@ -19,7 +19,8 @@ Shutter serializes job submission, completion, and purge for the source, then:
 
 1. Invalidates and removes its Rendition Jobs.
 2. Deletes every object beneath its per-source R2 cache and master prefixes.
-3. Purges the hashed source cache tag from the Edge Worker Cache API.
+3. Purges the hashed source cache tag from the Edge Worker Cache API, including
+   cached Source Delivery bytes and Renditions.
 4. Globally purges the same hashed Cloudflare zone cache tag.
 
 `204 No Content` means all four steps completed. Missing jobs or objects still

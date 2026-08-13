@@ -5,23 +5,22 @@ import {
   emitOperationalEvent,
   normalizeRenditionQuery,
   operationalEvent,
-  ProtocolError,
   type RenditionCacheIdentity,
   type SpacePolicy,
   verifySourceCapability,
 } from "@shutter/protocol";
 import { Hono } from "hono";
-import { getEdgeConfig } from "./config-snapshot.js";
+import { edgeBrowserResponse, internalEdgeCacheResponse } from "./edge-cache-policy.js";
+import { notFound } from "./http-responses.js";
+import { registerSourceDeliveryRoutes } from "./source-delivery-routes.js";
+import { resolverSourceRef, resolveUploadThingSource } from "./source-resolution.js";
+import { spaceRoute } from "./space-route.js";
 
 declare module "hono" {
   interface ExecutionContext {
     cache?: CacheContext;
   }
 }
-
-const PRIVATE_EDGE_TTL_SECONDS = 86_400;
-const PUBLIC_BROWSER_TTL_SECONDS = 86_400;
-const PUBLIC_EDGE_TTL_SECONDS = 2_592_000;
 
 async function emitRenditionEvent(
   identity: RenditionCacheIdentity,
@@ -42,38 +41,6 @@ async function emitRenditionEvent(
   );
 }
 
-function protocolFailure(error: unknown): Response {
-  if (
-    error instanceof ProtocolError ||
-    (error instanceof Error &&
-      error.name === "ProtocolError" &&
-      "code" in error &&
-      typeof error.code === "string")
-  ) {
-    const status = error.code === "query_invalid" ? 400 : 403;
-    return Response.json(
-      { error: { code: error.code } },
-      { status, headers: { "cache-control": "private, no-store" } },
-    );
-  }
-  emitOperationalEvent("error", {
-    event: "edge.failure",
-    outcome: "failed",
-    failureCode: "service_unavailable",
-  });
-  return Response.json(
-    { error: { code: "service_unavailable" } },
-    { status: 503, headers: { "cache-control": "private, no-store" } },
-  );
-}
-
-function notFound(): Response {
-  return Response.json(
-    { error: { code: "not_found" } },
-    { status: 404, headers: { "cache-control": "private, no-store" } },
-  );
-}
-
 function canonicalRedirect(requestUrl: string, width: number, quality: number): Response {
   const canonical = new URL(requestUrl);
   canonical.search = `?w=${width}&q=${quality}`;
@@ -81,29 +48,6 @@ function canonicalRedirect(requestUrl: string, width: number, quality: number): 
     status: 308,
     headers: { "cache-control": "private, no-store", location: canonical.toString() },
   });
-}
-
-function privateBrowserResponse(response: Response, cacheStatus: string): Response {
-  const headers = new Headers(response.headers);
-  headers.set("cache-control", "private, no-store");
-  headers.set("x-shutter-cache", cacheStatus);
-  headers.delete("cache-tag");
-  return new Response(response.body, { status: response.status, headers });
-}
-
-function publicBrowserResponse(
-  response: Response,
-  cacheStatus: string,
-  cacheTag: string,
-): Response {
-  const headers = new Headers(response.headers);
-  headers.set(
-    "cache-control",
-    `public, max-age=${PUBLIC_BROWSER_TTL_SECONDS}, s-maxage=${PUBLIC_EDGE_TTL_SECONDS}`,
-  );
-  headers.set("cache-tag", cacheTag);
-  headers.set("x-shutter-cache", cacheStatus);
-  return new Response(response.body, { status: response.status, headers });
 }
 
 async function readR2Response(bucket: R2Bucket, key: string): Promise<Response | undefined> {
@@ -194,9 +138,11 @@ async function deliverRendition(
   const cached = await caches.default.match(cacheKey);
   if (cached !== undefined) {
     await emitRenditionEvent(identity, "edge-hit");
-    return identity.routeClass === "private"
-      ? privateBrowserResponse(cached, "edge-hit")
-      : publicBrowserResponse(cached, "edge-hit", cacheTag);
+    return edgeBrowserResponse(cached, {
+      routeClass: identity.routeClass,
+      cacheStatus: "edge-hit",
+      cacheTag,
+    });
   }
 
   const key = await buildR2CacheKey(identity);
@@ -208,20 +154,14 @@ async function deliverRendition(
   }
   const outcome = stored === undefined ? "origin" : "r2-hit";
 
-  if (identity.routeClass === "private") {
-    const internalHeaders = new Headers(response.headers);
-    internalHeaders.set("cache-control", `public, max-age=${PRIVATE_EDGE_TTL_SECONDS}`);
-    internalHeaders.set("cache-tag", cacheTag);
-    const internal = new Response(await response.arrayBuffer(), { headers: internalHeaders });
-    await caches.default.put(cacheKey, internal.clone());
-    await emitRenditionEvent(identity, outcome);
-    return privateBrowserResponse(internal, outcome);
-  }
-
-  const browser = publicBrowserResponse(response, outcome, cacheTag);
-  await caches.default.put(cacheKey, browser.clone());
+  const internal = internalEdgeCacheResponse(response, identity.routeClass, cacheTag);
+  await caches.default.put(cacheKey, internal.clone());
   await emitRenditionEvent(identity, outcome);
-  return browser;
+  return edgeBrowserResponse(internal, {
+    routeClass: identity.routeClass,
+    cacheStatus: outcome,
+    cacheTag,
+  });
 }
 
 async function privateRendition(
@@ -250,33 +190,6 @@ async function publicLocatedRendition(
     });
     return claims.locator;
   });
-}
-
-function resolveUploadThingSource(
-  sourceRef: string,
-  allowedProjectIds: readonly string[],
-): { sourceId: string; sourceUrl: string } | undefined {
-  const separator = sourceRef.indexOf("/");
-  if (
-    separator <= 0 ||
-    separator !== sourceRef.lastIndexOf("/") ||
-    separator === sourceRef.length - 1
-  ) {
-    return undefined;
-  }
-  const projectId = sourceRef.slice(0, separator);
-  const fileKey = sourceRef.slice(separator + 1);
-  if (
-    !allowedProjectIds.includes(projectId) ||
-    !/^[A-Za-z0-9_-]{1,64}$/u.test(projectId) ||
-    !/^[A-Za-z0-9_-]{1,512}$/u.test(fileKey)
-  ) {
-    return undefined;
-  }
-  return {
-    sourceId: sourceRef,
-    sourceUrl: `https://${projectId}.ufs.sh/f/${encodeURIComponent(fileKey)}`,
-  };
 }
 
 async function publicResolverRendition(
@@ -320,6 +233,8 @@ async function authorizedOrigin(
 export const app = new Hono<{ Bindings: CloudflareBindings }>();
 
 app.get("/healthz", (context) => context.json({ ok: true, service: "edge" }));
+
+registerSourceDeliveryRoutes(app);
 
 app.post("/internal/v1/cache/purge", async (context) => {
   if (
@@ -368,37 +283,22 @@ app.post("/internal/v1/cache/purge", async (context) => {
   return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
 });
 
-app.get("/v1/public/:spaceId/resolver/:resolverId/*", async (context) => {
-  try {
-    const spaceId = context.req.param("spaceId");
-    const snapshot = await getEdgeConfig(context.env, context.executionCtx);
-    const policy = snapshot.policyFor(spaceId);
-    if (policy === undefined || policy.routeClass !== "public") return notFound();
-    const resolverId = context.req.param("resolverId");
+spaceRoute(
+  app,
+  { methods: ["GET"], path: "/v1/public/:spaceId/resolver/:resolverId/*", routeClass: "public" },
+  async (context, { spaceId, policy }) => {
+    const resolverId = context.req.param("resolverId") ?? "";
     const resolver = policy.resolvers.find((candidate) => candidate.id === resolverId);
     if (resolver === undefined || resolver.type !== "uploadthing") return notFound();
-
-    const pathname = new URL(context.req.url).pathname;
-    const marker = `/resolver/${encodeURIComponent(resolverId)}/`;
-    const markerIndex = pathname.indexOf(marker);
-    if (markerIndex < 0) return notFound();
-    const sourceRef = decodeURIComponent(pathname.slice(markerIndex + marker.length));
+    const sourceRef = resolverSourceRef(context.req.url, resolverId);
+    if (sourceRef === undefined) return notFound();
     const source = resolveUploadThingSource(sourceRef, resolver.allowedProjectIds);
     if (source === undefined) return notFound();
     const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
     if (!query.isCanonical) {
-      const canonical = new URL(context.req.url);
-      canonical.search = `?w=${query.width}&q=${query.quality}`;
-      return new Response(null, {
-        status: 308,
-        headers: {
-          "cache-control": "private, no-store",
-          location: canonical.toString(),
-        },
-      });
+      return canonicalRedirect(context.req.url, query.width, query.quality);
     }
-
-    return await publicResolverRendition(
+    return publicResolverRendition(
       context.env,
       {
         routeClass: "public",
@@ -410,27 +310,22 @@ app.get("/v1/public/:spaceId/resolver/:resolverId/*", async (context) => {
       },
       source.sourceUrl,
     );
-  } catch (error) {
-    return protocolFailure(error);
-  }
-});
+  },
+);
 
-app.get("/v1/private/:spaceId/master/:capability", async (context) => {
-  try {
-    const spaceId = context.req.param("spaceId");
-    const snapshot = await getEdgeConfig(context.env, context.executionCtx);
-    const policy = snapshot.policyFor(spaceId);
-    if (policy === undefined || policy.routeClass !== "private") return notFound();
+spaceRoute(
+  app,
+  { methods: ["GET"], path: "/v1/private/:spaceId/master/:capability", routeClass: "private" },
+  async (context, { spaceId, policy, snapshot }) => {
     const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
-    const keys = snapshot.keysFor(spaceId);
-    const claims = await verifySourceCapability(context.req.param("capability"), {
+    const claims = await verifySourceCapability(context.req.param("capability") ?? "", {
       spaceId,
       expectedPurpose: "master_preview",
-      keys,
+      keys: snapshot.keysFor(spaceId),
       now: Math.floor(Date.now() / 1000),
     });
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
-    return await privateRendition(context.env, {
+    return privateRendition(context.env, {
       routeClass: "private",
       spaceId,
       sourceId: claims.source_id,
@@ -438,53 +333,44 @@ app.get("/v1/private/:spaceId/master/:capability", async (context) => {
       width: query.width,
       quality: query.quality,
     });
-  } catch (error) {
-    return protocolFailure(error);
-  }
-});
+  },
+);
 
-app.get("/v1/public/:spaceId/master/:kind/:sourceId", async (context) => {
-  try {
-    const spaceId = context.req.param("spaceId");
-    const snapshot = await getEdgeConfig(context.env, context.executionCtx);
-    const policy = snapshot.policyFor(spaceId);
-    if (policy === undefined || policy.routeClass !== "public") return notFound();
-    const kind = context.req.param("kind");
+spaceRoute(
+  app,
+  { methods: ["GET"], path: "/v1/public/:spaceId/master/:kind/:sourceId", routeClass: "public" },
+  async (context, { spaceId, policy }) => {
+    const kind = context.req.param("kind") ?? "";
     if (kind !== "video" && kind !== "pdf") return notFound();
     const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
     if (!query.isCanonical) {
       return canonicalRedirect(context.req.url, query.width, query.quality);
     }
-    return await publicMasterRendition(context.env, {
+    return publicMasterRendition(context.env, {
       routeClass: "public",
       spaceId,
-      sourceId: context.req.param("sourceId"),
+      sourceId: context.req.param("sourceId") ?? "",
       input: { type: "master", kind },
       width: query.width,
       quality: query.quality,
     });
-  } catch (error) {
-    return protocolFailure(error);
-  }
-});
+  },
+);
 
-app.get("/v1/private/:spaceId/source/:capability", async (context) => {
-  try {
-    const spaceId = context.req.param("spaceId");
-    const snapshot = await getEdgeConfig(context.env, context.executionCtx);
-    const policy = snapshot.policyFor(spaceId);
-    if (policy === undefined || policy.routeClass !== "private") return notFound();
+spaceRoute(
+  app,
+  { methods: ["GET"], path: "/v1/private/:spaceId/source/:capability", routeClass: "private" },
+  async (context, { spaceId, policy, snapshot }) => {
     const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
-    const keys = snapshot.keysFor(spaceId);
-    const claims = await verifySourceCapability(context.req.param("capability"), {
+    const claims = await verifySourceCapability(context.req.param("capability") ?? "", {
       spaceId,
       expectedPurpose: "image_source",
-      keys,
+      keys: snapshot.keysFor(spaceId),
       now: Math.floor(Date.now() / 1000),
       allowedSourceOrigins: policy.allowedSourceOrigins,
     });
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
-    return await privateRendition(
+    return privateRendition(
       context.env,
       {
         routeClass: "private",
@@ -496,34 +382,32 @@ app.get("/v1/private/:spaceId/source/:capability", async (context) => {
       },
       claims.locator,
     );
-  } catch (error) {
-    return protocolFailure(error);
-  }
-});
+  },
+);
 
-app.get("/v1/public/:spaceId/located/:sourceId/:capability", async (context) => {
-  try {
-    const spaceId = context.req.param("spaceId");
-    const snapshot = await getEdgeConfig(context.env, context.executionCtx);
-    const policy = snapshot.policyFor(spaceId);
-    if (policy === undefined || policy.routeClass !== "public") return notFound();
+spaceRoute(
+  app,
+  {
+    methods: ["GET"],
+    path: "/v1/public/:spaceId/located/:sourceId/:capability",
+    routeClass: "public",
+  },
+  async (context, { spaceId, policy, snapshot }) => {
     const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
-    return await publicLocatedRendition(
+    return publicLocatedRendition(
       context.env,
       {
         routeClass: "public",
         spaceId,
-        sourceId: context.req.param("sourceId"),
+        sourceId: context.req.param("sourceId") ?? "",
         input: { type: "source" },
         width: query.width,
         quality: query.quality,
       },
-      context.req.param("capability"),
+      context.req.param("capability") ?? "",
       policy,
       snapshot.keysFor(spaceId),
     );
-  } catch (error) {
-    return protocolFailure(error);
-  }
-});
+  },
+);

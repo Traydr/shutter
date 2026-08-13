@@ -2,7 +2,11 @@ import type { SHUTTER_FORMAT } from "./constants.js";
 
 export type RouteClass = "public" | "private";
 export type RenditionKind = "video" | "pdf";
-export type CapabilityPurpose = "image_source" | "master_preview" | "preview_job";
+export type CapabilityPurpose =
+  | "image_source"
+  | "source_delivery"
+  | "master_preview"
+  | "preview_job";
 
 export interface CommonClaims {
   space_id: string;
@@ -17,6 +21,11 @@ export interface ImageSourceClaims extends CommonClaims {
   locator: string;
 }
 
+export interface SourceDeliveryClaims extends CommonClaims {
+  purpose: "source_delivery";
+  locator: string;
+}
+
 export interface MasterPreviewClaims extends CommonClaims {
   purpose: "master_preview";
   kind: RenditionKind;
@@ -28,7 +37,11 @@ export interface PreviewJobClaims extends CommonClaims {
   locator: string;
 }
 
-export type SourceCapabilityClaims = ImageSourceClaims | MasterPreviewClaims | PreviewJobClaims;
+export type SourceCapabilityClaims =
+  | ImageSourceClaims
+  | SourceDeliveryClaims
+  | MasterPreviewClaims
+  | PreviewJobClaims;
 
 export interface SourceOriginRule {
   origin: string;
