@@ -49,8 +49,10 @@ complete failures must not delete until Control accepts fail for that token.
 - Postgres stores the opaque Source Capability, not its decrypted locator.
 - Only Shutter Control decrypts and validates job capabilities.
 - A claim response supplies the authenticated Executor with the Source Locator,
-  deterministic output key, and processing token for that attempt.
-- Executors hold Source Locators only in process memory and never receive a
-  Space capability key.
+  allowed source-origin rules, deterministic output key, and processing token
+  for that attempt.
+- Executors hold Source Locators and the small origin-policy fragment only in
+  process memory. They never receive a Space capability key or the full Space
+  registry.
 - Video and PDF Executors use distinct role credentials, each restricted to its
   own job kind.

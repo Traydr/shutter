@@ -34,23 +34,25 @@ describe("Node protocol conformance", () => {
 
   it("matches the canonical URL fixtures", () => {
     const rendition = { width: 640, quality: 75 };
-    expect(buildPublicResolverUrl("ernesta", "uploadthing", "project/file one", rendition)).toBe(
-      URL_FIXTURES.publicResolver,
-    );
     expect(
-      buildPublicLocatedSourceUrl("ernesta", "source/one", "capability.token", rendition),
+      buildPublicResolverUrl("example-public", "uploadthing", "project/file one", rendition),
+    ).toBe(URL_FIXTURES.publicResolver);
+    expect(
+      buildPublicLocatedSourceUrl("example-public", "source/one", "capability.token", rendition),
     ).toBe(URL_FIXTURES.publicLocated);
-    expect(buildPublicMasterUrl("ernesta", "video", "source/one", rendition)).toBe(
+    expect(buildPublicMasterUrl("example-public", "video", "source/one", rendition)).toBe(
       URL_FIXTURES.publicMaster,
     );
-    expect(buildPrivateSourceUrl("pane-view", "capability.token", rendition)).toBe(
+    expect(buildPrivateSourceUrl("example-private", "capability.token", rendition)).toBe(
       URL_FIXTURES.privateSource,
     );
-    expect(buildPrivateMasterUrl("pane-view", "capability.token", rendition)).toBe(
+    expect(buildPrivateMasterUrl("example-private", "capability.token", rendition)).toBe(
       URL_FIXTURES.privateMaster,
     );
-    expect(buildPreviewJobUrl("pane-view", "source/one", "pdf")).toBe(URL_FIXTURES.previewJob);
-    expect(buildSourcePurgeUrl("pane-view", "source/one")).toBe(URL_FIXTURES.sourcePurge);
+    expect(buildPreviewJobUrl("example-private", "source/one", "pdf")).toBe(
+      URL_FIXTURES.previewJob,
+    );
+    expect(buildSourcePurgeUrl("example-private", "source/one")).toBe(URL_FIXTURES.sourcePurge);
   });
 
   it("matches the cache identity fixtures", async () => {

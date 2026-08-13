@@ -9,6 +9,7 @@ export {
 } from "./capability.js";
 export * from "./constants.js";
 export * from "./control-routes.js";
+export * from "./edge-config.js";
 export * from "./errors.js";
 export * from "./jobs.js";
 export * from "./key-material.js";

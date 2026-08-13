@@ -59,9 +59,6 @@ importers:
       '@shutter/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@shutter/space-config':
-        specifier: workspace:*
-        version: link:../../packages/space-config
       '@t3-oss/env-core':
         specifier: ^0.13.11
         version: 0.13.11(typescript@6.0.3)(zod@4.4.3)
@@ -108,9 +105,6 @@ importers:
       '@shutter/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-      '@shutter/space-config':
-        specifier: workspace:*
-        version: link:../../packages/space-config
       hono:
         specifier: 4.12.28
         version: 4.12.28
@@ -210,9 +204,6 @@ importers:
       '@shutter/protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@shutter/space-config':
-        specifier: workspace:*
-        version: link:../space-config
       hono:
         specifier: 4.12.28
         version: 4.12.28
@@ -228,19 +219,6 @@ importers:
         version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@22.20.1)(vite@8.1.3(@types/node@22.20.1)(esbuild@0.28.1)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/protocol:
-    devDependencies:
-      typescript:
-        specifier: 6.0.3
-        version: 6.0.3
-      vitest:
-        specifier: 4.1.4
-        version: 4.1.4(@opentelemetry/api@1.9.0)(@types/node@22.20.1)(vite@8.1.3(@types/node@22.20.1)(esbuild@0.28.1)(tsx@4.22.4)(yaml@2.9.0))
-
-  packages/space-config:
-    dependencies:
-      '@shutter/protocol':
-        specifier: workspace:*
-        version: link:../protocol
     devDependencies:
       typescript:
         specifier: 6.0.3

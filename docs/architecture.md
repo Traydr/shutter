@@ -13,6 +13,7 @@ provisioning, retention rules, and end-user authorization.
 ```mermaid
 flowchart LR
   app["Consuming application"] --> control["Shutter Control"]
+  control --> registry[("Space Registry")]
   app --> source["Application-owned S3 storage"]
   app -->|"Rendition Job"| control
   control --> jobs[("Rendition Jobs")]
@@ -21,6 +22,7 @@ flowchart LR
   video --> derived["Shutter Rendition Store on R2"]
   pdf --> derived
   browser["Browser"] --> worker["Cloudflare Worker"]
+  control -->|"Atomic Space snapshot"| worker
   worker --> privateCache["Private edge cache"]
   browser --> publicCache["Cloudflare public CDN"]
   privateCache --> origin["Shutter origin on Railway"]
@@ -76,12 +78,13 @@ Shutter is a TypeScript pnpm workspace. Shutter Control and both Executors run
 on Node with Hono; Drizzle manages the Postgres job schema; R2 is the Rendition
 Store; imgproxy remains a separate upstream container image.
 
-The Cloudflare edge app is a web-native Hono Worker. It uses `wrangler.jsonc` as
-configuration source of truth, the official Cloudflare Vite plugin for local
-workerd execution, `wrangler types` for compatibility-date-specific bindings,
-Web Crypto AES-GCM for Source Capabilities, the Workers Cache API for private
-canonical entries, and Worker secrets for capability keys and the origin
-credential. Tests run with Vitest's Cloudflare Workers pool. The edge and shared
+The Cloudflare edge app is a web-native Hono Worker. It uses `wrangler.jsonc` for
+deployment configuration, the official Cloudflare Vite plugin for local workerd
+execution, `wrangler types` for compatibility-date-specific bindings, Web Crypto
+AES-GCM for Source Capabilities, and the Workers Cache API for private canonical
+entries. It reads Space policies and Capability Keys from Control through an
+authenticated snapshot endpoint. Tests run with Vitest's Cloudflare Workers
+pool. The edge and shared
 capability packages must not import Node built-ins or rely on `Buffer`; the
 Worker does not enable `nodejs_compat` unless a measured future dependency makes
 it unavoidable.
@@ -90,12 +93,13 @@ The Worker owns no database state and uses no D1, KV, or Durable Objects in v1.
 Its only durable binding is the R2 Rendition Store. Jobs and operational metadata
 remain in Postgres on Railway.
 
-Postgres contains one application table in v1: `rendition_jobs`. Its composite
+Postgres contains the Space Registry and the `rendition_jobs` ledger. A registry
+generation makes policy and credential changes visible as one snapshot. The job ledger's composite
 identity is `(space_id, source_id, kind)`. The row holds only current operational
 state: the opaque Source Capability while work is active, execution-cycle and
 attempt counters, retry and lease timing, processing token, output metadata, and
 sanitized failure code. There are no Asset, Source, attempt-history, purge,
-delivery-token, or Space tables. Attempts are correlated in structured logs by
+delivery-token, or media catalog tables. Attempts are correlated in structured logs by
 job identity, cycle, attempt number, and processing token.
 
 The Source Capability column is cleared when a job becomes ready or terminal;
@@ -150,20 +154,23 @@ submission.
 
 ## Space configuration
 
-Shutter Spaces are static deployment configuration in v1, not database records.
-There is no Space CRUD API, tenant administration surface, or runtime policy
-editor. The repository holds each Space's non-secret configuration: stable ID,
-public or private route class, Source Resolvers and HTTPS origin allowlist,
-rendition policy, and cache lifetimes. Cloudflare and Railway secret stores hold
-API tokens, capability keys, origin credentials, and their key identifiers.
+Space policies, API-token hashes, encrypted Capability Keys, status, and
+credential history belong in the Postgres Space Registry. Tenant values are not
+source code or deployment variables. Control reads Postgres for every
+Space-scoped request and does not keep a policy cache.
 
-The initial configuration contains only the two demo Spaces. A Space addition
-or policy change is a reviewed code change followed by deployment. Persisted
-Rendition Jobs record only the stable `space_id`; secret values and a copy of the
-full Space configuration are never stored with a job. Deployments must retain
-configuration for any Space referenced by unfinished jobs, and credential
-rotation keeps overlapping verification keys until all capabilities issued by
-the retired key have expired.
+Control returns one atomic, versioned snapshot to Edge. Each Edge isolate keeps
+the last parsed snapshot for at most 60 seconds before it must refresh. It starts
+a background refresh after 45 seconds. If Control is unavailable, Edge can use
+the last snapshot for at most 10 minutes after Control generated it. This keeps
+cache hits available during a short outage while putting a strict bound on
+stale authorization. Executors receive only the allowed source-origin rules in
+each claim; they do not load the registry.
+
+Deployment configuration, such as service URLs, the imgproxy allowlist, storage
+credentials, and the dedicated Edge snapshot credential, belongs in Railway and
+Cloudflare settings. Versioned URL shapes, capability formats, limits, and
+parser rules remain protocol invariants in code and contracts.
 
 ## Storage
 
@@ -444,7 +451,7 @@ credentials. Its internal source URLs must be encrypted and signed.
 
 Deployable apps are `edge`, `control`, `executor-video`, and `executor-pdf`.
 Internal packages are `protocol` for Web-standard capability, URL, policy, and
-API contracts; `space-config` for checked-in non-secret policies; and `testkit`
-for cross-runtime fixtures and conformance helpers. Drizzle schema and migrations
+API contracts; `testkit` for cross-runtime fixtures and conformance helpers; and
+`executor-runtime` for the shared work cycle. Drizzle schema and migrations
 remain private to Control because Executors claim through its authenticated API
 rather than connecting directly to Postgres.

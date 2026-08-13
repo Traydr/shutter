@@ -1,12 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 
-const roots = [
-  "apps/edge/src",
-  "packages/protocol/src",
-  "packages/space-config/src",
-  "packages/testkit/src",
-];
+const roots = ["apps/edge/src", "packages/protocol/src", "packages/testkit/src"];
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".mjs"]);
 const violations = [];
 

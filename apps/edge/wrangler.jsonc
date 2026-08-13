@@ -24,6 +24,6 @@
     }
   ],
   "secrets": {
-    "required": ["CAPABILITY_KEYS", "ORIGIN_AUTH_TOKEN", "ORIGIN_BASE_URL"]
+    "required": ["EDGE_CONFIG_TOKEN", "ORIGIN_AUTH_TOKEN", "ORIGIN_BASE_URL"]
   }
 }

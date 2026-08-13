@@ -9,9 +9,8 @@ const server = {
   PORT: z.coerce.number().int().positive().max(65_535).default(3_000),
 
   DATABASE_URL: optionalUrl,
-  CAPABILITY_KEYS: optionalString,
   SHUTTER_ENCRYPTION_KEY: optionalString,
-  SPACE_API_TOKENS: optionalString,
+  EDGE_CONFIG_TOKEN: optionalString,
 
   S3_ENDPOINT: optionalUrl,
   S3_REGION: z.string().min(1).default("auto"),

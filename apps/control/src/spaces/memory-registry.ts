@@ -11,6 +11,7 @@ import {
   validateCapabilityKeyId,
 } from "./credentials.js";
 import type {
+  ActiveSpaceAuthorization,
   ApiTokenSummary,
   CapabilityKeySummary,
   EdgeSpaceSnapshot,
@@ -20,6 +21,8 @@ import type {
   SpacePolicyUpdate,
   SpaceRecord,
   SpaceRegistry,
+  SpaceRegistryTransaction,
+  SpaceRequestAuthorization,
 } from "./registry.js";
 import { SpaceRegistryError } from "./registry.js";
 
@@ -88,9 +91,65 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     }
   }
 
+  async withTransaction<T>(work: (registry: SpaceRegistryTransaction) => Promise<T>): Promise<T> {
+    const spaces = new Map([...this.#spaces].map(([id, record]) => [id, copySpace(record)]));
+    const tokens = new Map(
+      [...this.#tokens].map(([id, values]) => [id, values.map((value) => ({ ...value }))]),
+    );
+    const keys = new Map(
+      [...this.#keys].map(([id, values]) => [
+        id,
+        values.map((value) => ({ ...value, key: Uint8Array.from(value.key) })),
+      ]),
+    );
+    const generation = this.#generation;
+    const generatedAt = new Date(this.#generatedAt);
+    const nextTokenId = this.#nextTokenId;
+    const nextKeyId = this.#nextKeyId;
+    try {
+      return await work(this);
+    } catch (error) {
+      this.#spaces.clear();
+      this.#tokens.clear();
+      this.#keys.clear();
+      for (const entry of spaces) this.#spaces.set(...entry);
+      for (const entry of tokens) this.#tokens.set(...entry);
+      for (const entry of keys) this.#keys.set(...entry);
+      this.#generation = generation;
+      this.#generatedAt = generatedAt;
+      this.#nextTokenId = nextTokenId;
+      this.#nextKeyId = nextKeyId;
+      throw error;
+    }
+  }
+
   async getActiveSpacePolicy(spaceId: string): Promise<SpacePolicy | undefined> {
     const record = this.#spaces.get(spaceId);
     return record?.status === "active" ? parseSpacePolicy(record.policy) : undefined;
+  }
+
+  async getActiveSpaceAuthorization(
+    spaceId: string,
+  ): Promise<ActiveSpaceAuthorization | undefined> {
+    const policy = await this.getActiveSpacePolicy(spaceId);
+    if (policy === undefined) return undefined;
+    const capabilityKeys = new Map<string, Uint8Array>();
+    for (const key of this.#keys.get(spaceId) ?? []) {
+      if (key.disabledAt === undefined) capabilityKeys.set(key.keyId, Uint8Array.from(key.key));
+    }
+    return { policy, capabilityKeys };
+  }
+
+  async authorizeSpaceRequest(
+    spaceId: string,
+    token: string | undefined,
+  ): Promise<SpaceRequestAuthorization> {
+    const authorization = await this.getActiveSpaceAuthorization(spaceId);
+    if (authorization === undefined) return { outcome: "missing" };
+    if (token === undefined || !(await this.verifyApiToken(spaceId, token))) {
+      return { outcome: "unauthorized" };
+    }
+    return { outcome: "authorized", ...authorization };
   }
 
   async listSpaces(): Promise<readonly SpaceRecord[]> {
@@ -112,7 +171,7 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     return {
       schemaVersion: "v1",
       generation: this.#generation,
-      generatedAt: new Date(this.#generatedAt),
+      registryUpdatedAt: new Date(this.#generatedAt),
       spaces,
       capabilityKeys,
     };

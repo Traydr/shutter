@@ -15,7 +15,6 @@ import {
   type RenditionKind,
   verifySourceCapability,
 } from "@shutter/protocol";
-import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 import { type ControlLogger, operationalErrorType } from "./logging.js";
 import type {
@@ -24,15 +23,13 @@ import type {
   RenditionJobLifecycle,
 } from "./rendition-job-lifecycle.js";
 import type { SourcePurge } from "./source-purge.js";
-
-type KeyRegistry = ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
+import type { ActiveSpaceAuthorization, SpaceRegistry } from "./spaces/registry.js";
 
 export interface JobApiRuntime {
   logger: ControlLogger;
   lifecycle: RenditionJobLifecycle;
   now(): Date;
-  spaceApiTokens(): ReadonlyMap<string, readonly string[]>;
-  capabilityKeys(): KeyRegistry;
+  spaceRegistry: SpaceRegistry;
   executorToken(kind: RenditionKind): string | undefined;
   dispatch(kind: RenditionKind): Promise<void>;
   sourcePurge?: SourcePurge;
@@ -70,12 +67,33 @@ function identityFromRoute(context: {
   };
 }
 
-function authorizedSpace(
+/**
+ * The Space authorization ladder for application-facing routes: 404 only after
+ * a successful query confirms no active Space, 401 for a bad or missing API
+ * token, 503 when the registry itself failed. One resolved registry call per
+ * request; every route consumes the same closed union.
+ */
+async function spaceAccess(
   runtime: JobApiRuntime,
   spaceId: string,
-  authorization: string | undefined,
-): boolean {
-  return tokenMatches(bearer(authorization), runtime.spaceApiTokens().get(spaceId) ?? []);
+  authorizationHeader: string | undefined,
+): Promise<{ response: Response } | { authorization: ActiveSpaceAuthorization }> {
+  try {
+    const result = await runtime.spaceRegistry.authorizeSpaceRequest(
+      spaceId,
+      bearer(authorizationHeader),
+    );
+    switch (result.outcome) {
+      case "missing":
+        return { response: requestFailure(404, "not_found") };
+      case "unauthorized":
+        return { response: requestFailure(401, "unauthorized") };
+      case "authorized":
+        return { authorization: { policy: result.policy, capabilityKeys: result.capabilityKeys } };
+    }
+  } catch {
+    return { response: requestFailure(503, "service_unavailable") };
+  }
 }
 
 function activeResponse(body: RenditionJobRepresentation, location: string): Response {
@@ -106,10 +124,8 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
   api.post(CONTROL_HTTP_ROUTES.sourcePurge, async (context) => {
     const spaceId = context.req.param("spaceId");
     const sourceId = context.req.param("sourceId");
-    if (getSpacePolicy(spaceId) === undefined) return requestFailure(404, "not_found");
-    if (!authorizedSpace(runtime, spaceId, context.req.header("authorization"))) {
-      return requestFailure(401, "unauthorized");
-    }
+    const access = await spaceAccess(runtime, spaceId, context.req.header("authorization"));
+    if ("response" in access) return access.response;
     const sourcePurge = runtime.sourcePurge;
     if (sourcePurge === undefined) return requestFailure(503, "service_unavailable");
     try {
@@ -123,11 +139,13 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
   api.put(CONTROL_HTTP_ROUTES.previewJob, async (context) => {
     const identity = identityFromRoute(context);
     if (identity === undefined) return requestFailure(404, "not_found");
-    const policy = getSpacePolicy(identity.spaceId);
-    if (policy === undefined) return requestFailure(404, "not_found");
-    if (!authorizedSpace(runtime, identity.spaceId, context.req.header("authorization"))) {
-      return requestFailure(401, "unauthorized");
-    }
+    const access = await spaceAccess(
+      runtime,
+      identity.spaceId,
+      context.req.header("authorization"),
+    );
+    if ("response" in access) return access.response;
+    const authorization = access.authorization;
     try {
       const submission = parsePreviewJobSubmission(await strictJson(context.req.raw));
       const now = runtime.now();
@@ -136,9 +154,9 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         expectedPurpose: "preview_job",
         expectedSourceId: identity.sourceId,
         expectedKind: identity.kind,
-        keys: runtime.capabilityKeys().get(identity.spaceId) ?? new Map(),
+        keys: authorization.capabilityKeys,
         now: Math.floor(now.getTime() / 1_000),
-        allowedSourceOrigins: policy.allowedSourceOrigins,
+        allowedSourceOrigins: authorization.policy.allowedSourceOrigins,
       });
       const submissionResult = await runtime.lifecycle.submit(
         {
@@ -189,9 +207,12 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
   api.get(CONTROL_HTTP_ROUTES.previewJob, async (context) => {
     const identity = identityFromRoute(context);
     if (identity === undefined) return requestFailure(404, "not_found");
-    if (!authorizedSpace(runtime, identity.spaceId, context.req.header("authorization"))) {
-      return requestFailure(401, "unauthorized");
-    }
+    const access = await spaceAccess(
+      runtime,
+      identity.spaceId,
+      context.req.header("authorization"),
+    );
+    if ("response" in access) return access.response;
     const record = await runtime.lifecycle.read(identity);
     if (record === undefined) return requestFailure(404, "not_found");
     return activeResponse(record.representation, new URL(context.req.url).pathname);
@@ -210,8 +231,13 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     const now = runtime.now();
     const claim = await runtime.lifecycle.claim(parsedKind, now);
     if (claim === undefined) return new Response(null, { status: 204 });
-    const policy = getSpacePolicy(claim.spaceId);
-    if (policy === undefined) {
+    let authorization: ActiveSpaceAuthorization | undefined;
+    try {
+      authorization = await runtime.spaceRegistry.getActiveSpaceAuthorization(claim.spaceId);
+    } catch {
+      return requestFailure(503, "service_unavailable");
+    }
+    if (authorization === undefined) {
       await runtime.lifecycle.fail(
         claim,
         claim.processingToken,
@@ -226,9 +252,9 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         expectedPurpose: "preview_job",
         expectedSourceId: claim.sourceId,
         expectedKind: claim.kind,
-        keys: runtime.capabilityKeys().get(claim.spaceId) ?? new Map(),
+        keys: authorization.capabilityKeys,
         now: Math.floor(now.getTime() / 1_000),
-        allowedSourceOrigins: policy.allowedSourceOrigins,
+        allowedSourceOrigins: authorization.policy.allowedSourceOrigins,
       });
       return context.json({
         spaceId: claim.spaceId,
@@ -239,6 +265,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         processingToken: claim.processingToken,
         executionCycle: claim.executionCycle,
         attemptNumber: claim.attemptNumber,
+        allowedSourceOrigins: authorization.policy.allowedSourceOrigins,
       });
     } catch (error) {
       const code =

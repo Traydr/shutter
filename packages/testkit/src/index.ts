@@ -69,18 +69,18 @@ export const CAPABILITY_FIXTURES: readonly CapabilityFixture[] = Object.freeze([
 ]);
 
 export const URL_FIXTURES = Object.freeze({
-  publicResolver: "/v1/public/ernesta/resolver/uploadthing/project%2Ffile%20one?w=640&q=75",
-  publicLocated: "/v1/public/ernesta/located/source%2Fone/capability.token?w=640&q=75",
-  publicMaster: "/v1/public/ernesta/master/video/source%2Fone?w=640&q=75",
-  privateSource: "/v1/private/pane-view/source/capability.token?w=640&q=75",
-  privateMaster: "/v1/private/pane-view/master/capability.token?w=640&q=75",
-  previewJob: "/v1/spaces/pane-view/sources/source%2Fone/previews/pdf",
-  sourcePurge: "/v1/spaces/pane-view/sources/source%2Fone/purge",
+  publicResolver: "/v1/public/example-public/resolver/uploadthing/project%2Ffile%20one?w=640&q=75",
+  publicLocated: "/v1/public/example-public/located/source%2Fone/capability.token?w=640&q=75",
+  publicMaster: "/v1/public/example-public/master/video/source%2Fone?w=640&q=75",
+  privateSource: "/v1/private/example-private/source/capability.token?w=640&q=75",
+  privateMaster: "/v1/private/example-private/master/capability.token?w=640&q=75",
+  previewJob: "/v1/spaces/example-private/sources/source%2Fone/previews/pdf",
+  sourcePurge: "/v1/spaces/example-private/sources/source%2Fone/purge",
 });
 
 export const CACHE_IDENTITY_FIXTURE: Readonly<RenditionCacheIdentity> = Object.freeze({
   routeClass: "private",
-  spaceId: "pane-view",
+  spaceId: "example-private",
   sourceId: "sha256:fixture-source",
   input: Object.freeze({ type: "master", kind: "video" }),
   width: 640,
@@ -88,15 +88,15 @@ export const CACHE_IDENTITY_FIXTURE: Readonly<RenditionCacheIdentity> = Object.f
 });
 
 export const CACHE_IDENTITY_EXPECTED = Object.freeze({
-  fingerprint: "N9NjtQwUp8dMa1ZiHnNJoAhg7-DZ-KOSehNDho5dYKs",
+  fingerprint: "iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc",
   r2Key:
-    "cache/v1/private/pane-view/N9NjtQwUp8dMa1ZiHnNJoAhg7-DZ-KOSehNDho5dYKs/master-video/w640-q75.webp",
-  masterKey: "masters/v1/pane-view/N9NjtQwUp8dMa1ZiHnNJoAhg7-DZ-KOSehNDho5dYKs/video.webp",
-  cachePrefix: "cache/v1/private/pane-view/N9NjtQwUp8dMa1ZiHnNJoAhg7-DZ-KOSehNDho5dYKs/",
-  masterPrefix: "masters/v1/pane-view/N9NjtQwUp8dMa1ZiHnNJoAhg7-DZ-KOSehNDho5dYKs/",
-  cacheTag: "shutter-v1-N9NjtQwUp8dMa1ZiHnNJoAhg7-DZ-KOSehNDho5dYKs",
+    "cache/v1/private/example-private/iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc/master-video/w640-q75.webp",
+  masterKey: "masters/v1/example-private/iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc/video.webp",
+  cachePrefix: "cache/v1/private/example-private/iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc/",
+  masterPrefix: "masters/v1/example-private/iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc/",
+  cacheTag: "shutter-v1-iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc",
   canonicalUrl:
-    "https://cache.shutter.invalid/cache/v1/private/pane-view/N9NjtQwUp8dMa1ZiHnNJoAhg7-DZ-KOSehNDho5dYKs/master-video/w640-q75.webp",
+    "https://cache.shutter.invalid/cache/v1/private/example-private/iukmE_DLjqEZ4a1OL3XXVcrPxnoR-aPpRVAhE0w0VBc/master-video/w640-q75.webp",
 });
 
 export interface CapabilityConformanceAdapter {

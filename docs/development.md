@@ -47,16 +47,20 @@ pnpm --filter @shutter/edge dev            # see the caveat below
 ```
 
 To exercise the Rendition Job API end to end you need Postgres plus
-`DATABASE_URL`, `SPACE_API_TOKENS`, and `CAPABILITY_KEYS`. Run migrations first:
+`DATABASE_URL` and `SHUTTER_ENCRYPTION_KEY`. Run migrations first:
 
 ```sh
 DATABASE_URL=... pnpm --filter @shutter/control db:migrate
 ```
 
-Mint Source Capabilities for job submission with `issueSourceCapability` from
-`@shutter/protocol`. A capability's `locator` origin must be allowlisted by the
-target Space in `packages/space-config`; the two preconfigured Spaces are
-`demo-public` (public route class) and `demo-private` (private).
+Create a Space, API token, and Capability Key in the Space Registry before you
+submit a job — either through one-shot import
+(`DATABASE_URL=... SHUTTER_ENCRYPTION_KEY=... pnpm --filter @shutter/control
+db:import-spaces <input.json>`, input format in
+`docs/runbooks/foundation-phase-2.md`) or through the `/admin` surface once it
+is configured. Mint Source Capabilities with `issueSourceCapability` from
+`@shutter/protocol`. A capability's `locator` origin must be allowed by the
+target Space record.
 
 The video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
 `poppler-utils`.
@@ -72,7 +76,7 @@ This is a runtime-version gap, not a code defect. The Worker is still fully
 exercised by:
 
 - `pnpm --filter @shutter/edge build` — vite build producing a deployable Worker
-- `pnpm --filter @shutter/edge test` — 16 tests on `vitest-pool-workers`' newer
+- `pnpm --filter @shutter/edge test` — Worker tests on `vitest-pool-workers`' newer
   workerd (`1.20260706.1`), which does support `2026-07-10`
 
 Running the dev server requires a newer miniflare/workerd (`>= 1.20260706`)

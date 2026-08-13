@@ -2,6 +2,7 @@ import { buildMasterPreviewKey } from "@shutter/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { createControlApp } from "./app.js";
 import type { ControlLogger } from "./logging.js";
+import { MemorySpaceRegistry } from "./spaces/memory-registry.js";
 
 const TOKEN = "a".repeat(32);
 const IMGPROXY = {
@@ -12,17 +13,26 @@ const IMGPROXY = {
 };
 
 const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
+const SPACE_REGISTRY = new MemorySpaceRegistry({
+  spaces: [
+    {
+      id: "example-private",
+      routeClass: "private",
+      qualities: [75],
+      defaultQuality: 75,
+      allowedSourceOrigins: [{ origin: "https://sources.example.com", pathPrefix: "/private" }],
+      resolvers: [],
+    },
+  ],
+});
 
 function spikeUrl(): string {
   const url = new URL("http://shutter.test/internal/v1/spike/rendition");
   url.searchParams.set(
     "key",
-    "cache/v1/private/pane-view/gMNnP86xbOKzyOCG34XyJJ5czSTAojiMAnH4AQSdh9s/source/w640-q75.webp",
+    "cache/v1/private/example-private/gMNnP86xbOKzyOCG34XyJJ5czSTAojiMAnH4AQSdh9s/source/w640-q75.webp",
   );
-  url.searchParams.set(
-    "source",
-    "https://t3.storageapi.dev/balanced-wrap-ocyiwwexhao/originals/test.jpg",
-  );
+  url.searchParams.set("source", "https://sources.example.com/private/originals/test.jpg");
   url.searchParams.set("w", "640");
   url.searchParams.set("q", "75");
   return url.href;
@@ -32,6 +42,7 @@ describe("control app", () => {
   it("rejects direct access to the Railway origin probe", async () => {
     const control = createControlApp({
       logger: NOOP_LOGGER,
+      spaceRegistry: SPACE_REGISTRY,
       originAuthToken: () => TOKEN,
       imgproxyConfig: () => IMGPROXY,
       fetch: vi.fn(),
@@ -57,6 +68,7 @@ describe("control app", () => {
     );
     const control = createControlApp({
       logger: NOOP_LOGGER,
+      spaceRegistry: SPACE_REGISTRY,
       originAuthToken: () => TOKEN,
       imgproxyConfig: () => IMGPROXY,
       fetch,
@@ -81,12 +93,13 @@ describe("control app", () => {
     const fetch = vi.fn();
     const control = createControlApp({
       logger: NOOP_LOGGER,
+      spaceRegistry: SPACE_REGISTRY,
       originAuthToken: () => TOKEN,
       imgproxyConfig: () => IMGPROXY,
       fetch,
     });
     const missingSource = await control.request(
-      "http://shutter.test/internal/v1/spike/rendition?key=cache/v1/private/pane-view/fp/source/w640-q75.webp&w=640&q=75",
+      "http://shutter.test/internal/v1/spike/rendition?key=cache/v1/private/example-private/fp/source/w640-q75.webp&w=640&q=75",
       { headers: { authorization: `Bearer ${TOKEN}` } },
     );
 
@@ -94,10 +107,30 @@ describe("control app", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("returns unavailable when Postgres is not configured", async () => {
+    const control = createControlApp({
+      logger: NOOP_LOGGER,
+      originAuthToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch: vi.fn(),
+    });
+    const rendition = await control.request(spikeUrl(), {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const job = await control.request(
+      "http://shutter.test/v1/spaces/example-private/sources/source/previews/video",
+    );
+
+    expect(rendition.status).toBe(503);
+    expect(job.status).toBe(503);
+    expect(job.headers.get("cache-control")).toBe("private, no-store");
+  });
+
   it("rejects origin sources outside the Space allowlist", async () => {
     const fetch = vi.fn();
     const control = createControlApp({
       logger: NOOP_LOGGER,
+      spaceRegistry: SPACE_REGISTRY,
       originAuthToken: () => TOKEN,
       imgproxyConfig: () => IMGPROXY,
       fetch,
@@ -117,6 +150,7 @@ describe("control app", () => {
     const fetch = vi.fn(async () => new Response("master", { status: 200 }));
     const control = createControlApp({
       logger: NOOP_LOGGER,
+      spaceRegistry: SPACE_REGISTRY,
       originAuthToken: () => TOKEN,
       imgproxyConfig: () => IMGPROXY,
       fetch,
@@ -124,7 +158,7 @@ describe("control app", () => {
     });
     const url = "http://shutter.test/internal/v1/master-rendition";
     const body = JSON.stringify({
-      spaceId: "pane-view",
+      spaceId: "example-private",
       sourceId: "source/one",
       kind: "video",
       w: 640,
@@ -149,7 +183,7 @@ describe("control app", () => {
     });
     expect(response.status).toBe(200);
     expect(presignGet).toHaveBeenCalledWith(
-      await buildMasterPreviewKey("pane-view", "source/one", "video"),
+      await buildMasterPreviewKey("example-private", "source/one", "video"),
     );
     expect(fetch).toHaveBeenCalledOnce();
   });
@@ -159,6 +193,7 @@ describe("control app", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const control = createControlApp({
       logger: NOOP_LOGGER,
+      spaceRegistry: SPACE_REGISTRY,
       originAuthToken: () => TOKEN,
       imgproxyConfig: () => IMGPROXY,
       fetch: vi.fn(async () => new Response(null, { status: 502 })),
@@ -168,7 +203,7 @@ describe("control app", () => {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
       body: JSON.stringify({
-        spaceId: "pane-view",
+        spaceId: "example-private",
         sourceId: "one",
         kind: "pdf",
         w: 640,
@@ -183,6 +218,7 @@ describe("control app", () => {
   it("issues a server-generated request ID and ignores caller-controlled ones", async () => {
     const control = createControlApp({
       logger: NOOP_LOGGER,
+      spaceRegistry: SPACE_REGISTRY,
       originAuthToken: () => TOKEN,
       imgproxyConfig: () => IMGPROXY,
       fetch: vi.fn(),
@@ -198,9 +234,55 @@ describe("control app", () => {
     expect(response.headers.get("x-request-id")).not.toBe("caller-controlled-secret");
   });
 
+  it("serves one authenticated, non-cacheable Edge configuration snapshot", async () => {
+    const registry = new MemorySpaceRegistry({
+      spaces: [
+        {
+          id: "example-private",
+          routeClass: "private",
+          qualities: [75],
+          defaultQuality: 75,
+          allowedSourceOrigins: [{ origin: "https://sources.example.com" }],
+          resolvers: [],
+        },
+      ],
+    });
+    await registry.addCapabilityKey(
+      "example-private",
+      "test-key",
+      Uint8Array.from({ length: 32 }, (_, index) => index),
+    );
+    const control = createControlApp({
+      logger: NOOP_LOGGER,
+      originAuthToken: () => TOKEN,
+      edgeConfigToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch: vi.fn(),
+      spaceRegistry: registry,
+    });
+    const url = "https://shutter.test/internal/v1/edge/config";
+    expect((await control.request(url)).status).toBe(401);
+
+    const response = await control.request(url, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    const snapshot = await response.json<Record<string, unknown>>();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(snapshot).toMatchObject({ schemaVersion: "v1", generation: 1 });
+    expect(snapshot.spaces).toEqual([expect.objectContaining({ id: "example-private" })]);
+    expect(snapshot.capabilityKeys).toEqual({
+      "example-private": {
+        "test-key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      },
+    });
+  });
+
   it("contains uncaught failures behind a generic error body", async () => {
     const control = createControlApp({
       logger: NOOP_LOGGER,
+      spaceRegistry: SPACE_REGISTRY,
       originAuthToken: () => {
         throw new Error("sentinel-secret-error-message");
       },
@@ -212,7 +294,7 @@ describe("control app", () => {
     const body = await response.text();
 
     expect(response.status).toBe(500);
-    expect(JSON.parse(body)).toEqual({ error: { code: "service_unavailable" } });
+    expect(JSON.parse(body)).toEqual({ error: { code: "internal_error" } });
     expect(body).not.toContain("sentinel-secret-error-message");
   });
 });

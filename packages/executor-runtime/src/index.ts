@@ -13,7 +13,6 @@ import {
   type RenditionKind,
   type SourceOriginRule,
 } from "@shutter/protocol";
-import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 
 export {
@@ -88,8 +87,6 @@ export async function runExecutorOnce(
   let uploaded = false;
   let objectEtag: string | undefined;
   const transition = `/internal/v1/executors/${processor.kind}/jobs/${encodeURIComponent(claim.spaceId)}/${encodeURIComponent(claim.sourceId)}`;
-  const policy = getSpacePolicy(claim.spaceId);
-  if (policy === undefined) throw new Error(`Unknown Shutter Space ${claim.spaceId}`);
   const heartbeat = setInterval(() => {
     void control(config, `${transition}/heartbeat`, {
       method: "POST",
@@ -102,7 +99,7 @@ export async function runExecutorOnce(
       claim.locator,
       directory,
       config.fetch,
-      policy.allowedSourceOrigins,
+      claim.allowedSourceOrigins,
     );
     const put = await config.s3.send(
       new PutObjectCommand({

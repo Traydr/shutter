@@ -5,10 +5,10 @@ import {
   CONTROL_HTTP_ROUTES,
   type ControlHttpRoute,
   ProtocolError,
-  parseCapabilityKeyRegistry,
+  type SpacePolicy,
+  serializeEdgeConfigSnapshot,
   validateSourceLocator,
 } from "@shutter/protocol";
-import { getSpacePolicy } from "@shutter/space-config";
 import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
 import { Pool } from "pg";
@@ -20,16 +20,21 @@ import { type ControlLogger, controlLogger, operationalErrorType } from "./loggi
 import { createMasterStore, type MasterStore } from "./master-store.js";
 import { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 import { createSourcePurge } from "./source-purge.js";
+import { CapabilityKeyEncryption } from "./spaces/encryption.js";
+import { PostgresSpaceRegistry } from "./spaces/postgres-registry.js";
+import type { SpaceRegistry } from "./spaces/registry.js";
 
 const EXECUTOR_WAKE_TIMEOUT_MS = 11 * 60 * 1_000;
 
 export interface ControlRuntimeConfig {
   logger: ControlLogger;
   originAuthToken(): string | undefined;
+  edgeConfigToken?(): string | undefined;
   imgproxyConfig(): ImgproxyConfig | undefined;
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   masterStore?: MasterStore;
   jobApiRuntime?: JobApiRuntime;
+  spaceRegistry?: SpaceRegistry;
 }
 
 function safeRouteTemplate(
@@ -94,6 +99,21 @@ function strictPositiveInteger(value: string | null): number | undefined {
   return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
+async function activeSpacePolicy(
+  runtime: ControlRuntimeConfig,
+  spaceId: string,
+): Promise<SpacePolicy | undefined> {
+  if (runtime.spaceRegistry === undefined) throw new Error("Space Registry is unavailable");
+  return runtime.spaceRegistry.getActiveSpacePolicy(spaceId);
+}
+
+function unavailable(): Response {
+  return Response.json(
+    { error: { code: "service_unavailable" } },
+    { status: 503, headers: { "cache-control": "private, no-store" } },
+  );
+}
+
 export function createControlApp(
   runtime: ControlRuntimeConfig,
 ): Hono<{ Variables: { requestId: string } }> {
@@ -123,16 +143,17 @@ export function createControlApp(
     }
   });
 
+  // An unhandled error is a code defect, not a retry-me signal: 500, not 503.
+  // The registry-failure paths return their explicit 503s themselves.
   control.onError((error, context) => {
     runtime.logger.emit("error", {
       event: "control.service.failed",
       requestId: context.get("requestId"),
       httpRoute: safeRouteTemplate(context),
       outcome: "failed",
-      failureCode: "service_unavailable",
       errorType: operationalErrorType(error),
     });
-    return context.json({ error: { code: "service_unavailable" } }, 500, {
+    return context.json({ error: { code: "internal_error" } }, 500, {
       "cache-control": "private, no-store",
     });
   });
@@ -140,7 +161,43 @@ export function createControlApp(
   control.get(CONTROL_HTTP_ROUTES.healthz, (context) =>
     context.json({ ok: true, service: "control" }),
   );
-  if (runtime.jobApiRuntime !== undefined) control.route("/", createJobApi(runtime.jobApiRuntime));
+  control.get(CONTROL_HTTP_ROUTES.edgeConfig, async (context) => {
+    if (!authorized(context.req.header("authorization"), runtime.edgeConfigToken?.())) {
+      return context.json({ error: { code: "unauthorized" } }, 401, {
+        "cache-control": "private, no-store",
+        "www-authenticate": "Bearer",
+      });
+    }
+    if (runtime.spaceRegistry === undefined) {
+      return context.json({ error: { code: "service_unavailable" } }, 503, {
+        "cache-control": "private, no-store",
+      });
+    }
+    try {
+      const snapshot = await runtime.spaceRegistry.loadEdgeSnapshot();
+      return context.json(serializeEdgeConfigSnapshot(snapshot, new Date()), 200, {
+        "cache-control": "private, no-store",
+      });
+    } catch {
+      return context.json({ error: { code: "service_unavailable" } }, 503, {
+        "cache-control": "private, no-store",
+      });
+    }
+  });
+  if (runtime.jobApiRuntime !== undefined) {
+    control.route("/", createJobApi(runtime.jobApiRuntime));
+  } else {
+    for (const route of [
+      CONTROL_HTTP_ROUTES.sourcePurge,
+      CONTROL_HTTP_ROUTES.previewJob,
+      CONTROL_HTTP_ROUTES.executorClaim,
+      CONTROL_HTTP_ROUTES.executorHeartbeat,
+      CONTROL_HTTP_ROUTES.executorComplete,
+      CONTROL_HTTP_ROUTES.executorFail,
+    ]) {
+      control.all(route, () => unavailable());
+    }
+  }
 
   control.get(CONTROL_HTTP_ROUTES.spikeRendition, async (context) => {
     if (!authorized(context.req.header("authorization"), runtime.originAuthToken())) {
@@ -166,12 +223,10 @@ export function createControlApp(
     const quality = strictPositiveInteger(query.get("q"));
     const imgproxy = runtime.imgproxyConfig();
     const spaceId = key === null ? undefined : spaceIdFromCacheKey(key);
-    const policy = spaceId === undefined ? undefined : getSpacePolicy(spaceId);
     if (
       key === null ||
       !isCacheKey(key) ||
       spaceId === undefined ||
-      policy === undefined ||
       source === null ||
       width === undefined ||
       quality === undefined ||
@@ -179,6 +234,20 @@ export function createControlApp(
       imgproxy === undefined
     ) {
       return context.json({ error: { code: "request_invalid" } }, 400, {
+        "cache-control": "private, no-store",
+      });
+    }
+
+    let policy: SpacePolicy | undefined;
+    try {
+      policy = await activeSpacePolicy(runtime, spaceId);
+    } catch {
+      return context.json({ error: { code: "service_unavailable" } }, 503, {
+        "cache-control": "private, no-store",
+      });
+    }
+    if (policy === undefined) {
+      return context.json({ error: { code: "not_found" } }, 404, {
         "cache-control": "private, no-store",
       });
     }
@@ -278,6 +347,17 @@ export function createControlApp(
       });
     }
     try {
+      if ((await activeSpacePolicy(runtime, value.spaceId)) === undefined) {
+        return context.json({ error: { code: "not_found" } }, 404, {
+          "cache-control": "private, no-store",
+        });
+      }
+    } catch {
+      return context.json({ error: { code: "service_unavailable" } }, 503, {
+        "cache-control": "private, no-store",
+      });
+    }
+    try {
       const key = await buildMasterPreviewKey(value.spaceId, value.sourceId, value.kind);
       const sourceUrl = await runtime.masterStore.presignGet(key);
       const imgproxy = runtime.imgproxyConfig();
@@ -320,28 +400,6 @@ export function createControlApp(
   return control;
 }
 
-function parseStringRegistry(value: string | undefined): Map<string, readonly string[]> {
-  if (value === undefined) return new Map();
-  const parsed = JSON.parse(value) as Record<string, unknown>;
-  return new Map(
-    Object.entries(parsed).map(([spaceId, entry]) => [
-      spaceId,
-      Array.isArray(entry)
-        ? entry.filter((candidate): candidate is string => typeof candidate === "string")
-        : typeof entry === "string"
-          ? [entry]
-          : [],
-    ]),
-  );
-}
-
-function parseCapabilityKeys(
-  value: string | undefined,
-): Map<string, ReadonlyMap<string, Uint8Array>> {
-  if (value === undefined) return new Map();
-  return new Map(parseCapabilityKeyRegistry(value));
-}
-
 async function sendConfiguredExecutorWake(
   logger: ControlLogger,
   kind: "video" | "pdf",
@@ -377,6 +435,28 @@ const databaseUrl = env.DATABASE_URL;
 const jobPool = databaseUrl === undefined ? undefined : new Pool({ connectionString: databaseUrl });
 const renditionJobLifecycle =
   jobPool === undefined ? undefined : new PostgresRenditionJobLifecycle(jobPool);
+function configuredCapabilityKeyEncryption(): CapabilityKeyEncryption | undefined {
+  if (env.SHUTTER_ENCRYPTION_KEY === undefined) return undefined;
+  try {
+    return new CapabilityKeyEncryption(env.SHUTTER_ENCRYPTION_KEY);
+  } catch (error) {
+    // A supplied but malformed key must fail the boot, not silently build a
+    // registry that cannot decrypt any Capability Key and 503s all delivery
+    // ten minutes later.
+    throw new Error(
+      `SHUTTER_ENCRYPTION_KEY is set but not usable: ${
+        error instanceof Error ? error.message : "unknown error"
+      }`,
+    );
+  }
+}
+const capabilityKeyEncryption = configuredCapabilityKeyEncryption();
+const spaceRegistry =
+  jobPool === undefined
+    ? undefined
+    : new PostgresSpaceRegistry(jobPool, {
+        ...(capabilityKeyEncryption === undefined ? {} : { encryption: capabilityKeyEncryption }),
+      });
 const masterStore =
   env.S3_ENDPOINT && env.S3_BUCKET && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY
     ? createMasterStore({
@@ -421,13 +501,12 @@ const sourcePurge =
     : undefined;
 
 export const jobApiRuntime: JobApiRuntime | undefined =
-  renditionJobLifecycle === undefined
+  renditionJobLifecycle === undefined || spaceRegistry === undefined
     ? undefined
     : {
         lifecycle: renditionJobLifecycle,
         now: () => new Date(),
-        spaceApiTokens: () => parseStringRegistry(env.SPACE_API_TOKENS),
-        capabilityKeys: () => parseCapabilityKeys(env.CAPABILITY_KEYS),
+        spaceRegistry,
         executorToken: (kind) =>
           kind === "video" ? env.VIDEO_EXECUTOR_TOKEN : env.PDF_EXECUTOR_TOKEN,
         dispatch: dispatchExecutor,
@@ -438,6 +517,7 @@ export const jobApiRuntime: JobApiRuntime | undefined =
 export const app = createControlApp({
   logger: controlLogger,
   originAuthToken: () => env.ORIGIN_AUTH_TOKEN,
+  edgeConfigToken: () => env.EDGE_CONFIG_TOKEN,
   imgproxyConfig: () => {
     const baseUrl = env.IMGPROXY_BASE_URL;
     const key = env.IMGPROXY_KEY;
@@ -448,4 +528,5 @@ export const app = createControlApp({
   fetch: globalThis.fetch,
   ...(masterStore === undefined ? {} : { masterStore }),
   ...(jobApiRuntime === undefined ? {} : { jobApiRuntime }),
+  ...(spaceRegistry === undefined ? {} : { spaceRegistry }),
 });

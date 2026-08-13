@@ -98,6 +98,18 @@ function sourceOrigin(value: unknown, index: number): SourceOriginRule {
   return Object.freeze({ origin: url.origin, pathPrefix });
 }
 
+export function parseSourceOriginRules(value: unknown): readonly SourceOriginRule[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new SpacePolicyValidationError("allowedSourceOrigins must not be empty");
+  }
+  const parsed = Object.freeze(value.map(sourceOrigin));
+  const identities = parsed.map((rule) => `${rule.origin}${rule.pathPrefix ?? "/"}`);
+  if (new Set(identities).size !== identities.length) {
+    throw new SpacePolicyValidationError("allowedSourceOrigins must be unique");
+  }
+  return parsed;
+}
+
 function resolver(value: unknown, index: number): SourceResolverPolicy {
   const name = `resolvers[${index}]`;
   const input = record(value, name);
@@ -158,16 +170,7 @@ export function parseSpacePolicy(value: unknown): SpacePolicy {
   ) {
     throw new SpacePolicyValidationError("defaultQuality must be one of the permitted qualities");
   }
-  if (!Array.isArray(input.allowedSourceOrigins) || input.allowedSourceOrigins.length === 0) {
-    throw new SpacePolicyValidationError("allowedSourceOrigins must not be empty");
-  }
-  const allowedSourceOrigins = Object.freeze(input.allowedSourceOrigins.map(sourceOrigin));
-  const originIdentities = allowedSourceOrigins.map(
-    (rule) => `${rule.origin}${rule.pathPrefix ?? "/"}`,
-  );
-  if (new Set(originIdentities).size !== originIdentities.length) {
-    throw new SpacePolicyValidationError("allowedSourceOrigins must be unique");
-  }
+  const allowedSourceOrigins = parseSourceOriginRules(input.allowedSourceOrigins);
   if (!Array.isArray(input.resolvers)) {
     throw new SpacePolicyValidationError("resolvers must be an array");
   }

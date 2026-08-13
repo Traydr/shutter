@@ -280,7 +280,6 @@ A few properties fall out of those decisions:
 | `apps/control` | Control plane: job API, ledger, purge, imgproxy signing |
 | `apps/executor-video`, `apps/executor-pdf` | Isolated Master Preview executors |
 | `packages/protocol` | Capability crypto, URL construction, cache identity |
-| `packages/space-config` | Per-tenant policy: trusted origins, quality ladders |
 | `packages/testkit` | Cross-consumer conformance fixtures |
 | `packages/executor-runtime` | Shared claim, heartbeat, upload, and cleanup work cycle |
 | `packages/observability-node` | Structured logging and OTLP export for Node services |
@@ -308,7 +307,7 @@ The video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
 `poppler-utils`.
 
 ```sh
-pnpm --filter @shutter/control db:migrate   # Rendition Job ledger
+pnpm --filter @shutter/control db:migrate   # Space Registry and Rendition Job ledger
 pnpm --filter @shutter/control dev          # Control plane on :3000
 ```
 
@@ -321,9 +320,9 @@ server from booting.
 
 | Variable | Description |
 |---|---|
-| `DATABASE_URL` | Postgres for the Rendition Job ledger |
-| `SPACE_API_TOKENS` | Per-Space job API tokens as JSON; each at least 32 characters |
-| `CAPABILITY_KEYS` | Per-Space capability keys as `{ space: { keyId: key } }`; 32 bytes, hex or base64url |
+| `DATABASE_URL` | Postgres for the Space Registry and Rendition Job ledger |
+| `SHUTTER_ENCRYPTION_KEY` | Master key for Capability Keys stored in the Space Registry |
+| `EDGE_CONFIG_TOKEN` | Dedicated credential shared by Control and Edge for snapshot reads |
 | `S3_ENDPOINT`, `S3_BUCKET`, `S3_*` | Rendition Store, shared verbatim with imgproxy and both Executors |
 | `IMGPROXY_BASE_URL`, `IMGPROXY_KEY`, `IMGPROXY_SALT`, `IMGPROXY_SECRET` | On-demand image rendering |
 | `EDGE_BASE_URL`, `ORIGIN_AUTH_TOKEN` | Delivery edge; the token must match the Worker's value exactly |
@@ -338,9 +337,9 @@ See [`.env.example`](./.env.example) for the annotated full set.
 <details>
 <summary>Spaces and deployment values</summary>
 
-The two Spaces in `packages/space-config` (`demo-public` and `demo-private`) are
-illustrative tenant policies — trusted source origins, resolvers, canonical
-widths, and permitted qualities.
+Space policies, API tokens, and Capability Keys are records in Postgres. They
+are changed through the Space Registry and are not deployment variables or
+checked-in tenant configuration.
 
 Deployment-specific values — custom domains, the imgproxy source allowlist,
 storage credentials, and the OTLP endpoint — are not in this repo. See

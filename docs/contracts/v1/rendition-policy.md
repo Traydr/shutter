@@ -33,14 +33,11 @@ package-default breakpoint generation.
 
 ## Quality
 
-| Space | Permitted | Default |
-| --- | --- | --- |
-| `demo-public` | `30`, `50`, `75` | `75` |
-| `demo-private` | `30`, `75`, `80` | `75` |
-
-Unsupported quality values normalize to the nearest permitted value. Equal
-distance resolves upward. Master Preview materialization is fixed at quality
-`90` and is not a caller-selected Image Optimization quality.
+Each Space record supplies a non-empty set of permitted qualities and one
+default from that set. Unsupported quality values normalize to the nearest
+permitted value. Equal distance resolves upward. Master Preview materialization
+is fixed at quality `90` and is not a caller-selected Image Optimization
+quality.
 
 ## Fixed behavior
 
