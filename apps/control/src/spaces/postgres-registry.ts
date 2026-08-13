@@ -1,12 +1,18 @@
-import { parseSpacePolicy, type SpacePolicy } from "@shutter/protocol";
+import {
+  normalizeSourceOriginPathPrefix,
+  parseSpacePolicy,
+  type SpacePolicy,
+} from "@shutter/protocol";
 import type { Pool, PoolClient } from "pg";
+import { transaction } from "../db/transaction.js";
 import {
   apiTokenDisplayPrefix,
   apiTokenHash,
-  apiTokenHashMatches,
   createApiToken,
   createCapabilityKey,
   encodeCapabilityKey,
+  isWellFormedApiToken,
+  validateApiToken,
   validateCapabilityKeyId,
 } from "./credentials.js";
 import type { CapabilityKeyEncryption } from "./encryption.js";
@@ -24,6 +30,7 @@ import type {
   SpaceRecord,
   SpaceRegistry,
   SpaceRegistryTransaction,
+  SpaceRequestAuthorization,
 } from "./registry.js";
 import { SpaceRegistryError } from "./registry.js";
 
@@ -35,7 +42,6 @@ interface GenerationRow {
 interface ApiTokenRow {
   id: number;
   label: string;
-  token_hash: string;
   display_prefix: string;
   created_at: Date;
   last_used_at: Date | null;
@@ -44,14 +50,19 @@ interface ApiTokenRow {
 
 interface CapabilityKeyRow {
   id: number;
-  space_id: number;
-  public_space_id: string;
   key_id: string;
-  sealed_nonce: string;
-  sealed_key: string;
   accepted_at: Date;
   disabled_at: Date | null;
 }
+
+interface SealedCapabilityKeyRow {
+  key_id: string;
+  sealed_nonce: string;
+  sealed_key: string;
+}
+
+const API_TOKEN_COLUMNS = "id, label, display_prefix, created_at, last_used_at, revoked_at";
+const CAPABILITY_KEY_COLUMNS = "id, key_id, accepted_at, disabled_at";
 
 function apiTokenSummary(row: ApiTokenRow): ApiTokenSummary {
   return {
@@ -71,21 +82,6 @@ function capabilityKeySummary(row: CapabilityKeyRow): CapabilityKeySummary {
     acceptedAt: row.accepted_at,
     ...(row.disabled_at === null ? {} : { disabledAt: row.disabled_at }),
   };
-}
-
-async function transaction<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-    const result = await work(client);
-    await client.query("commit");
-    return result;
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  } finally {
-    client.release();
-  }
 }
 
 async function bumpGeneration(client: PoolClient, now: Date): Promise<number> {
@@ -112,10 +108,6 @@ async function lockActiveSpace(client: PoolClient, spaceId: string): Promise<num
   return recordId;
 }
 
-function normalizedPathPrefix(pathPrefix: string | undefined): string {
-  return pathPrefix === undefined || pathPrefix === "/" ? "/" : pathPrefix.replace(/\/+$/u, "");
-}
-
 async function insertPolicyChildren(
   client: PoolClient,
   recordId: number,
@@ -124,7 +116,7 @@ async function insertPolicyChildren(
   for (const rule of policy.allowedSourceOrigins) {
     await client.query(
       `insert into space_source_origins (space_id, origin, path_prefix) values ($1, $2, $3)`,
-      [recordId, rule.origin, normalizedPathPrefix(rule.pathPrefix)],
+      [recordId, rule.origin, normalizeSourceOriginPathPrefix(rule.pathPrefix)],
     );
   }
   for (const resolver of policy.resolvers) {
@@ -183,7 +175,9 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   }
 
   async getActiveSpacePolicy(spaceId: string): Promise<SpacePolicy | undefined> {
-    const [record] = await loadSpaceRecords(this.#pool, { activeOnly: true, spaceId });
+    const [record] = await this.#read((client) =>
+      loadSpaceRecords(client, { activeOnly: true, spaceId }),
+    );
     return record?.value.policy;
   }
 
@@ -210,22 +204,16 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     spaceId: string,
     activeOnly: boolean,
   ): Promise<ActiveSpaceAuthorization | undefined> {
-    const client = await this.#pool.connect();
-    try {
-      await client.query("begin isolation level repeatable read read only");
+    return this.#read(async (client) => {
       const [record] = await loadSpaceRecords(client, { activeOnly, spaceId });
-      if (record === undefined) {
-        await client.query("commit");
-        return undefined;
-      }
+      if (record === undefined) return undefined;
       const encryption = this.#capabilityKeyEncryption();
-      const result = await client.query<CapabilityKeyRow>(
-        `select id, space_id, $2::text as public_space_id, key_id, sealed_nonce, sealed_key,
-          accepted_at, disabled_at
+      const result = await client.query<SealedCapabilityKeyRow>(
+        `select key_id, sealed_nonce, sealed_key
          from space_capability_keys
          where space_id = $1 and disabled_at is null
          order by id`,
-        [record.recordId, spaceId],
+        [record.recordId],
       );
       const capabilityKeys = new Map<string, Uint8Array>();
       for (const key of result.rows) {
@@ -237,36 +225,71 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
           }),
         );
       }
-      await client.query("commit");
       return { policy: record.value.policy, capabilityKeys };
-    } catch (error) {
-      await client.query("rollback");
-      throw error;
-    } finally {
-      client.release();
-    }
+    });
+  }
+
+  async authorizeSpaceRequest(
+    spaceId: string,
+    token: string | undefined,
+  ): Promise<SpaceRequestAuthorization> {
+    const result = await this.#read(
+      async (
+        client,
+      ): Promise<
+        | { outcome: "missing" | "unauthorized" }
+        | ({ outcome: "authorized"; tokenId: number } & ActiveSpaceAuthorization)
+      > => {
+        const [record] = await loadSpaceRecords(client, { activeOnly: true, spaceId });
+        if (record === undefined) return { outcome: "missing" };
+        if (token === undefined || !isWellFormedApiToken(token)) {
+          return { outcome: "unauthorized" };
+        }
+        const match = await client.query<{ id: number }>(
+          `select id from space_api_tokens
+           where space_id = $1 and token_hash = $2 and revoked_at is null`,
+          [record.recordId, apiTokenHash(token)],
+        );
+        const tokenId = match.rows[0]?.id;
+        if (tokenId === undefined) return { outcome: "unauthorized" };
+        const encryption = this.#capabilityKeyEncryption();
+        const keys = await client.query<SealedCapabilityKeyRow>(
+          `select key_id, sealed_nonce, sealed_key
+           from space_capability_keys
+           where space_id = $1 and disabled_at is null
+           order by id`,
+          [record.recordId],
+        );
+        const capabilityKeys = new Map<string, Uint8Array>();
+        for (const key of keys.rows) {
+          capabilityKeys.set(
+            key.key_id,
+            encryption.open(spaceId, key.key_id, {
+              nonce: key.sealed_nonce,
+              ciphertext: key.sealed_key,
+            }),
+          );
+        }
+        return { outcome: "authorized", tokenId, policy: record.value.policy, capabilityKeys };
+      },
+    );
+    if (result.outcome !== "authorized") return result;
+    void this.#pool
+      .query(`update space_api_tokens set last_used_at = $2 where id = $1 and revoked_at is null`, [
+        result.tokenId,
+        this.#now(),
+      ])
+      .catch(() => undefined);
+    return { outcome: "authorized", policy: result.policy, capabilityKeys: result.capabilityKeys };
   }
 
   async listSpaces(): Promise<readonly SpaceRecord[]> {
-    return (await loadSpaceRecords(this.#pool)).map((record) => record.value);
+    const records = await this.#read((client) => loadSpaceRecords(client));
+    return records.map((record) => record.value);
   }
 
   async loadEdgeSnapshot(): Promise<EdgeSpaceSnapshot> {
-    if (this.#transactionClient !== undefined) {
-      return this.#loadEdgeSnapshot(this.#transactionClient);
-    }
-    const client = await this.#pool.connect();
-    try {
-      await client.query("begin isolation level repeatable read read only");
-      const snapshot = await this.#loadEdgeSnapshot(client);
-      await client.query("commit");
-      return snapshot;
-    } catch (error) {
-      await client.query("rollback");
-      throw error;
-    } finally {
-      client.release();
-    }
+    return this.#read((client) => this.#loadEdgeSnapshot(client));
   }
 
   async createSpace(policy: SpacePolicy): Promise<RegistryMutation<SpaceRecord>> {
@@ -302,55 +325,39 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     spaceId: string,
     update: SpacePolicyUpdate,
   ): Promise<RegistryMutation<SpaceRecord>> {
-    return this.#write(async (client) => {
-      const recordId = await lockActiveSpace(client, spaceId);
+    return this.#mutate(spaceId, async (client, recordId, now) => {
       const [stored] = await loadSpaceRecords(client, { spaceId });
-      if (stored === undefined || stored.recordId !== recordId) {
-        throw new Error("the locked Space could not be loaded");
-      }
+      if (stored === undefined) throw new Error("the locked Space could not be loaded");
       const policy = parseSpacePolicy({
         ...update,
         id: stored.value.policy.id,
         routeClass: stored.value.policy.routeClass,
       });
-      const now = this.#now();
       await client.query(
         `update spaces set qualities = $2, default_quality = $3, updated_at = $4 where id = $1`,
-        [stored.recordId, policy.qualities, policy.defaultQuality, now],
+        [recordId, policy.qualities, policy.defaultQuality, now],
       );
-      await client.query(`delete from space_source_origins where space_id = $1`, [stored.recordId]);
-      await client.query(`delete from space_resolvers where space_id = $1`, [stored.recordId]);
-      await insertPolicyChildren(client, stored.recordId, policy);
-      const generation = await bumpGeneration(client, now);
-      return {
-        generation,
-        value: { ...stored.value, policy, updatedAt: now },
-      };
+      await client.query(`delete from space_source_origins where space_id = $1`, [recordId]);
+      await client.query(`delete from space_resolvers where space_id = $1`, [recordId]);
+      await insertPolicyChildren(client, recordId, policy);
+      return { ...stored.value, policy, updatedAt: now };
     });
   }
 
   async decommissionSpace(spaceId: string): Promise<RegistryMutation<SpaceRecord>> {
-    return this.#write(async (client) => {
-      const recordId = await lockActiveSpace(client, spaceId);
+    return this.#mutate(spaceId, async (client, recordId, now) => {
       const [stored] = await loadSpaceRecords(client, { spaceId });
-      if (stored === undefined || stored.recordId !== recordId) {
-        throw new Error("the locked Space could not be loaded");
-      }
-      const now = this.#now();
+      if (stored === undefined) throw new Error("the locked Space could not be loaded");
       await client.query(
         `update spaces set status = 'decommissioned', decommissioned_at = $2, updated_at = $2
          where id = $1`,
-        [stored.recordId, now],
+        [recordId, now],
       );
-      const generation = await bumpGeneration(client, now);
       return {
-        generation,
-        value: {
-          ...stored.value,
-          status: "decommissioned",
-          decommissionedAt: now,
-          updatedAt: now,
-        },
+        ...stored.value,
+        status: "decommissioned" as const,
+        decommissionedAt: now,
+        updatedAt: now,
       };
     });
   }
@@ -360,26 +367,23 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     label: string,
     suppliedToken?: string,
   ): Promise<RegistryMutation<IssuedApiToken>> {
-    if (label.trim().length === 0 || label.length > 128) {
-      throw new SpaceRegistryError("invalid", "an API token label is required");
-    }
-    const token = suppliedToken ?? createApiToken();
-    const hash = apiTokenHash(token);
     try {
-      return await this.#write(async (client) => {
-        const recordId = await lockActiveSpace(client, spaceId);
-        const now = this.#now();
+      return await this.#mutate(spaceId, async (client, recordId, now) => {
+        if (label.trim().length === 0 || label.length > 128) {
+          throw new SpaceRegistryError("invalid", "an API token label is required");
+        }
+        if (suppliedToken !== undefined) validateApiToken(suppliedToken);
+        const token = suppliedToken ?? createApiToken();
         const inserted = await client.query<ApiTokenRow>(
           `insert into space_api_tokens
             (space_id, label, token_hash, display_prefix, created_at)
            values ($1, $2, $3, $4, $5)
-           returning id, label, token_hash, display_prefix, created_at, last_used_at, revoked_at`,
-          [recordId, label.trim(), hash, apiTokenDisplayPrefix(token), now],
+           returning ${API_TOKEN_COLUMNS}`,
+          [recordId, label.trim(), apiTokenHash(token), apiTokenDisplayPrefix(token), now],
         );
         const row = inserted.rows[0];
         if (row === undefined) throw new Error("the API token insert returned no row");
-        const generation = await bumpGeneration(client, now);
-        return { generation, value: { ...apiTokenSummary(row), token } };
+        return { ...apiTokenSummary(row), token };
       });
     } catch (error) {
       return mapConflict(error, "the API token already exists");
@@ -387,23 +391,19 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   }
 
   async verifyApiToken(spaceId: string, token: string): Promise<boolean> {
-    let hash: string;
-    try {
-      hash = apiTokenHash(token);
-    } catch (error) {
-      if (error instanceof SpaceRegistryError && error.code === "invalid") return false;
-      else throw error;
-    }
+    if (!isWellFormedApiToken(token)) return false;
     const database = this.#transactionClient ?? this.#pool;
-    const result = await database.query<Pick<ApiTokenRow, "id" | "token_hash">>(
-      `select tokens.id, tokens.token_hash
+    // The unique index on token_hash makes the equality filter authoritative:
+    // at most one row can match, so a returned row is the verification.
+    const result = await database.query<{ id: number }>(
+      `select tokens.id
        from space_api_tokens tokens
        join spaces on spaces.id = tokens.space_id
        where spaces.space_id = $1 and spaces.status = 'active'
          and tokens.token_hash = $2 and tokens.revoked_at is null`,
-      [spaceId, hash],
+      [spaceId, apiTokenHash(token)],
     );
-    const match = result.rows.find((candidate) => apiTokenHashMatches(hash, candidate.token_hash));
+    const match = result.rows[0];
     if (match === undefined) return false;
     // Usage metadata is advisory and must not delay or fail authentication.
     void database
@@ -416,35 +416,36 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   }
 
   async listApiTokens(spaceId: string): Promise<readonly ApiTokenSummary[]> {
-    const [space] = await loadSpaceRecords(this.#pool, { spaceId });
-    if (space === undefined) throw new SpaceRegistryError("not_found", "the Space does not exist");
-    const result = await this.#pool.query<ApiTokenRow>(
-      `select id, label, token_hash, display_prefix, created_at, last_used_at, revoked_at
-       from space_api_tokens where space_id = $1 order by id`,
-      [space.recordId],
-    );
-    return result.rows.map(apiTokenSummary);
+    return this.#read(async (client) => {
+      const [space] = await loadSpaceRecords(client, { spaceId });
+      if (space === undefined) {
+        throw new SpaceRegistryError("not_found", "the Space does not exist");
+      }
+      const result = await client.query<ApiTokenRow>(
+        `select ${API_TOKEN_COLUMNS}
+         from space_api_tokens where space_id = $1 order by id`,
+        [space.recordId],
+      );
+      return result.rows.map(apiTokenSummary);
+    });
   }
 
   async revokeApiToken(
     spaceId: string,
     tokenId: number,
   ): Promise<RegistryMutation<ApiTokenSummary>> {
-    return this.#write(async (client) => {
-      const recordId = await lockActiveSpace(client, spaceId);
-      const now = this.#now();
+    return this.#mutate(spaceId, async (client, recordId, now) => {
       const result = await client.query<ApiTokenRow>(
         `update space_api_tokens set revoked_at = coalesce(revoked_at, $3)
          where id = $1 and space_id = $2
-         returning id, label, token_hash, display_prefix, created_at, last_used_at, revoked_at`,
+         returning ${API_TOKEN_COLUMNS}`,
         [tokenId, recordId, now],
       );
       const row = result.rows[0];
       if (row === undefined) {
         throw new SpaceRegistryError("not_found", "the API token does not exist");
       }
-      const generation = await bumpGeneration(client, now);
-      return { generation, value: apiTokenSummary(row) };
+      return apiTokenSummary(row);
     });
   }
 
@@ -453,27 +454,24 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     keyId: string,
     suppliedKey?: Uint8Array,
   ): Promise<RegistryMutation<IssuedCapabilityKey>> {
-    validateCapabilityKeyId(keyId);
-    const key = suppliedKey === undefined ? createCapabilityKey() : Uint8Array.from(suppliedKey);
-    const encoded = encodeCapabilityKey(key);
-    const encryption = this.#capabilityKeyEncryption();
-    const sealed = encryption.seal(spaceId, keyId, key);
     try {
-      return await this.#write(async (client) => {
-        const recordId = await lockActiveSpace(client, spaceId);
-        const now = this.#now();
+      return await this.#mutate(spaceId, async (client, recordId, now) => {
+        validateCapabilityKeyId(keyId);
+        const encryption = this.#capabilityKeyEncryption();
+        const key =
+          suppliedKey === undefined ? createCapabilityKey() : Uint8Array.from(suppliedKey);
+        const encoded = encodeCapabilityKey(key);
+        const sealed = encryption.seal(spaceId, keyId, key);
         const result = await client.query<CapabilityKeyRow>(
           `insert into space_capability_keys
             (space_id, key_id, sealed_nonce, sealed_key, accepted_at)
            values ($1, $2, $3, $4, $5)
-           returning id, space_id, $6::text as public_space_id, key_id, sealed_nonce, sealed_key,
-             accepted_at, disabled_at`,
-          [recordId, keyId, sealed.nonce, sealed.ciphertext, now, spaceId],
+           returning ${CAPABILITY_KEY_COLUMNS}`,
+          [recordId, keyId, sealed.nonce, sealed.ciphertext, now],
         );
         const row = result.rows[0];
         if (row === undefined) throw new Error("the Capability Key insert returned no row");
-        const generation = await bumpGeneration(client, now);
-        return { generation, value: { ...capabilityKeySummary(row), key: encoded } };
+        return { ...capabilityKeySummary(row), key: encoded };
       });
     } catch (error) {
       return mapConflict(error, "the Capability Key identifier already exists");
@@ -481,37 +479,55 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   }
 
   async listCapabilityKeys(spaceId: string): Promise<readonly CapabilityKeySummary[]> {
-    const [space] = await loadSpaceRecords(this.#pool, { spaceId });
-    if (space === undefined) throw new SpaceRegistryError("not_found", "the Space does not exist");
-    const result = await this.#pool.query<CapabilityKeyRow>(
-      `select id, space_id, $2::text as public_space_id, key_id, sealed_nonce, sealed_key,
-        accepted_at, disabled_at
-       from space_capability_keys where space_id = $1 order by id`,
-      [space.recordId, spaceId],
-    );
-    return result.rows.map(capabilityKeySummary);
+    return this.#read(async (client) => {
+      const [space] = await loadSpaceRecords(client, { spaceId });
+      if (space === undefined) {
+        throw new SpaceRegistryError("not_found", "the Space does not exist");
+      }
+      const result = await client.query<CapabilityKeyRow>(
+        `select ${CAPABILITY_KEY_COLUMNS}
+         from space_capability_keys where space_id = $1 order by id`,
+        [space.recordId],
+      );
+      return result.rows.map(capabilityKeySummary);
+    });
   }
 
   async disableCapabilityKey(
     spaceId: string,
     keyId: string,
   ): Promise<RegistryMutation<CapabilityKeySummary>> {
-    return this.#write(async (client) => {
-      const recordId = await lockActiveSpace(client, spaceId);
-      const now = this.#now();
+    return this.#mutate(spaceId, async (client, recordId, now) => {
       const result = await client.query<CapabilityKeyRow>(
         `update space_capability_keys set disabled_at = coalesce(disabled_at, $3)
          where space_id = $1 and key_id = $2
-         returning id, space_id, $4::text as public_space_id, key_id, sealed_nonce, sealed_key,
-           accepted_at, disabled_at`,
-        [recordId, keyId, now, spaceId],
+         returning ${CAPABILITY_KEY_COLUMNS}`,
+        [recordId, keyId, now],
       );
       const row = result.rows[0];
       if (row === undefined) {
         throw new SpaceRegistryError("not_found", "the Capability Key does not exist");
       }
+      return capabilityKeySummary(row);
+    });
+  }
+
+  /**
+   * Every Space-scoped mutation runs as: one transaction, a lock on the active
+   * Space row, one clock reading, the statements, then exactly one generation
+   * bump. The helper owns that skeleton so a mutation cannot forget the bump
+   * and leave the Edge snapshot stale.
+   */
+  async #mutate<T>(
+    spaceId: string,
+    work: (client: PoolClient, recordId: number, now: Date) => Promise<T>,
+  ): Promise<RegistryMutation<T>> {
+    return this.#write(async (client) => {
+      const recordId = await lockActiveSpace(client, spaceId);
+      const now = this.#now();
+      const value = await work(client, recordId, now);
       const generation = await bumpGeneration(client, now);
-      return { generation, value: capabilityKeySummary(row) };
+      return { generation, value };
     });
   }
 
@@ -528,6 +544,17 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
       : work(this.#transactionClient);
   }
 
+  /**
+   * A policy read spans several tables. Outside a caller-owned transaction it
+   * runs inside one repeatable-read snapshot so no concurrent edit can split
+   * what the caller observes.
+   */
+  #read<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
+    return this.#transactionClient === undefined
+      ? transaction(this.#pool, work, { mode: "repeatable read read only" })
+      : work(this.#transactionClient);
+  }
+
   async #loadEdgeSnapshot(client: PoolClient): Promise<EdgeSpaceSnapshot> {
     const encryption = this.#capabilityKeyEncryption();
     const metadata = await client.query<GenerationRow>(
@@ -536,9 +563,8 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     const generation = metadata.rows[0];
     if (generation === undefined) throw new Error("Space Registry metadata is not initialized");
     const records = await loadSpaceRecords(client, { activeOnly: true });
-    const keys = await client.query<CapabilityKeyRow>(
-      `select keys.id, keys.space_id, spaces.space_id as public_space_id, keys.key_id,
-        keys.sealed_nonce, keys.sealed_key, keys.accepted_at, keys.disabled_at
+    const keys = await client.query<SealedCapabilityKeyRow & { public_space_id: string }>(
+      `select spaces.space_id as public_space_id, keys.key_id, keys.sealed_nonce, keys.sealed_key
        from space_capability_keys keys
        join spaces on spaces.id = keys.space_id
        where spaces.status = 'active' and keys.disabled_at is null
@@ -546,13 +572,30 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     );
     const capabilityKeys = new Map<string, Map<string, Uint8Array>>();
     for (const record of records) capabilityKeys.set(record.value.policy.id, new Map());
+    let undecryptable = 0;
     for (const key of keys.rows) {
-      capabilityKeys.get(key.public_space_id)?.set(
-        key.key_id,
-        encryption.open(key.public_space_id, key.key_id, {
-          nonce: key.sealed_nonce,
-          ciphertext: key.sealed_key,
-        }),
+      const spaceKeys = capabilityKeys.get(key.public_space_id);
+      if (spaceKeys === undefined) {
+        throw new Error("a Capability Key references a Space missing from the snapshot");
+      }
+      try {
+        spaceKeys.set(
+          key.key_id,
+          encryption.open(key.public_space_id, key.key_id, {
+            nonce: key.sealed_nonce,
+            ciphertext: key.sealed_key,
+          }),
+        );
+      } catch {
+        // One undecryptable row degrades that key alone: capabilities signed
+        // with it fail verification at the Edge, which is the same outcome as
+        // excluding it, without taking down every Space.
+        undecryptable += 1;
+      }
+    }
+    if (undecryptable > 0) {
+      console.error(
+        `space registry: excluded ${undecryptable} undecryptable Capability Key(s) from the Edge snapshot`,
       );
     }
     return {

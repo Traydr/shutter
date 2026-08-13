@@ -7,6 +7,7 @@ import type {
 } from "@shutter/protocol";
 import { createFailedJobRepresentation } from "@shutter/protocol";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
+import { transaction } from "./db/transaction.js";
 
 export const MAX_ATTEMPTS = 5;
 export const RETRY_DELAYS_SECONDS = [60, 300, 1_800, 7_200] as const;
@@ -195,21 +196,6 @@ function fromRow(row: JobRow): JobRecord {
     ...(row.object_etag === null ? {} : { objectEtag: row.object_etag }),
     ...(row.failure_code === null ? {} : { failureCode: row.failure_code }),
   };
-}
-
-async function transaction<T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-    const result = await work(client);
-    await client.query("commit");
-    return result;
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
-  } finally {
-    client.release();
-  }
 }
 
 function retryDeadline(input: SubmitJobInput, now: Date): Date {
