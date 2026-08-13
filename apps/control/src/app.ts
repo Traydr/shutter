@@ -5,6 +5,7 @@ import {
   CONTROL_HTTP_ROUTES,
   type ControlHttpRoute,
   ProtocolError,
+  parseEdgeConfigRefreshReport,
   type SpacePolicy,
   serializeEdgeConfigSnapshot,
   validateSourceLocator,
@@ -12,6 +13,8 @@ import {
 import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
 import { Pool } from "pg";
+import { createAdminApp } from "./admin/app.js";
+import { EdgeRefreshTracker } from "./edge-refresh-status.js";
 import { env } from "./env/server.js";
 import { createSerializedExecutorDispatch, sendExecutorWake } from "./executor-dispatch.js";
 import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
@@ -30,11 +33,14 @@ export interface ControlRuntimeConfig {
   logger: ControlLogger;
   originAuthToken(): string | undefined;
   edgeConfigToken?(): string | undefined;
+  adminBootstrapToken?(): string | undefined;
+  imgproxyAllowedSources?(): string | undefined;
   imgproxyConfig(): ImgproxyConfig | undefined;
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   masterStore?: MasterStore;
   jobApiRuntime?: JobApiRuntime;
   spaceRegistry?: SpaceRegistry;
+  edgeRefreshTracker?: EdgeRefreshTracker;
 }
 
 function safeRouteTemplate(
@@ -184,6 +190,45 @@ export function createControlApp(
       });
     }
   });
+  control.post(CONTROL_HTTP_ROUTES.edgeConfigRefresh, async (context) => {
+    if (!authorized(context.req.header("authorization"), runtime.edgeConfigToken?.())) {
+      return context.json({ error: { code: "unauthorized" } }, 401, {
+        "cache-control": "private, no-store",
+        "www-authenticate": "Bearer",
+      });
+    }
+    if (runtime.edgeRefreshTracker === undefined) return unavailable();
+    let body: unknown;
+    try {
+      if (!context.req.header("content-type")?.toLowerCase().startsWith("application/json")) {
+        throw new Error("invalid content type");
+      }
+      body = await context.req.json();
+    } catch {
+      return context.json({ error: { code: "request_invalid" } }, 400, {
+        "cache-control": "private, no-store",
+      });
+    }
+    let report: ReturnType<typeof parseEdgeConfigRefreshReport>;
+    try {
+      report = parseEdgeConfigRefreshReport(body);
+    } catch {
+      return context.json({ error: { code: "request_invalid" } }, 400, {
+        "cache-control": "private, no-store",
+      });
+    }
+    runtime.edgeRefreshTracker.report(report.generation);
+    return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
+  });
+  control.route(
+    "/admin",
+    createAdminApp({
+      bootstrapToken: () => runtime.adminBootstrapToken?.(),
+      imgproxyAllowedSources: () => runtime.imgproxyAllowedSources?.(),
+      edgeRefreshStatus: () => runtime.edgeRefreshTracker?.latest(),
+      ...(runtime.spaceRegistry === undefined ? {} : { registry: runtime.spaceRegistry }),
+    }),
+  );
   if (runtime.jobApiRuntime !== undefined) {
     control.route("/", createJobApi(runtime.jobApiRuntime));
   } else {
@@ -457,6 +502,7 @@ const spaceRegistry =
     : new PostgresSpaceRegistry(jobPool, {
         ...(capabilityKeyEncryption === undefined ? {} : { encryption: capabilityKeyEncryption }),
       });
+const edgeRefreshTracker = new EdgeRefreshTracker();
 const masterStore =
   env.S3_ENDPOINT && env.S3_BUCKET && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY
     ? createMasterStore({
@@ -518,6 +564,9 @@ export const app = createControlApp({
   logger: controlLogger,
   originAuthToken: () => env.ORIGIN_AUTH_TOKEN,
   edgeConfigToken: () => env.EDGE_CONFIG_TOKEN,
+  adminBootstrapToken: () => env.ADMIN_BOOTSTRAP_TOKEN,
+  imgproxyAllowedSources: () => env.IMGPROXY_ALLOWED_SOURCES,
+  edgeRefreshTracker,
   imgproxyConfig: () => {
     const baseUrl = env.IMGPROXY_BASE_URL;
     const key = env.IMGPROXY_KEY;

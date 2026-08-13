@@ -43,6 +43,20 @@ function executionContext(): {
   };
 }
 
+function isRefreshReport(input: RequestInfo | URL): boolean {
+  return new URL(input instanceof Request ? input.url : input.toString()).pathname.endsWith(
+    "/refresh",
+  );
+}
+
+function snapshotCalls(fetch: ReturnType<typeof vi.fn>): number {
+  return fetch.mock.calls.filter(([input]) => !isRefreshReport(input as RequestInfo | URL)).length;
+}
+
+function refreshReportCalls(fetch: ReturnType<typeof vi.fn>): number {
+  return fetch.mock.calls.filter(([input]) => isRefreshReport(input as RequestInfo | URL)).length;
+}
+
 afterEach(() => {
   resetEdgeConfigForTest();
   vi.useRealTimers();
@@ -57,18 +71,24 @@ describe("Edge configuration snapshot", () => {
     const response = new Promise<Response>((resolve) => {
       resolveResponse = resolve;
     });
-    const fetch = vi.fn<typeof globalThis.fetch>(() => response);
+    const fetch = vi.fn<typeof globalThis.fetch>((input) =>
+      isRefreshReport(input) ? Promise.resolve(new Response(null, { status: 204 })) : response,
+    );
     vi.stubGlobal("fetch", fetch);
     const first = executionContext();
     const second = executionContext();
 
     const firstRead = getEdgeConfig(bindings, first.context);
     const secondRead = getEdgeConfig(bindings, second.context);
-    expect(fetch).toHaveBeenCalledOnce();
+    expect(snapshotCalls(fetch)).toBe(1);
     resolveResponse(Response.json(wire(1)));
 
     await expect(firstRead).resolves.toMatchObject({ generation: 1 });
     await expect(secondRead).resolves.toMatchObject({ generation: 1 });
+    expect(first.pending).toHaveLength(1);
+    expect(second.pending).toHaveLength(0);
+    await Promise.all(first.pending);
+    expect(refreshReportCalls(fetch)).toBe(1);
     const init = fetch.mock.calls[0]?.[1];
     expect(init).toMatchObject({ cache: "no-store", redirect: "manual" });
     expect(new Headers(init?.headers).get("authorization")).toBe(
@@ -79,10 +99,12 @@ describe("Edge configuration snapshot", () => {
   it("uses a 45-second snapshot while one background refresh runs", async () => {
     let now = START;
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(Response.json(wire(1)))
-      .mockResolvedValueOnce(Response.json(wire(2, START + 46_000)));
+    let snapshot = 0;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      if (isRefreshReport(input)) return new Response(null, { status: 204 });
+      snapshot += 1;
+      return Response.json(wire(snapshot, snapshot === 1 ? START : START + 46_000));
+    });
     vi.stubGlobal("fetch", fetch);
     await getEdgeConfig(bindings, executionContext().context);
     now += 46_000;
@@ -99,10 +121,13 @@ describe("Edge configuration snapshot", () => {
   it("retries failed hard refreshes inside grace and fails closed after ten minutes", async () => {
     let now = START;
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(Response.json(wire(1)))
-      .mockRejectedValue(new Error("Control unavailable"));
+    let snapshot = 0;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      if (isRefreshReport(input)) return new Response(null, { status: 204 });
+      snapshot += 1;
+      if (snapshot === 1) return Response.json(wire(1));
+      throw new Error("Control unavailable");
+    });
     vi.stubGlobal("fetch", fetch);
     await getEdgeConfig(bindings, executionContext().context);
 
@@ -113,7 +138,7 @@ describe("Edge configuration snapshot", () => {
     await expect(getEdgeConfig(bindings, executionContext().context)).resolves.toMatchObject({
       generation: 1,
     });
-    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(snapshotCalls(fetch)).toBe(3);
 
     now = START + 10 * 60_000;
     await expect(getEdgeConfig(bindings, executionContext().context)).rejects.toBeInstanceOf(
@@ -125,7 +150,11 @@ describe("Edge configuration snapshot", () => {
     vi.spyOn(Date, "now").mockReturnValue(START);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(new Uint8Array(1024 * 1024 + 1))),
+      vi.fn(async (input) =>
+        isRefreshReport(input)
+          ? new Response(null, { status: 204 })
+          : new Response(new Uint8Array(1024 * 1024 + 1)),
+      ),
     );
     await expect(getEdgeConfig(bindings, executionContext().context)).rejects.toBeInstanceOf(
       EdgeConfigUnavailableError,
@@ -136,7 +165,11 @@ describe("Edge configuration snapshot", () => {
     vi.spyOn(Date, "now").mockReturnValue(START);
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => Response.json(wire(1, START - 10 * 60_000))),
+      vi.fn(async (input) =>
+        isRefreshReport(input)
+          ? new Response(null, { status: 204 })
+          : Response.json(wire(1, START - 10 * 60_000)),
+      ),
     );
     await expect(getEdgeConfig(bindings, executionContext().context)).rejects.toBeInstanceOf(
       EdgeConfigUnavailableError,
@@ -146,10 +179,13 @@ describe("Edge configuration snapshot", () => {
   it("does not serve a recently fetched snapshot after its generatedAt grace expires", async () => {
     let now = START;
     vi.spyOn(Date, "now").mockImplementation(() => now);
-    const fetch = vi
-      .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(Response.json(wire(1, START - 599_000)))
-      .mockRejectedValueOnce(new Error("Control unavailable"));
+    let snapshot = 0;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      if (isRefreshReport(input)) return new Response(null, { status: 204 });
+      snapshot += 1;
+      if (snapshot === 1) return Response.json(wire(1, START - 599_000));
+      throw new Error("Control unavailable");
+    });
     vi.stubGlobal("fetch", fetch);
     await getEdgeConfig(bindings, executionContext().context);
 
@@ -157,7 +193,7 @@ describe("Edge configuration snapshot", () => {
     await expect(getEdgeConfig(bindings, executionContext().context)).rejects.toBeInstanceOf(
       EdgeConfigUnavailableError,
     );
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(snapshotCalls(fetch)).toBe(2);
   });
 
   it("aborts a cold refresh after the short timeout", async () => {
@@ -165,11 +201,12 @@ describe("Edge configuration snapshot", () => {
     vi.spyOn(Date, "now").mockReturnValue(START);
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof globalThis.fetch>(
-        (_input, init) =>
-          new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
-          }),
+      vi.fn<typeof globalThis.fetch>((input, init) =>
+        isRefreshReport(input)
+          ? Promise.resolve(new Response(null, { status: 204 }))
+          : new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+            }),
       ),
     );
     const read = getEdgeConfig(bindings, executionContext().context);
@@ -180,11 +217,33 @@ describe("Edge configuration snapshot", () => {
 
   it("performs a new cold read after isolate state is evicted", async () => {
     vi.spyOn(Date, "now").mockReturnValue(START);
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => Response.json(wire(1)));
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) =>
+      isRefreshReport(input) ? new Response(null, { status: 204 }) : Response.json(wire(1)),
+    );
     vi.stubGlobal("fetch", fetch);
     await getEdgeConfig(bindings, executionContext().context);
     resetEdgeConfigForTest();
     await getEdgeConfig(bindings, executionContext().context);
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(snapshotCalls(fetch)).toBe(2);
+  });
+
+  it("reports each successful refresh without delaying snapshot use", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(START);
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      if (!isRefreshReport(input)) return Response.json(wire(8));
+      expect(init).toMatchObject({ method: "POST", cache: "no-store", redirect: "manual" });
+      expect(new Headers(init?.headers).get("authorization")).toBe(
+        `Bearer ${bindings.EDGE_CONFIG_TOKEN}`,
+      );
+      expect(init?.body).toBe(JSON.stringify({ generation: 8 }));
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const execution = executionContext();
+    await expect(getEdgeConfig(bindings, execution.context)).resolves.toMatchObject({
+      generation: 8,
+    });
+    await Promise.all(execution.pending);
+    expect(fetch.mock.calls.some(([input]) => isRefreshReport(input))).toBe(true);
   });
 });

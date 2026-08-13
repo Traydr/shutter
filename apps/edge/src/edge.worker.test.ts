@@ -53,11 +53,12 @@ function configFetch(
   origin?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ): typeof globalThis.fetch {
   return async (input, init) => {
-    if (
-      new URL(input instanceof Request ? input.url : input.toString()).pathname ===
-      "/internal/v1/edge/config"
-    ) {
+    const pathname = new URL(input instanceof Request ? input.url : input.toString()).pathname;
+    if (pathname === "/internal/v1/edge/config") {
       return snapshotResponse();
+    }
+    if (pathname === "/internal/v1/edge/config/refresh") {
+      return new Response(null, { status: 204 });
     }
     if (origin !== undefined) return origin(input, init);
     throw new Error("unexpected origin request");

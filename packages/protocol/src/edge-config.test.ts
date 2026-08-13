@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   EdgeConfigValidationError,
+  parseEdgeConfigRefreshReport,
   parseEdgeConfigSnapshot,
+  serializeEdgeConfigRefreshReport,
   serializeEdgeConfigSnapshot,
 } from "./edge-config.js";
 import { parseSpacePolicy } from "./space-policy.js";
@@ -71,5 +73,17 @@ describe("Edge configuration contract", () => {
         capabilityKeys: { "example-private": { "test-key": "short" } },
       }),
     ).toThrow("Capability Key");
+  });
+
+  it("pins the Edge refresh report producer and consumer", () => {
+    expect(parseEdgeConfigRefreshReport(serializeEdgeConfigRefreshReport(2))).toEqual({
+      generation: 2,
+    });
+    expect(() => parseEdgeConfigRefreshReport({ generation: 2, extra: true })).toThrow(
+      EdgeConfigValidationError,
+    );
+    expect(() => parseEdgeConfigRefreshReport({ generation: -1 })).toThrow(
+      "non-negative safe integer",
+    );
   });
 });

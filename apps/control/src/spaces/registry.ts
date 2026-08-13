@@ -44,6 +44,11 @@ export interface RegistryMutation<T> {
   value: T;
 }
 
+export interface RegistryGeneration {
+  generation: number;
+  updatedAt: Date;
+}
+
 export interface EdgeSpaceSnapshot {
   schemaVersion: "v1";
   generation: number;
@@ -97,8 +102,10 @@ export interface SpaceRegistryTransaction {
 
 export interface SpaceRegistry extends SpaceRegistryTransaction {
   withTransaction<T>(work: (registry: SpaceRegistryTransaction) => Promise<T>): Promise<T>;
+  getGeneration(): Promise<RegistryGeneration>;
   getActiveSpacePolicy(spaceId: string): Promise<SpacePolicy | undefined>;
   getActiveSpaceAuthorization(spaceId: string): Promise<ActiveSpaceAuthorization | undefined>;
+  getSpaceAuthorization(spaceId: string): Promise<ActiveSpaceAuthorization | undefined>;
   authorizeSpaceRequest(
     spaceId: string,
     token: string | undefined,

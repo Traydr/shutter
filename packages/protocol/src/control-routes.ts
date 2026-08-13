@@ -1,6 +1,7 @@
 export const CONTROL_HTTP_ROUTES = {
   healthz: "/healthz",
   edgeConfig: "/internal/v1/edge/config",
+  edgeConfigRefresh: "/internal/v1/edge/config/refresh",
   masterRendition: "/internal/v1/master-rendition",
   spikeRendition: "/internal/v1/spike/rendition",
   sourcePurge: "/v1/spaces/:spaceId/sources/:sourceId/purge",

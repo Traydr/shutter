@@ -10,6 +10,10 @@ export interface EdgeConfigSnapshotWire {
   capabilityKeys: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
+export interface EdgeConfigRefreshReportWire {
+  generation: number;
+}
+
 export interface EdgeConfigSnapshotSource {
   generation: number;
   spaces: readonly SpacePolicy[];
@@ -69,6 +73,19 @@ export function serializeEdgeConfigSnapshot(
     spaces: snapshot.spaces,
     capabilityKeys,
   };
+}
+
+export function serializeEdgeConfigRefreshReport(generation: number): EdgeConfigRefreshReportWire {
+  if (!Number.isSafeInteger(generation) || generation < 0) {
+    throw new EdgeConfigValidationError("generation must be a non-negative safe integer");
+  }
+  return { generation };
+}
+
+export function parseEdgeConfigRefreshReport(value: unknown): EdgeConfigRefreshReportWire {
+  const input = object(value, "Edge configuration refresh report");
+  exactKeys(input, ["generation"], "Edge configuration refresh report");
+  return serializeEdgeConfigRefreshReport(input.generation as number);
 }
 
 export function parseEdgeConfigSnapshot(value: unknown): ParsedEdgeConfigSnapshot {

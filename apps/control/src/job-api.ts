@@ -233,7 +233,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     if (claim === undefined) return new Response(null, { status: 204 });
     let authorization: ActiveSpaceAuthorization | undefined;
     try {
-      authorization = await runtime.spaceRegistry.getActiveSpaceAuthorization(claim.spaceId);
+      authorization = await runtime.spaceRegistry.getSpaceAuthorization(claim.spaceId);
     } catch {
       return requestFailure(503, "service_unavailable");
     }

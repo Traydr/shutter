@@ -54,6 +54,10 @@ describe("job API", () => {
   beforeAll(async () => {
     test = await createPostgresTestLifecycle();
     lifecycle = test.lifecycle;
+  });
+
+  beforeEach(async () => {
+    await test.pool.query("truncate table rendition_jobs");
     spaceRegistry = new MemorySpaceRegistry({
       now: () => NOW,
       spaces: [
@@ -80,10 +84,6 @@ describe("job API", () => {
   });
 
   afterAll(async () => test.close());
-
-  beforeEach(async () => {
-    await test.pool.query("truncate table rendition_jobs");
-  });
 
   it("submits, polls, claims, and completes one canonical video job", async () => {
     const dispatch = vi.fn(async () => {});
@@ -162,6 +162,31 @@ describe("job API", () => {
       },
     );
     expect(malformed.status).toBe(400);
+  });
+
+  it("lets an accepted job finish after its Space is decommissioned", async () => {
+    const app = createJobApi(runtime(lifecycle));
+    const resource =
+      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video";
+    const submitted = await app.request(resource, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({ sourceCapability: await capability() }),
+    });
+    expect(submitted.status).toBe(202);
+    await spaceRegistry.decommissionSpace("example-private");
+
+    const claim = await app.request("http://shutter.test/internal/v1/executors/video/claim", {
+      method: "POST",
+      headers: { authorization: `Bearer ${VIDEO_TOKEN}` },
+    });
+    expect(claim.status).toBe(200);
+    await expect(claim.json()).resolves.toMatchObject({
+      spaceId: "example-private",
+      sourceId: "source-1",
+      locator: "https://sources.example.com/private/originals/source-1.mp4",
+    });
+    expect((await app.request(resource)).status).toBe(404);
   });
 
   it("keeps a durable submission accepted when its initial dispatch fails", async () => {
