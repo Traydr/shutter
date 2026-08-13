@@ -75,6 +75,15 @@ function formRequest(
 }
 
 describe("Control admin surface", () => {
+  it("keeps the referrer policy compatible with the same-host Origin check", async () => {
+    // Under no-referrer, browsers send `Origin: null` on same-origin form
+    // POSTs (Fetch spec), which the CSRF middleware must reject — so the
+    // pages must never regress to that policy.
+    const app = createAdminApp(runtime());
+    const login = await app.request(`${ORIGIN}/`);
+    expect(login.headers.get("referrer-policy")).toBe("same-origin");
+  });
+
   it("keeps every management route behind a short-lived secure session", async () => {
     let now = Date.parse("2026-08-11T12:00:00.000Z");
     const app = createAdminApp(runtime(new MemorySpaceRegistry(), { now: () => now }));
