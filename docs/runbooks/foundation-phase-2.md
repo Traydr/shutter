@@ -7,11 +7,11 @@ provider evidence required to close Phase 2.
 
 ## Cloudflare
 
-1. Create the private `shutter-renditions` R2 bucket.
+1. Create the private Rendition Store R2 bucket selected in the local deployment input.
 2. Apply `infra/cloudflare/r2-lifecycle.json` with:
 
    ```sh
-   pnpm --filter @shutter/edge exec wrangler r2 bucket lifecycle set shutter-renditions --file ../../infra/cloudflare/r2-lifecycle.json
+   pnpm --filter @shutter/edge exec wrangler r2 bucket lifecycle set BUCKET_NAME --file ../../infra/cloudflare/r2-lifecycle.json
    ```
 
 3. List the lifecycle rules and confirm the only object-expiration prefix is
@@ -29,14 +29,13 @@ provider evidence required to close Phase 2.
    UploadThing projects `demo-project-1` and `demo-project-2`, the private Space's origins
    `https://objects.example.com/demo-private-bucket/`, and the exact
    R2 S3 endpoint used for short-lived Master Preview reads.
-2. Preview `.railway/railway.ts` with `railway config plan`. Review every
-   resource and variable change.
-3. Apply only through the ordinary reviewed Railway workflow. Generate strong,
-   independent `ORIGIN_AUTH_TOKEN`, `IMGPROXY_SECRET`, `IMGPROXY_KEY`, and
-   `IMGPROXY_SALT` values directly in Railway after the services are created.
-   Railway rejects `preserve()` during new-service creation, so add preservation
-   to IaC only after that first apply. Give Control the same imgproxy values.
-   The imgproxy key and salt are hex encoded.
+2. Run `scripts/bootstrap-deployment.sh`. The wizard separates a fresh project
+   from an imported project and produces `pnpm deployment:plan` before any
+   apply. Review every resource and variable change.
+3. Apply only through the explicit operator step. For a fresh project, the
+   wizard generates strong independent credentials after the first apply and
+   sends them directly to Railway and Wrangler. For an imported project, it
+   keeps the existing values and volume unchanged.
 4. Give Control a public HTTPS origin and put that exact URL in the Worker's
    `ORIGIN_BASE_URL`. Keep imgproxy private-only.
 5. Run the Space Registry migrations. Create each Space, API token, and
@@ -88,6 +87,9 @@ Cloudflare values only after the new snapshot path is stable.
   on representative gallery traffic.
 - A 301-request burst inside 10 seconds triggers the configured rate-limit rule,
   while representative gallery loads stay below it.
+
+The complete portable procedure and fresh-deployment acceptance checks are in
+[self-hosting.md](./self-hosting.md).
 
 Record account IDs, deployment URLs, secret values, and Source Locators only in
 the provider secret stores or the private operational record—not in this repo.
