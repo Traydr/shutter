@@ -1,4 +1,4 @@
-import type { SpacePolicy } from "@shutter/protocol";
+import { parseSpacePolicy, type SpacePolicy } from "@shutter/protocol";
 
 // Spaces are the tenants Shutter renders for. Each one pins the storage origins
 // its sources may come from, so a compromised or malformed request cannot steer
@@ -6,7 +6,7 @@ import type { SpacePolicy } from "@shutter/protocol";
 
 // A public space: renditions are addressable without a capability token, and an
 // UploadThing resolver maps opaque project/file references onto source URLs.
-const ernesta = Object.freeze({
+const ernesta = parseSpacePolicy({
   id: "ernesta",
   routeClass: "public",
   qualities: Object.freeze([30, 50, 75]),
@@ -22,11 +22,11 @@ const ernesta = Object.freeze({
       allowedProjectIds: Object.freeze(["8w0z32yftd", "rrsku8h9ue"]),
     }),
   ]),
-}) satisfies SpacePolicy;
+});
 
 // A private space: every rendition requires a capability token issued by the
 // owning application, and sources live in one S3-compatible bucket.
-const paneView = Object.freeze({
+const paneView = parseSpacePolicy({
   id: "pane-view",
   routeClass: "private",
   qualities: Object.freeze([30, 75, 80]),
@@ -38,7 +38,7 @@ const paneView = Object.freeze({
     }),
   ]),
   resolvers: Object.freeze([] as const),
-}) satisfies SpacePolicy;
+});
 
 export const SPACES = Object.freeze({
   ernesta,

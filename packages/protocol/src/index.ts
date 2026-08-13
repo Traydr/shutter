@@ -14,5 +14,6 @@ export * from "./jobs.js";
 export * from "./key-material.js";
 export * from "./normalization.js";
 export * from "./observability.js";
+export * from "./space-policy.js";
 export * from "./types.js";
 export * from "./urls.js";

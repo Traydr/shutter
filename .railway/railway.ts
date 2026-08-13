@@ -119,6 +119,7 @@ export default defineRailway(() => {
       PDF_EXECUTOR_BASE_URL: `http://\${{Shutter-Executor-PDF.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
       PDF_EXECUTOR_TOKEN: preserve(),
       PORT: String(nodePort),
+      SHUTTER_ENCRYPTION_KEY: preserve(),
       SPACE_API_TOKENS: preserve(),
       VIDEO_EXECUTOR_BASE_URL: `http://\${{Shutter-Executor-Video.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
       VIDEO_EXECUTOR_TOKEN: preserve(),
