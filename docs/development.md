@@ -54,7 +54,11 @@ DATABASE_URL=... pnpm --filter @shutter/control db:migrate
 ```
 
 Create a Space, API token, and Capability Key in the Space Registry before you
-submit a job. Mint Source Capabilities with `issueSourceCapability` from
+submit a job — either through one-shot import
+(`DATABASE_URL=... SHUTTER_ENCRYPTION_KEY=... pnpm --filter @shutter/control
+db:import-spaces <input.json>`, input format in
+`docs/runbooks/foundation-phase-2.md`) or through the `/admin` surface once it
+is configured. Mint Source Capabilities with `issueSourceCapability` from
 `@shutter/protocol`. A capability's `locator` origin must be allowed by the
 target Space record.
 

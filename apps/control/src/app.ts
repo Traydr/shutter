@@ -143,16 +143,17 @@ export function createControlApp(
     }
   });
 
+  // An unhandled error is a code defect, not a retry-me signal: 500, not 503.
+  // The registry-failure paths return their explicit 503s themselves.
   control.onError((error, context) => {
     runtime.logger.emit("error", {
       event: "control.service.failed",
       requestId: context.get("requestId"),
       httpRoute: safeRouteTemplate(context),
       outcome: "failed",
-      failureCode: "service_unavailable",
       errorType: operationalErrorType(error),
     });
-    return context.json({ error: { code: "service_unavailable" } }, 503, {
+    return context.json({ error: { code: "internal_error" } }, 500, {
       "cache-control": "private, no-store",
     });
   });
@@ -438,8 +439,15 @@ function configuredCapabilityKeyEncryption(): CapabilityKeyEncryption | undefine
   if (env.SHUTTER_ENCRYPTION_KEY === undefined) return undefined;
   try {
     return new CapabilityKeyEncryption(env.SHUTTER_ENCRYPTION_KEY);
-  } catch {
-    return undefined;
+  } catch (error) {
+    // A supplied but malformed key must fail the boot, not silently build a
+    // registry that cannot decrypt any Capability Key and 503s all delivery
+    // ten minutes later.
+    throw new Error(
+      `SHUTTER_ENCRYPTION_KEY is set but not usable: ${
+        error instanceof Error ? error.message : "unknown error"
+      }`,
+    );
   }
 }
 const capabilityKeyEncryption = configuredCapabilityKeyEncryption();

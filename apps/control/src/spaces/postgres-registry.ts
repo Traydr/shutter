@@ -29,6 +29,7 @@ import type {
   SpaceRecord,
   SpaceRegistry,
   SpaceRegistryTransaction,
+  SpaceRequestAuthorization,
 } from "./registry.js";
 import { SpaceRegistryError } from "./registry.js";
 
@@ -205,6 +206,60 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
       }
       return { policy: record.value.policy, capabilityKeys };
     });
+  }
+
+  async authorizeSpaceRequest(
+    spaceId: string,
+    token: string | undefined,
+  ): Promise<SpaceRequestAuthorization> {
+    const result = await this.#read(
+      async (
+        client,
+      ): Promise<
+        | { outcome: "missing" | "unauthorized" }
+        | ({ outcome: "authorized"; tokenId: number } & ActiveSpaceAuthorization)
+      > => {
+        const [record] = await loadSpaceRecords(client, { activeOnly: true, spaceId });
+        if (record === undefined) return { outcome: "missing" };
+        if (token === undefined || !isWellFormedApiToken(token)) {
+          return { outcome: "unauthorized" };
+        }
+        const match = await client.query<{ id: number }>(
+          `select id from space_api_tokens
+           where space_id = $1 and token_hash = $2 and revoked_at is null`,
+          [record.recordId, apiTokenHash(token)],
+        );
+        const tokenId = match.rows[0]?.id;
+        if (tokenId === undefined) return { outcome: "unauthorized" };
+        const encryption = this.#capabilityKeyEncryption();
+        const keys = await client.query<SealedCapabilityKeyRow>(
+          `select key_id, sealed_nonce, sealed_key
+           from space_capability_keys
+           where space_id = $1 and disabled_at is null
+           order by id`,
+          [record.recordId],
+        );
+        const capabilityKeys = new Map<string, Uint8Array>();
+        for (const key of keys.rows) {
+          capabilityKeys.set(
+            key.key_id,
+            encryption.open(spaceId, key.key_id, {
+              nonce: key.sealed_nonce,
+              ciphertext: key.sealed_key,
+            }),
+          );
+        }
+        return { outcome: "authorized", tokenId, policy: record.value.policy, capabilityKeys };
+      },
+    );
+    if (result.outcome !== "authorized") return result;
+    void this.#pool
+      .query(`update space_api_tokens set last_used_at = $2 where id = $1 and revoked_at is null`, [
+        result.tokenId,
+        this.#now(),
+      ])
+      .catch(() => undefined);
+    return { outcome: "authorized", policy: result.policy, capabilityKeys: result.capabilityKeys };
   }
 
   async listSpaces(): Promise<readonly SpaceRecord[]> {

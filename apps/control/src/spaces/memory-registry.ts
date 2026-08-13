@@ -22,6 +22,7 @@ import type {
   SpaceRecord,
   SpaceRegistry,
   SpaceRegistryTransaction,
+  SpaceRequestAuthorization,
 } from "./registry.js";
 import { SpaceRegistryError } from "./registry.js";
 
@@ -137,6 +138,18 @@ export class MemorySpaceRegistry implements SpaceRegistry {
       if (key.disabledAt === undefined) capabilityKeys.set(key.keyId, Uint8Array.from(key.key));
     }
     return { policy, capabilityKeys };
+  }
+
+  async authorizeSpaceRequest(
+    spaceId: string,
+    token: string | undefined,
+  ): Promise<SpaceRequestAuthorization> {
+    const authorization = await this.getActiveSpaceAuthorization(spaceId);
+    if (authorization === undefined) return { outcome: "missing" };
+    if (token === undefined || !(await this.verifyApiToken(spaceId, token))) {
+      return { outcome: "unauthorized" };
+    }
+    return { outcome: "authorized", ...authorization };
   }
 
   async listSpaces(): Promise<readonly SpaceRecord[]> {
