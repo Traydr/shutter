@@ -29,7 +29,11 @@ function html(body: string, status = 200, headers: HeadersInit = {}): Response {
       "content-security-policy":
         "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       "content-type": "text/html; charset=UTF-8",
-      "referrer-policy": "no-referrer",
+      // Not no-referrer: under that policy browsers serialize the Origin
+      // header as "null" even on same-origin form POSTs (Fetch spec), which
+      // would fail the CSRF middleware's same-host Origin check. same-origin
+      // keeps the referrer inside this host and the Origin header real.
+      "referrer-policy": "same-origin",
       "x-content-type-options": "nosniff",
       "x-frame-options": "DENY",
       ...headers,
