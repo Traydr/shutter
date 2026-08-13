@@ -26,7 +26,6 @@ export interface ParsedEdgeConfigSnapshot {
   generatedAt: number;
   policyFor(spaceId: string): SpacePolicy | undefined;
   keysFor(spaceId: string): ReadonlyMap<string, Uint8Array>;
-  hasSameConfiguration(other: ParsedEdgeConfigSnapshot): boolean;
 }
 
 export class EdgeConfigValidationError extends Error {
@@ -35,8 +34,6 @@ export class EdgeConfigValidationError extends Error {
     this.name = "EdgeConfigValidationError";
   }
 }
-
-const snapshotIdentities = new WeakMap<ParsedEdgeConfigSnapshot, string>();
 
 function object(value: unknown, name: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -89,19 +86,6 @@ export function parseEdgeConfigRefreshReport(value: unknown): EdgeConfigRefreshR
   const input = object(value, "Edge configuration refresh report");
   exactKeys(input, ["generation"], "Edge configuration refresh report");
   return serializeEdgeConfigRefreshReport(input.generation as number);
-}
-
-function configurationIdentity(
-  spaces: ReadonlyMap<string, SpacePolicy>,
-  capabilityKeys: ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>,
-): string {
-  return JSON.stringify({
-    spaces: [...spaces.values()],
-    capabilityKeys: [...capabilityKeys].map(([spaceId, keys]) => [
-      spaceId,
-      [...keys].map(([keyId, key]) => [keyId, [...key]]),
-    ]),
-  });
 }
 
 export function parseEdgeConfigSnapshot(value: unknown): ParsedEdgeConfigSnapshot {
@@ -162,8 +146,7 @@ export function parseEdgeConfigSnapshot(value: unknown): ParsedEdgeConfigSnapsho
   }
   for (const spaceId of spaces.keys())
     capabilityKeys.set(spaceId, capabilityKeys.get(spaceId) ?? new Map());
-  const identity = configurationIdentity(spaces, capabilityKeys);
-  const parsed: ParsedEdgeConfigSnapshot = Object.freeze({
+  return Object.freeze({
     schemaVersion: "v1",
     generation: input.generation as number,
     generatedAt,
@@ -175,9 +158,5 @@ export function parseEdgeConfigSnapshot(value: unknown): ParsedEdgeConfigSnapsho
           Uint8Array.from(key),
         ]),
       ),
-    hasSameConfiguration: (other: ParsedEdgeConfigSnapshot) =>
-      identity === snapshotIdentities.get(other),
   });
-  snapshotIdentities.set(parsed, identity);
-  return parsed;
 }

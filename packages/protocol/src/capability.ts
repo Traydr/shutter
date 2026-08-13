@@ -11,6 +11,7 @@ import {
   SOURCE_LOCATOR_MAX_BYTES,
 } from "./constants.js";
 import { ProtocolError } from "./errors.js";
+import { normalizeSourceOriginPathPrefix } from "./space-policy.js";
 import type { CapabilityPurpose, SourceCapabilityClaims, SourceOriginRule } from "./types.js";
 
 const KEY_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -107,10 +108,8 @@ function validateLocator(locator: string, rules: readonly SourceOriginRule[]): v
     if (origin.origin !== url.origin || origin.pathname !== "/" || origin.search || origin.hash) {
       return false;
     }
-    if (rule.pathPrefix === undefined || rule.pathPrefix === "/") return true;
-    const normalizedPrefix = rule.pathPrefix.startsWith("/")
-      ? rule.pathPrefix.replace(/\/+$/u, "")
-      : `/${rule.pathPrefix.replace(/\/+$/u, "")}`;
+    const normalizedPrefix = normalizeSourceOriginPathPrefix(rule.pathPrefix);
+    if (normalizedPrefix === "/") return true;
     return url.pathname === normalizedPrefix || url.pathname.startsWith(`${normalizedPrefix}/`);
   });
 

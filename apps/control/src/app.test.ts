@@ -449,8 +449,8 @@ describe("control app", () => {
     const response = await control.request("http://shutter.test/internal/v1/spike/rendition");
     const body = await response.text();
 
-    expect(response.status).toBe(503);
-    expect(JSON.parse(body)).toEqual({ error: { code: "service_unavailable" } });
+    expect(response.status).toBe(500);
+    expect(JSON.parse(body)).toEqual({ error: { code: "internal_error" } });
     expect(body).not.toContain("sentinel-secret-error-message");
   });
 });

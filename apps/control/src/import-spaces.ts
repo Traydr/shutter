@@ -21,8 +21,12 @@ if (inputPath === undefined || databaseUrl === undefined || encryptionKey === un
     });
     const result = await importRegistry(registry, input);
     console.log(`Imported ${result.spaceCount} Spaces at generation ${result.generation}.`);
-  } catch {
+  } catch (error) {
+    // The import runs inside a timed maintenance window; the operator needs
+    // the precise diagnostic. Parse and verification messages name fields,
+    // never token or key material.
     console.error("Space Registry import failed.");
+    console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   } finally {
     await pool.end();

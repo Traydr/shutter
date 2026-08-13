@@ -10,7 +10,9 @@ const REQUIRED_REFRESH_MS = 60_000;
 const FAILURE_GRACE_MS = 10 * 60_000;
 const FETCH_TIMEOUT_MS = 3_000;
 const MAX_SNAPSHOT_BYTES = 1024 * 1024;
-const MAX_CLOCK_SKEW_MS = 5_000;
+// Wide enough that ordinary NTP drift on Control cannot reject every snapshot
+// globally; a snapshot stamped further in the future than this is discarded.
+const MAX_CLOCK_SKEW_MS = 60_000;
 
 interface CachedSnapshot {
   snapshot: ParsedEdgeConfigSnapshot;
@@ -63,7 +65,13 @@ async function readLimitedJson(response: Response): Promise<unknown> {
 
 async function fetchSnapshot(bindings: CloudflareBindings): Promise<CachedSnapshot> {
   const url = new URL(CONTROL_HTTP_ROUTES.edgeConfig, bindings.ORIGIN_BASE_URL);
-  if (url.protocol !== "https:") throw new EdgeConfigUnavailableError();
+  // HTTPS only, with one exemption so local development can read config from
+  // a Control process on the same machine.
+  const loopback =
+    url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) {
+    throw new EdgeConfigUnavailableError();
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -80,11 +88,7 @@ async function fetchSnapshot(bindings: CloudflareBindings): Promise<CachedSnapsh
     const now = Date.now();
     if (
       snapshot.generatedAt > now + MAX_CLOCK_SKEW_MS ||
-      now - snapshot.generatedAt >= FAILURE_GRACE_MS ||
-      (cached !== undefined &&
-        (snapshot.generation < cached.snapshot.generation ||
-          (snapshot.generation === cached.snapshot.generation &&
-            !snapshot.hasSameConfiguration(cached.snapshot))))
+      now - snapshot.generatedAt >= FAILURE_GRACE_MS
     ) {
       throw new EdgeConfigUnavailableError();
     }

@@ -2,24 +2,24 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { SpaceRegistryError } from "./registry.js";
 
 const KEY_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/u;
+const API_TOKEN_SCHEME = "shutter_api_";
 
 export function createApiToken(): string {
-  return `shutter_api_${randomBytes(32).toString("base64url")}`;
+  return `${API_TOKEN_SCHEME}${randomBytes(32).toString("base64url")}`;
+}
+
+export function isWellFormedApiToken(token: string): boolean {
+  return token.length >= 32 && token.length <= 256;
 }
 
 export function validateApiToken(token: string): void {
-  if (token.length < 32 || token.length > 256) {
+  if (!isWellFormedApiToken(token)) {
     throw new SpaceRegistryError("invalid", "an API token must contain from 32 to 256 characters");
   }
 }
 
 export function apiTokenHash(token: string): string {
-  validateApiToken(token);
   return createHash("sha256").update(token, "utf8").digest("hex");
-}
-
-export function apiTokenMatches(token: string, candidateHash: string): boolean {
-  return apiTokenHashMatches(apiTokenHash(token), candidateHash);
 }
 
 export function apiTokenHashMatches(actualHash: string, candidateHash: string): boolean {
@@ -28,8 +28,14 @@ export function apiTokenHashMatches(actualHash: string, candidateHash: string): 
   return actual.byteLength === candidate.byteLength && timingSafeEqual(actual, candidate);
 }
 
+// Only the known scheme marker may reach the plaintext display column. A
+// supplied token has no public part, so it gets a constant label instead of
+// its own leading characters.
 export function apiTokenDisplayPrefix(token: string): string {
-  return token.slice(0, 16);
+  if (token.startsWith(API_TOKEN_SCHEME)) {
+    return token.slice(0, API_TOKEN_SCHEME.length + 4);
+  }
+  return "supplied-token";
 }
 
 export function validateCapabilityKeyId(keyId: string): void {
