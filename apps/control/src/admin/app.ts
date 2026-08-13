@@ -16,11 +16,10 @@ export interface AdminRuntime {
   now?(): number;
 }
 
-interface MutationRequest {
-  form: FormData;
-  registry: SpaceRegistry;
-  session: AdminSession;
-}
+type AdminEnv = { Variables: { session: AdminSession; form: FormData } };
+
+const LOGIN_LOCKOUT_THRESHOLD = 5;
+const LOGIN_LOCKOUT_MS = 60_000;
 
 function html(body: string, status = 200, headers: HeadersInit = {}): Response {
   return new Response(body, {
@@ -45,46 +44,6 @@ function redirect(location: string, headers: HeadersInit = {}): Response {
   });
 }
 
-function manager(runtime: AdminRuntime): AdminSessionManager | undefined {
-  const token = runtime.bootstrapToken();
-  if (token === undefined) return undefined;
-  const sessions = new AdminSessionManager(token, runtime.now);
-  return sessions.isConfigured() ? sessions : undefined;
-}
-
-function authenticated(
-  request: Request,
-  runtime: AdminRuntime,
-): { manager: AdminSessionManager; session: AdminSession } | undefined {
-  const sessions = manager(runtime);
-  const session = sessions?.read(request);
-  return sessions === undefined || session === undefined
-    ? undefined
-    : { manager: sessions, session };
-}
-
-async function mutation(
-  request: Request,
-  runtime: AdminRuntime,
-): Promise<MutationRequest | Response> {
-  const auth = authenticated(request, runtime);
-  if (auth === undefined) return redirect("/admin");
-  if (runtime.registry === undefined) return html(unavailableView(), 503);
-  let form: FormData;
-  try {
-    if (!request.headers.get("content-type")?.startsWith("application/x-www-form-urlencoded")) {
-      throw new Error("invalid form content type");
-    }
-    form = await request.formData();
-  } catch {
-    return html(errorView(auth.session.csrfToken, 400, "The submitted form is invalid."), 400);
-  }
-  if (!auth.manager.verifyCsrf(request, auth.session, form.get("csrf"))) {
-    return html(errorView(auth.session.csrfToken, 403, "The request could not be verified."), 403);
-  }
-  return { form, registry: runtime.registry, session: auth.session };
-}
-
 function statusFor(error: unknown): number {
   if (error instanceof AdminInputError || error instanceof SpacePolicyValidationError) return 400;
   if (error instanceof SpaceRegistryError) {
@@ -97,25 +56,9 @@ function statusFor(error: unknown): number {
 
 function publicMessage(error: unknown): string {
   if (error instanceof SpaceRegistryError) return error.message;
-  if (error instanceof AdminInputError || error instanceof SpacePolicyValidationError) {
-    return "The submitted values are not valid.";
-  }
+  if (error instanceof SpacePolicyValidationError) return error.message;
+  if (error instanceof AdminInputError) return "The submitted values are not valid.";
   return "The Space Registry is unavailable.";
-}
-
-async function runMutation(
-  request: Request,
-  runtime: AdminRuntime,
-  command: (input: MutationRequest) => Promise<Response>,
-): Promise<Response> {
-  const input = await mutation(request, runtime);
-  if (input instanceof Response) return input;
-  try {
-    return await command(input);
-  } catch (error) {
-    const status = statusFor(error);
-    return html(errorView(input.session.csrfToken, status, publicMessage(error)), status);
-  }
 }
 
 async function currentSpace(registry: SpaceRegistry, spaceId: string): Promise<SpaceRecord> {
@@ -142,23 +85,15 @@ async function loadSpaceDetail(
   return { space, generation: generation.generation, apiTokens, capabilityKeys };
 }
 
-async function renderSpace(
-  registry: SpaceRegistry,
-  spaceId: string,
-  csrfToken: string,
-  options: {
-    notice?: string;
-    secret?: { label: string; value: string };
-  } = {},
-): Promise<Response> {
-  const detail = await loadSpaceDetail(registry, spaceId);
-  return html(
-    spaceView({
-      csrfToken,
-      ...detail,
-      ...options,
-    }),
-  );
+/**
+ * The post-write notice renders only when the requested generation matches the
+ * freshly read registry state, so the page can never claim an advance that did
+ * not happen.
+ */
+function generationNotice(requested: string | null, actual: number): string | undefined {
+  return requested !== null && requested === String(actual)
+    ? `The registry is now at generation ${actual}.`
+    : undefined;
 }
 
 function parseTokenId(value: string): number {
@@ -168,54 +103,54 @@ function parseTokenId(value: string): number {
   return parsed;
 }
 
-export function createAdminApp(runtime: AdminRuntime): Hono {
-  const admin = new Hono();
+function unavailableAdminApp(): Hono<AdminEnv> {
+  const admin = new Hono<AdminEnv>();
+  admin.all("*", () => html(unavailableView(), 503));
+  return admin;
+}
+
+export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
+  // "Is admin configured?" is a fact fixed at process start. Decide it once
+  // here; the request paths below can then rely on a token and a registry.
+  const bootstrapToken = runtime.bootstrapToken();
+  const registry = runtime.registry;
+  if (bootstrapToken === undefined || registry === undefined) return unavailableAdminApp();
+  const sessions = new AdminSessionManager(bootstrapToken, runtime.now);
+  if (!sessions.isConfigured()) return unavailableAdminApp();
+  const now = runtime.now ?? Date.now;
+
+  const admin = new Hono<AdminEnv>();
 
   admin.use(
     "*",
     bodyLimit({
       maxSize: 32 * 1_024,
-      onError: () => html(loginView("The submitted form is too large."), 413),
+      onError: (context) => {
+        const session = sessions.read(context.req.raw);
+        return session === undefined
+          ? html(loginView("The submitted form is too large."), 413)
+          : html(errorView(session.csrfToken, 413, "The submitted form is too large."), 413);
+      },
     }),
   );
 
-  admin.get("/", async (context) => {
-    const sessions = manager(runtime);
-    if (sessions === undefined || runtime.registry === undefined) {
-      return html(unavailableView(), 503);
-    }
+  // Every handler below the middleware pair may throw; the mapping from error
+  // to page happens exactly once here.
+  admin.onError((error, context) => {
     const session = sessions.read(context.req.raw);
-    if (session === undefined) return html(loginView());
-    try {
-      const [spaces, generation] = await Promise.all([
-        runtime.registry.listSpaces(),
-        runtime.registry.getGeneration(),
-      ]);
-      const requestedGeneration = new URL(context.req.url).searchParams.get("generation");
-      const notice =
-        requestedGeneration !== null && /^\d+$/u.test(requestedGeneration)
-          ? `The registry is now at generation ${requestedGeneration}.`
-          : undefined;
-      const edgeRefresh = runtime.edgeRefreshStatus();
-      return html(
-        overviewView({
-          csrfToken: session.csrfToken,
-          generation: generation.generation,
-          spaces,
-          coverage: deploymentCoverage(spaces, runtime.imgproxyAllowedSources()),
-          ...(edgeRefresh === undefined ? {} : { edgeRefresh }),
-          ...(notice === undefined ? {} : { notice }),
-        }),
-      );
-    } catch {
-      return html(errorView(session.csrfToken, 503, "The Space Registry is unavailable."), 503);
-    }
+    if (session === undefined) return redirect("/admin");
+    const status = statusFor(error);
+    return html(errorView(session.csrfToken, status, publicMessage(error)), status);
   });
 
+  // The login route is registered before the session middleware: it is the one
+  // route a sessionless browser may POST. Failed attempts feed a small
+  // fixed-window lockout so the bootstrap token cannot be guessed online at
+  // full speed (Control runs as a single replica; the counter is in-process).
+  const failedLogins = { count: 0, lockedUntil: 0 };
   admin.post("/login", async (context) => {
-    const sessions = manager(runtime);
-    if (sessions === undefined || runtime.registry === undefined) {
-      return html(unavailableView(), 503);
+    if (now() < failedLogins.lockedUntil) {
+      return html(loginView("Too many failed attempts. Try again shortly."), 429);
     }
     let form: FormData;
     try {
@@ -228,139 +163,179 @@ export function createAdminApp(runtime: AdminRuntime): Hono {
     }
     const token = form.get("token");
     if (typeof token !== "string" || !sessions.verifyBootstrapToken(token)) {
+      failedLogins.count += 1;
+      if (failedLogins.count >= LOGIN_LOCKOUT_THRESHOLD) {
+        failedLogins.count = 0;
+        failedLogins.lockedUntil = now() + LOGIN_LOCKOUT_MS;
+      }
       return html(loginView("The token was not accepted."), 401);
     }
+    failedLogins.count = 0;
     const created = sessions.create();
     return redirect("/admin", { "set-cookie": created.setCookie });
   });
 
-  admin.post("/logout", async (context) => {
-    const result = await mutation(context.req.raw, runtime);
-    if (result instanceof Response) return result;
-    const sessions = manager(runtime);
-    return redirect("/admin", { "set-cookie": sessions?.clearCookie() ?? "" });
+  // The dashboard root doubles as the sign-in page, so it reads the session
+  // itself; it is registered before the session middleware on purpose.
+  admin.get("/", async (context) => {
+    const session = sessions.read(context.req.raw);
+    if (session === undefined) return html(loginView());
+    const [spaces, generation] = await Promise.all([
+      registry.listSpaces(),
+      registry.getGeneration(),
+    ]);
+    const requested = new URL(context.req.url).searchParams.get("generation");
+    const notice = generationNotice(requested, generation.generation);
+    const edgeRefresh = runtime.edgeRefreshStatus();
+    return html(
+      overviewView({
+        csrfToken: session.csrfToken,
+        generation: generation.generation,
+        spaces,
+        coverage: deploymentCoverage(spaces, runtime.imgproxyAllowedSources()),
+        ...(edgeRefresh === undefined ? {} : { edgeRefresh }),
+        ...(notice === undefined ? {} : { notice }),
+      }),
+    );
+  });
+
+  // Everything after this point holds a verified session.
+  admin.use("*", async (context, next) => {
+    const session = sessions.read(context.req.raw);
+    if (session === undefined) return redirect("/admin");
+    context.set("session", session);
+    await next();
+  });
+
+  // Every POST after this point carries a verified CSRF value from the signed
+  // session and an HTTPS same-host Origin.
+  admin.use("*", async (context, next) => {
+    if (context.req.method !== "POST") return next();
+    const session = context.get("session");
+    let form: FormData;
+    try {
+      if (!context.req.header("content-type")?.startsWith("application/x-www-form-urlencoded")) {
+        throw new Error("invalid form content type");
+      }
+      form = await context.req.raw.formData();
+    } catch {
+      return html(errorView(session.csrfToken, 400, "The submitted form is invalid."), 400);
+    }
+    if (!sessions.verifyCsrf(context.req.raw, session, form.get("csrf"))) {
+      return html(errorView(session.csrfToken, 403, "The request could not be verified."), 403);
+    }
+    context.set("form", form);
+    await next();
+  });
+
+  admin.post("/logout", async () => {
+    return redirect("/admin", { "set-cookie": sessions.clearCookie() });
   });
 
   admin.post("/spaces", async (context) => {
-    return runMutation(context.req.raw, runtime, async ({ form, registry }) => {
-      const created = await registry.createSpace(parseCreateSpaceForm(form));
-      return redirect(
-        `/admin/spaces/${encodeURIComponent(created.value.policy.id)}?generation=${created.generation}`,
-      );
-    });
+    const created = await registry.createSpace(parseCreateSpaceForm(context.get("form")));
+    return redirect(
+      `/admin/spaces/${encodeURIComponent(created.value.policy.id)}?generation=${created.generation}`,
+    );
   });
 
   admin.get("/spaces/:spaceId", async (context) => {
-    const auth = authenticated(context.req.raw, runtime);
-    if (auth === undefined) return redirect("/admin");
-    if (runtime.registry === undefined) return html(unavailableView(), 503);
-    try {
-      const requestedGeneration = new URL(context.req.url).searchParams.get("generation");
-      return await renderSpace(
-        runtime.registry,
-        context.req.param("spaceId"),
-        auth.session.csrfToken,
-        {
-          ...(requestedGeneration !== null && /^\d+$/u.test(requestedGeneration)
-            ? { notice: `The registry is now at generation ${requestedGeneration}.` }
-            : {}),
-        },
-      );
-    } catch (error) {
-      const status = statusFor(error);
-      return html(errorView(auth.session.csrfToken, status, publicMessage(error)), status);
-    }
+    const session = context.get("session");
+    const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
+    const requested = new URL(context.req.url).searchParams.get("generation");
+    const notice = generationNotice(requested, detail.generation);
+    return html(
+      spaceView({
+        csrfToken: session.csrfToken,
+        ...detail,
+        ...(notice === undefined ? {} : { notice }),
+      }),
+    );
   });
 
   admin.post("/spaces/:spaceId/policy", async (context) => {
-    return runMutation(context.req.raw, runtime, async ({ form, registry }) => {
-      const edited = await registry.editSpace(
-        context.req.param("spaceId"),
-        parseEditSpaceForm(form),
-      );
-      return redirect(
-        `/admin/spaces/${encodeURIComponent(edited.value.policy.id)}?generation=${edited.generation}`,
-      );
-    });
+    const edited = await registry.editSpace(
+      context.req.param("spaceId"),
+      parseEditSpaceForm(context.get("form")),
+    );
+    return redirect(
+      `/admin/spaces/${encodeURIComponent(edited.value.policy.id)}?generation=${edited.generation}`,
+    );
   });
 
   admin.post("/spaces/:spaceId/decommission", async (context) => {
-    return runMutation(context.req.raw, runtime, async ({ form, registry }) => {
-      const spaceId = context.req.param("spaceId");
-      if (form.get("confirm") !== spaceId) throw new AdminInputError();
-      const decommissioned = await registry.decommissionSpace(spaceId);
-      return redirect(`/admin?generation=${decommissioned.generation}`);
-    });
+    const spaceId = context.req.param("spaceId");
+    if (context.get("form").get("confirm") !== spaceId) throw new AdminInputError();
+    const decommissioned = await registry.decommissionSpace(spaceId);
+    return redirect(`/admin?generation=${decommissioned.generation}`);
   });
 
+  // Both credential routes read the Space detail BEFORE the mutation commits.
+  // That order is deliberate and load-bearing: the one-time secret must render
+  // even if a registry read after the commit would fail, so no registry read
+  // may happen once the credential exists (pinned by ReadFailsAfterIssue tests
+  // in admin.test.ts). Do not "simplify" this into mutate-then-re-read.
   admin.post("/spaces/:spaceId/api-tokens", async (context) => {
-    return runMutation(context.req.raw, runtime, async ({ form, registry, session }) => {
-      const label = form.get("label");
-      if (typeof label !== "string") throw new AdminInputError();
-      const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
-      const issued = await registry.issueApiToken(context.req.param("spaceId"), label);
-      const { token, ...summary } = issued.value;
-      return html(
-        spaceView({
-          csrfToken: session.csrfToken,
-          ...detail,
-          generation: issued.generation,
-          apiTokens: [...detail.apiTokens, summary],
-          notice: `The registry is now at generation ${issued.generation}.`,
-          secret: { label: "New API token", value: token },
-        }),
-      );
-    });
+    const session = context.get("session");
+    const label = context.get("form").get("label");
+    if (typeof label !== "string") throw new AdminInputError();
+    const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
+    const issued = await registry.issueApiToken(context.req.param("spaceId"), label);
+    const { token, ...summary } = issued.value;
+    return html(
+      spaceView({
+        csrfToken: session.csrfToken,
+        ...detail,
+        generation: issued.generation,
+        apiTokens: [...detail.apiTokens, summary],
+        notice: `The registry is now at generation ${issued.generation}.`,
+        secret: { label: "New API token", value: token },
+      }),
+    );
   });
 
   admin.post("/spaces/:spaceId/api-tokens/:tokenId/revoke", async (context) => {
-    return runMutation(context.req.raw, runtime, async ({ registry }) => {
-      const revoked = await registry.revokeApiToken(
-        context.req.param("spaceId"),
-        parseTokenId(context.req.param("tokenId")),
-      );
-      return redirect(
-        `/admin/spaces/${encodeURIComponent(context.req.param("spaceId"))}?generation=${revoked.generation}`,
-      );
-    });
+    const revoked = await registry.revokeApiToken(
+      context.req.param("spaceId"),
+      parseTokenId(context.req.param("tokenId")),
+    );
+    return redirect(
+      `/admin/spaces/${encodeURIComponent(context.req.param("spaceId"))}?generation=${revoked.generation}`,
+    );
   });
 
   admin.post("/spaces/:spaceId/capability-keys", async (context) => {
-    return runMutation(context.req.raw, runtime, async ({ form, registry, session }) => {
-      const keyId = form.get("keyId");
-      if (typeof keyId !== "string") throw new AdminInputError();
-      const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
-      const issued = await registry.addCapabilityKey(context.req.param("spaceId"), keyId);
-      const { key, ...summary } = issued.value;
-      return html(
-        spaceView({
-          csrfToken: session.csrfToken,
-          ...detail,
-          generation: issued.generation,
-          capabilityKeys: [...detail.capabilityKeys, summary],
-          notice: `The registry is now at generation ${issued.generation}.`,
-          secret: { label: "New Capability Key", value: key },
-        }),
-      );
-    });
+    const session = context.get("session");
+    const keyId = context.get("form").get("keyId");
+    if (typeof keyId !== "string") throw new AdminInputError();
+    const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
+    const issued = await registry.addCapabilityKey(context.req.param("spaceId"), keyId);
+    const { key, ...summary } = issued.value;
+    return html(
+      spaceView({
+        csrfToken: session.csrfToken,
+        ...detail,
+        generation: issued.generation,
+        capabilityKeys: [...detail.capabilityKeys, summary],
+        notice: `The registry is now at generation ${issued.generation}.`,
+        secret: { label: "New Capability Key", value: key },
+      }),
+    );
   });
 
   admin.post("/spaces/:spaceId/capability-keys/:keyId/disable", async (context) => {
-    return runMutation(context.req.raw, runtime, async ({ registry }) => {
-      const disabled = await registry.disableCapabilityKey(
-        context.req.param("spaceId"),
-        context.req.param("keyId"),
-      );
-      return redirect(
-        `/admin/spaces/${encodeURIComponent(context.req.param("spaceId"))}?generation=${disabled.generation}`,
-      );
-    });
+    const disabled = await registry.disableCapabilityKey(
+      context.req.param("spaceId"),
+      context.req.param("keyId"),
+    );
+    return redirect(
+      `/admin/spaces/${encodeURIComponent(context.req.param("spaceId"))}?generation=${disabled.generation}`,
+    );
   });
 
   admin.all("*", (context) => {
-    const auth = authenticated(context.req.raw, runtime);
-    if (auth === undefined) return redirect("/admin");
-    return html(errorView(auth.session.csrfToken, 404, "The admin page does not exist."), 404);
+    const session = context.get("session");
+    return html(errorView(session.csrfToken, 404, "The admin page does not exist."), 404);
   });
 
   return admin;

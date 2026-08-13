@@ -16,12 +16,16 @@ function equal(left: string, right: string): boolean {
   return timingSafeEqual(digest(left), digest(right));
 }
 
-function cookieValue(request: Request): string | undefined {
+// A sibling host on the same registrable domain can pin an extra cookie with
+// the same name. Collect every candidate so one garbage value cannot lock the
+// operator out; read() accepts the first that verifies.
+function cookieValues(request: Request): readonly string[] {
+  const values: string[] = [];
   for (const segment of (request.headers.get("cookie") ?? "").split(";")) {
     const [name, ...value] = segment.trim().split("=");
-    if (name === COOKIE_NAME) return value.join("=");
+    if (name === COOKIE_NAME) values.push(value.join("="));
   }
-  return undefined;
+  return values;
 }
 
 export class AdminSessionManager {
@@ -55,8 +59,14 @@ export class AdminSessionManager {
   }
 
   read(request: Request): AdminSession | undefined {
-    const value = cookieValue(request);
-    if (value === undefined) return undefined;
+    for (const value of cookieValues(request)) {
+      const session = this.#readValue(value);
+      if (session !== undefined) return session;
+    }
+    return undefined;
+  }
+
+  #readValue(value: string): AdminSession | undefined {
     const [expires, csrfToken, signature, ...extra] = value.split(".");
     if (
       expires === undefined ||

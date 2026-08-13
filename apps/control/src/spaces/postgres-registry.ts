@@ -96,14 +96,23 @@ async function bumpGeneration(client: PoolClient, now: Date): Promise<number> {
   return row.generation;
 }
 
-async function lockActiveSpace(client: PoolClient, spaceId: string): Promise<number> {
+async function lockSpace(
+  client: PoolClient,
+  spaceId: string,
+  options: { activeOnly: boolean },
+): Promise<number> {
   const result = await client.query<{ id: number }>(
-    `select id from spaces where space_id = $1 and status = 'active' for update`,
+    options.activeOnly
+      ? `select id from spaces where space_id = $1 and status = 'active' for update`
+      : `select id from spaces where space_id = $1 for update`,
     [spaceId],
   );
   const recordId = result.rows[0]?.id;
   if (recordId === undefined) {
-    throw new SpaceRegistryError("not_found", "the active Space does not exist");
+    throw new SpaceRegistryError(
+      "not_found",
+      options.activeOnly ? "the active Space does not exist" : "the Space does not exist",
+    );
   }
   return recordId;
 }
@@ -434,19 +443,23 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     spaceId: string,
     tokenId: number,
   ): Promise<RegistryMutation<ApiTokenSummary>> {
-    return this.#mutate(spaceId, async (client, recordId, now) => {
-      const result = await client.query<ApiTokenRow>(
-        `update space_api_tokens set revoked_at = coalesce(revoked_at, $3)
+    return this.#mutate(
+      spaceId,
+      async (client, recordId, now) => {
+        const result = await client.query<ApiTokenRow>(
+          `update space_api_tokens set revoked_at = coalesce(revoked_at, $3)
          where id = $1 and space_id = $2
          returning ${API_TOKEN_COLUMNS}`,
-        [tokenId, recordId, now],
-      );
-      const row = result.rows[0];
-      if (row === undefined) {
-        throw new SpaceRegistryError("not_found", "the API token does not exist");
-      }
-      return apiTokenSummary(row);
-    });
+          [tokenId, recordId, now],
+        );
+        const row = result.rows[0];
+        if (row === undefined) {
+          throw new SpaceRegistryError("not_found", "the API token does not exist");
+        }
+        return apiTokenSummary(row);
+      },
+      { anyStatus: true },
+    );
   }
 
   async addCapabilityKey(
@@ -497,33 +510,42 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     spaceId: string,
     keyId: string,
   ): Promise<RegistryMutation<CapabilityKeySummary>> {
-    return this.#mutate(spaceId, async (client, recordId, now) => {
-      const result = await client.query<CapabilityKeyRow>(
-        `update space_capability_keys set disabled_at = coalesce(disabled_at, $3)
+    return this.#mutate(
+      spaceId,
+      async (client, recordId, now) => {
+        const result = await client.query<CapabilityKeyRow>(
+          `update space_capability_keys set disabled_at = coalesce(disabled_at, $3)
          where space_id = $1 and key_id = $2
          returning ${CAPABILITY_KEY_COLUMNS}`,
-        [recordId, keyId, now],
-      );
-      const row = result.rows[0];
-      if (row === undefined) {
-        throw new SpaceRegistryError("not_found", "the Capability Key does not exist");
-      }
-      return capabilityKeySummary(row);
-    });
+          [recordId, keyId, now],
+        );
+        const row = result.rows[0];
+        if (row === undefined) {
+          throw new SpaceRegistryError("not_found", "the Capability Key does not exist");
+        }
+        return capabilityKeySummary(row);
+      },
+      { anyStatus: true },
+    );
   }
 
   /**
-   * Every Space-scoped mutation runs as: one transaction, a lock on the active
-   * Space row, one clock reading, the statements, then exactly one generation
-   * bump. The helper owns that skeleton so a mutation cannot forget the bump
-   * and leave the Edge snapshot stale.
+   * Every Space-scoped mutation runs as: one transaction, a lock on the Space
+   * row, one clock reading, the statements, then exactly one generation bump.
+   * The helper owns that skeleton so a mutation cannot forget the bump and
+   * leave the Edge snapshot stale. Credential kill switches pass
+   * `anyStatus: true` so a compromised token or key on a decommissioned Space
+   * can still be shut off.
    */
   async #mutate<T>(
     spaceId: string,
     work: (client: PoolClient, recordId: number, now: Date) => Promise<T>,
+    options: { anyStatus?: boolean } = {},
   ): Promise<RegistryMutation<T>> {
     return this.#write(async (client) => {
-      const recordId = await lockActiveSpace(client, spaceId);
+      const recordId = await lockSpace(client, spaceId, {
+        activeOnly: options.anyStatus !== true,
+      });
       const now = this.#now();
       const value = await work(client, recordId, now);
       const generation = await bumpGeneration(client, now);

@@ -1,3 +1,4 @@
+import { normalizeSourceOriginPathPrefix } from "@shutter/protocol";
 import type { SpaceRecord } from "../spaces/registry.js";
 
 export interface DeploymentCoverage {
@@ -6,7 +7,8 @@ export interface DeploymentCoverage {
 }
 
 function rulePrefix(origin: string, pathPrefix: string | undefined): string {
-  return `${origin}${pathPrefix === undefined || pathPrefix === "/" ? "" : pathPrefix}`;
+  const prefix = normalizeSourceOriginPathPrefix(pathPrefix);
+  return `${origin}${prefix === "/" ? "" : prefix}`;
 }
 
 function normalizedPrefix(value: string): string | undefined {

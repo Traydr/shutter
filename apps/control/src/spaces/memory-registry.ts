@@ -286,7 +286,7 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     spaceId: string,
     tokenId: number,
   ): Promise<RegistryMutation<ApiTokenSummary>> {
-    this.#activeSpace(spaceId);
+    this.#space(spaceId);
     const token = (this.#tokens.get(spaceId) ?? []).find((candidate) => candidate.id === tokenId);
     if (token === undefined)
       throw new SpaceRegistryError("not_found", "the API token does not exist");
@@ -325,7 +325,7 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     spaceId: string,
     keyId: string,
   ): Promise<RegistryMutation<CapabilityKeySummary>> {
-    this.#activeSpace(spaceId);
+    this.#space(spaceId);
     const key = (this.#keys.get(spaceId) ?? []).find((candidate) => candidate.keyId === keyId);
     if (key === undefined) {
       throw new SpaceRegistryError("not_found", "the Capability Key does not exist");

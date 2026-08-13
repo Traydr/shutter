@@ -151,6 +151,19 @@ export function registerSpaceRegistryContract(
       await expectCode(registry.issueApiToken(contractPolicy.id, "application"), "not_found");
     });
 
+    it("keeps the credential kill switches available on a decommissioned Space", async () => {
+      await registry.createSpace(contractPolicy);
+      const token = await registry.issueApiToken(contractPolicy.id, "application");
+      await registry.addCapabilityKey(contractPolicy.id, "key-1");
+      await registry.decommissionSpace(contractPolicy.id);
+      await expect(
+        registry.revokeApiToken(contractPolicy.id, token.value.id),
+      ).resolves.toMatchObject({ value: { revokedAt: expect.any(Date) } });
+      await expect(
+        registry.disableCapabilityKey(contractPolicy.id, "key-1"),
+      ).resolves.toMatchObject({ value: { disabledAt: expect.any(Date) } });
+    });
+
     it("adds and disables Capability Keys in the atomic Edge snapshot", async () => {
       await registry.createSpace(contractPolicy);
       const issued = await registry.addCapabilityKey(contractPolicy.id, "key-1");

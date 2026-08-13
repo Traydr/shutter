@@ -1,4 +1,4 @@
-import type { SpacePolicy } from "@shutter/protocol";
+import { normalizeSourceOriginPathPrefix, type SpacePolicy } from "@shutter/protocol";
 import type { EdgeRefreshStatus } from "../edge-refresh-status.js";
 import type { ApiTokenSummary, CapabilityKeySummary, SpaceRecord } from "../spaces/registry.js";
 import type { DeploymentCoverage } from "./deployment-coverage.js";
@@ -93,7 +93,10 @@ function header(csrfToken?: string): string {
 
 function policyFields(policy?: SpacePolicy): string {
   const origins = policy?.allowedSourceOrigins
-    .map((rule) => `${rule.origin}${rule.pathPrefix ?? ""}`)
+    .map((rule) => {
+      const pathPrefix = normalizeSourceOriginPathPrefix(rule.pathPrefix);
+      return `${rule.origin}${pathPrefix === "/" ? "" : pathPrefix}`;
+    })
     .join("\n");
   const resolvers = policy?.resolvers
     .map((resolver) => `${resolver.id}:${resolver.allowedProjectIds.join(",")}`)
