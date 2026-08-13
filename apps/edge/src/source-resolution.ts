@@ -1,3 +1,23 @@
+/**
+ * Extracts the percent-encoded Source reference that follows the
+ * `/resolver/:resolverId/` marker. Both the rendition and the delivery route
+ * share this one copy so a malformed escape or an unencoded `/` answers 404
+ * identically on each.
+ */
+export function resolverSourceRef(requestUrl: string, resolverId: string): string | undefined {
+  const pathname = new URL(requestUrl).pathname;
+  const marker = `/resolver/${encodeURIComponent(resolverId)}/`;
+  const markerIndex = pathname.indexOf(marker);
+  if (markerIndex < 0) return undefined;
+  const encodedSourceRef = pathname.slice(markerIndex + marker.length);
+  if (encodedSourceRef.includes("/")) return undefined;
+  try {
+    return decodeURIComponent(encodedSourceRef);
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveUploadThingSource(
   sourceRef: string,
   allowedProjectIds: readonly string[],

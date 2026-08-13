@@ -9,10 +9,15 @@ lookup.
 Cloudflare can answer a byte-range or conditional request from a cached complete
 response. A cold range goes directly to the trusted origin and remains a `206`
 response. Shutter does not store that partial response because the Cache API
-rejects `206` writes. A complete `200` response can enter the cache only when it
-has a valid `Content-Length` no larger than the Cache API's 512 MB object limit.
-Larger objects still stream from the origin. Source Purge clears the entry with
-the same Source tag that clears Renditions and Master Previews.
+rejects `206` writes. Because media clients open with a `Range` header, a valid
+cold `206` whose `Content-Range` total fits the object limit also triggers a
+background fetch of the complete object, which warms the one cache entry so the
+following seeks hit the edge. `If-Range` is evaluated at the Edge against the
+cached validators, so resumable clients hit the cache too. A complete `200`
+response can enter the cache only when it has a valid `Content-Length` no
+larger than the Cache API's 512 MB object limit. Larger objects still stream
+from the origin. Source Purge clears the entry with the same Source tag that
+clears Renditions and Master Previews.
 
 Source Delivery never writes original bytes to R2. R2 remains the Rendition
 Store for Image Optimizations and Master Previews. This keeps application-owned

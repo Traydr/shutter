@@ -31,7 +31,12 @@ export function edgeBrowserResponse(
 ): Response {
   const headers = new Headers(response.headers);
   headers.set("x-shutter-cache", options.cacheStatus);
-  if (options.routeClass === "private") {
+  // A 416 keyed to the bare URL, or a cold partial, must never enter a
+  // downstream cache: the public delivery URL is stable and embedded in pages,
+  // and Source Purge cannot reach browser caches.
+  const uncacheableDownstream =
+    response.status === 416 || (response.status === 206 && options.cacheStatus === "origin");
+  if (options.routeClass === "private" || uncacheableDownstream) {
     headers.set("cache-control", "private, no-store");
     headers.delete("cache-tag");
   } else {

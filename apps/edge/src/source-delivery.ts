@@ -175,6 +175,9 @@ function safeOriginHeaders(origin: Response, mediaClass: MediaClass | undefined)
     const canonicalType = contentType?.split(";", 1)[0]?.trim().toLowerCase();
     if (canonicalType !== undefined) headers.set("content-type", canonicalType);
     headers.set("content-disposition", "inline");
+    // Defense in depth for attacker-supplied media served inline: a PDF's own
+    // script runs sandboxed with no origin privileges.
+    headers.set("content-security-policy", "default-src 'none'; sandbox");
   }
   if (origin.status !== 304 && origin.status !== 416) {
     copyBoundedHeader(origin.headers, headers, "content-length", 16, isContentLength);
@@ -205,8 +208,7 @@ function sourceRequestHeaders(request: Request): Headers {
   return headers;
 }
 
-function cacheLookupRequest(request: Request, canonicalUrl: string): Request | undefined {
-  if (request.headers.has("if-range")) return undefined;
+function cacheLookupRequest(request: Request, canonicalUrl: string): Request {
   const headers = new Headers();
   for (const name of ["range", "if-none-match", "if-modified-since"] as const) {
     const value = request.headers.get(name);
@@ -215,12 +217,78 @@ function cacheLookupRequest(request: Request, canonicalUrl: string): Request | u
   return new Request(canonicalUrl, { method: "GET", headers });
 }
 
+/**
+ * `If-Range` is evaluated here against the cached validators: the entry is
+ * keyed on the immutable Source ID and holds one complete object, so a match
+ * serves the cached range and a mismatch serves the cached full object.
+ * A weak validator never matches, per RFC 9110.
+ */
+function ifRangeMatches(ifRange: string, cached: Response): boolean {
+  if (ifRange.startsWith("W/")) return false;
+  if (ifRange.startsWith('"')) return cached.headers.get("etag") === ifRange;
+  const requested = Date.parse(ifRange);
+  const lastModified = Date.parse(cached.headers.get("last-modified") ?? "");
+  return Number.isFinite(requested) && Number.isFinite(lastModified) && lastModified <= requested;
+}
+
+// A 200 with a valid Content-Length is a complete object no matter what the
+// request asked for, so a ranged request whose origin ignored the range still
+// warms the canonical entry.
 function cacheable(response: Response, request: Request): boolean {
-  if (request.method !== "GET" || request.headers.has("range") || response.status !== 200)
-    return false;
+  if (request.method !== "GET" || response.status !== 200) return false;
   const contentLength = response.headers.get("content-length");
   if (contentLength === null || !isContentLength(contentLength)) return false;
   return Number(contentLength) <= CACHE_API_MAX_BYTES;
+}
+
+/**
+ * Browser media elements open with a Range header, so the cold path for the
+ * video this cache exists to serve is a 206 that can never be stored. When the
+ * validated total fits the Cache API bound, fetch the complete object in the
+ * background and store it so the next seek hits the edge.
+ */
+async function warmCanonicalEntry(
+  locator: string,
+  identity: SourceDeliveryIdentity,
+  canonicalUrl: string,
+  cacheTag: string,
+): Promise<void> {
+  const origin = await fetch(locator, {
+    method: "GET",
+    headers: new Headers({ "accept-encoding": "identity" }),
+    redirect: "manual",
+  });
+  const contentEncoding = origin.headers.get("content-encoding");
+  const mediaClass = mediaClassFor(origin.headers.get("content-type"));
+  if (
+    origin.status !== 200 ||
+    (contentEncoding !== null && contentEncoding !== "identity") ||
+    mediaClass === undefined
+  ) {
+    await origin.body?.cancel().catch(() => undefined);
+    return;
+  }
+  const response = new Response(origin.body, {
+    status: 200,
+    headers: safeOriginHeaders(origin, mediaClass),
+  });
+  if (!cacheable(response, new Request(canonicalUrl))) {
+    await response.body?.cancel().catch(() => undefined);
+    return;
+  }
+  await caches.default.put(
+    new Request(canonicalUrl),
+    internalEdgeCacheResponse(response, identity.routeClass, cacheTag),
+  );
+}
+
+function warmableTotal(response: Response): boolean {
+  const contentRange = parseContentRange(response.headers.get("content-range") ?? "");
+  return (
+    contentRange?.type === "satisfied" &&
+    contentRange.total !== undefined &&
+    contentRange.total <= CACHE_API_MAX_BYTES
+  );
 }
 
 function rangeOutcome(request: Request, response: Response, cacheOutcome: CacheOutcome) {
@@ -265,24 +333,31 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
   const canonicalUrl = await buildSourceDeliveryCacheUrl(input.identity);
   const cacheTag = await buildSourceCacheTag(input.identity.spaceId, input.identity.sourceId);
   const lookupRequest = cacheLookupRequest(input.request, canonicalUrl);
-  if (lookupRequest !== undefined) {
-    const cached = await caches.default.match(lookupRequest);
-    if (cached !== undefined) {
-      const mediaClass = mediaClassFor(cached.headers.get("content-type"));
-      await emitDeliveryEvent(
-        input.identity,
-        "edge-hit",
-        mediaClass,
-        rangeOutcome(input.request, cached, "edge-hit"),
-        "not-requested",
-      );
-      return edgeBrowserResponse(cached, {
-        routeClass: input.identity.routeClass,
-        cacheStatus: "edge-hit",
-        cacheTag,
-        head: input.request.method === "HEAD",
-      });
-    }
+  let cached = await caches.default.match(lookupRequest);
+  const ifRange = input.request.headers.get("if-range");
+  if (
+    cached !== undefined &&
+    ifRange !== null &&
+    input.request.headers.has("range") &&
+    !ifRangeMatches(ifRange, cached)
+  ) {
+    cached = await caches.default.match(new Request(canonicalUrl));
+  }
+  if (cached !== undefined) {
+    const mediaClass = mediaClassFor(cached.headers.get("content-type"));
+    await emitDeliveryEvent(
+      input.identity,
+      "edge-hit",
+      mediaClass,
+      rangeOutcome(input.request, cached, "edge-hit"),
+      "not-requested",
+    );
+    return edgeBrowserResponse(cached, {
+      routeClass: input.identity.routeClass,
+      cacheStatus: "edge-hit",
+      cacheTag,
+      head: input.request.method === "HEAD",
+    });
   }
 
   let origin: Response;
@@ -358,6 +433,14 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
       cacheTag,
       head: input.request.method === "HEAD",
     });
+  }
+
+  if (response.status === 206 && warmableTotal(response)) {
+    input.executionCtx.waitUntil(
+      warmCanonicalEntry(input.locator, input.identity, canonicalUrl, cacheTag).catch(
+        () => undefined,
+      ),
+    );
   }
 
   await emitDeliveryEvent(

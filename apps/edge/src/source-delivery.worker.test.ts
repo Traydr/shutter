@@ -174,27 +174,73 @@ describe("Source Delivery", () => {
     expect(origin).toHaveBeenCalledOnce();
   });
 
-  it("streams cold video ranges from the origin without caching partial bytes", async () => {
+  it("streams a cold range from the origin, then warms one complete entry for seeks", async () => {
+    const video = "0123456789abcdefghij";
     const origin = vi.fn(async (request: Request) => {
-      expect(request.headers.get("range")).toBe("bytes=10-19");
+      const range = request.headers.get("range");
+      if (range === null) {
+        // The background warm fetch asks for the complete object.
+        return sourceResponse(video, "video/webm", {
+          "accept-ranges": "bytes",
+          etag: '"video-v1"',
+        });
+      }
+      expect(range).toBe("bytes=10-19");
       return sourceResponse(
-        "abcdefghij",
+        video.slice(10),
         "video/webm",
-        { "accept-ranges": "bytes", "content-range": "bytes 10-19/100" },
+        { "accept-ranges": "bytes", "content-range": "bytes 10-19/20" },
         206,
       );
     });
     vi.stubGlobal("fetch", withOrigin(origin));
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const response = await SELF.fetch(PUBLIC_RESOLVER_URL, {
+    const cold = await SELF.fetch(PUBLIC_RESOLVER_URL, {
+      headers: { range: "bytes=10-19" },
+    });
+    expect(cold.status).toBe(206);
+    expect(cold.headers.get("content-range")).toBe("bytes 10-19/20");
+    expect(cold.headers.get("x-shutter-cache")).toBe("origin");
+    // A cold partial must never enter a downstream cache.
+    expect(cold.headers.get("cache-control")).toBe("private, no-store");
+
+    await vi.waitFor(() => expect(origin).toHaveBeenCalledTimes(2));
+    await vi.waitFor(async () => {
+      const warm = await SELF.fetch(PUBLIC_RESOLVER_URL, {
         headers: { range: "bytes=10-19" },
       });
-      expect(response.status).toBe(206);
-      expect(response.headers.get("content-range")).toBe("bytes 10-19/100");
-      expect(response.headers.get("x-shutter-cache")).toBe("origin");
-    }
+      expect(warm.status).toBe(206);
+      expect(warm.headers.get("x-shutter-cache")).toBe("edge-hit");
+      expect(await warm.text()).toBe("abcdefghij");
+    });
     expect(origin).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves an If-Range mismatch from the cached complete object", async () => {
+    const origin = vi.fn(async () =>
+      sourceResponse("0123456789", "video/mp4", {
+        "accept-ranges": "bytes",
+        etag: '"video-v2"',
+        "last-modified": "Wed, 01 Jul 2026 12:00:00 GMT",
+      }),
+    );
+    vi.stubGlobal("fetch", withOrigin(origin));
+    expect((await SELF.fetch(PUBLIC_RESOLVER_URL)).status).toBe(200);
+
+    const matching = await SELF.fetch(PUBLIC_RESOLVER_URL, {
+      headers: { range: "bytes=2-4", "if-range": '"video-v2"' },
+    });
+    expect(matching.status).toBe(206);
+    expect(await matching.text()).toBe("234");
+    expect(matching.headers.get("x-shutter-cache")).toBe("edge-hit");
+
+    const mismatch = await SELF.fetch(PUBLIC_RESOLVER_URL, {
+      headers: { range: "bytes=2-4", "if-range": '"video-v1"' },
+    });
+    expect(mismatch.status).toBe(200);
+    expect(await mismatch.text()).toBe("0123456789");
+    expect(mismatch.headers.get("x-shutter-cache")).toBe("edge-hit");
+    expect(origin).toHaveBeenCalledOnce();
   });
 
   it("preserves an unsatisfied range and rejects mismatched partial metadata", async () => {
