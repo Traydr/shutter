@@ -17,9 +17,26 @@ const inputPath = resolve(root, ".railway/deployment.env");
 const baseWranglerPath = resolve(root, "apps/edge/wrangler.jsonc");
 const deployedWranglerPath = resolve(root, "apps/edge/wrangler.deploy.jsonc");
 
-export async function loadDeploymentEnvironment() {
+type Environment = Record<string, string | undefined>;
+
+interface WranglerConfig {
+  account_id?: string;
+  name?: string;
+  routes?: unknown;
+  r2_buckets?: unknown;
+  [key: string]: unknown;
+}
+
+interface CurrentEnvironment {
+  projectId?: string;
+  environmentId?: string;
+  projectName?: string;
+  environmentName?: string;
+}
+
+export async function loadDeploymentEnvironment(): Promise<Environment> {
   const source = await readFile(inputPath, "utf8").catch((error) => {
-    if (error.code === "ENOENT") {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       throw new Error(
         "Missing .railway/deployment.env. Run scripts/bootstrap-deployment.sh first.",
       );
@@ -31,7 +48,10 @@ export async function loadDeploymentEnvironment() {
   return environment;
 }
 
-export function createEdgeDeploymentConfig(base, environment) {
+export function createEdgeDeploymentConfig(
+  base: WranglerConfig,
+  environment: Environment,
+): WranglerConfig {
   const input = parseDeploymentInput(environment);
   return {
     ...base,
@@ -42,20 +62,20 @@ export function createEdgeDeploymentConfig(base, environment) {
   };
 }
 
-async function currentRailwayTarget(environment) {
+async function currentRailwayTarget(environment: Environment): Promise<CurrentEnvironment> {
   const { stdout } = await execFile("pnpm", ["exec", "railway", "config", "plan", "--json"], {
     cwd: root,
     env: { ...process.env, ...environment },
     maxBuffer: 2_000_000,
   });
-  const result = JSON.parse(stdout);
+  const result = JSON.parse(stdout) as { ok?: boolean; currentEnvironment?: CurrentEnvironment };
   if (!result.ok || !result.currentEnvironment) {
     throw new Error("Railway did not return a linked plan target");
   }
   return result.currentEnvironment;
 }
 
-async function assertRailwayTarget(environment) {
+async function assertRailwayTarget(environment: Environment): Promise<void> {
   const expected = parseRailwayTarget(environment);
   const current = await currentRailwayTarget(environment);
   if (
@@ -66,7 +86,7 @@ async function assertRailwayTarget(environment) {
   }
 }
 
-async function updateDeploymentInput(updates) {
+async function updateDeploymentInput(updates: Record<string, string>): Promise<void> {
   const source = await readFile(inputPath, "utf8");
   const retained = source
     .split(/\r?\n/u)
@@ -76,13 +96,16 @@ async function updateDeploymentInput(updates) {
   await writeFile(inputPath, `${next.join("\n")}\n`, { mode: 0o600 });
 }
 
-async function bindRailwayTarget(environment) {
+async function bindRailwayTarget(environment: Environment): Promise<void> {
   const input = parseDeploymentInput(environment);
   const current = await currentRailwayTarget(environment);
   if (current.projectName !== input.projectName) {
     throw new Error(
       `Linked Railway project is ${current.projectName}, expected ${input.projectName}`,
     );
+  }
+  if (!current.projectId || !current.environmentId) {
+    throw new Error("Railway did not report the linked project and environment IDs");
   }
   const hasExpectedTarget =
     environment.SHUTTER_RAILWAY_PROJECT_ID || environment.SHUTTER_RAILWAY_ENVIRONMENT_ID;
@@ -95,20 +118,24 @@ async function bindRailwayTarget(environment) {
       throw new Error("Refusing to replace the deployment's recorded Railway target");
     }
   }
-  const updates = {
+  await updateDeploymentInput({
     SHUTTER_RAILWAY_PROJECT_ID: current.projectId,
     SHUTTER_RAILWAY_ENVIRONMENT_ID: current.environmentId,
-  };
-  await updateDeploymentInput(updates);
+  });
   console.log(
     `Bound Railway project ${current.projectName} (${current.projectId}), ` +
       `environment ${current.environmentName} (${current.environmentId}).`,
   );
 }
 
-async function discoverJobsVolume(environment) {
-  const input = parseDeploymentInput(environment);
-  if (input.mode !== "fresh") throw new Error("Volume discovery is only for a fresh bootstrap");
+interface RailwayVolume {
+  name?: string;
+  serviceName?: string;
+  deletedAt?: string | null;
+  isPendingDeletion?: boolean;
+}
+
+async function liveJobsVolumeName(environment: Environment): Promise<string | undefined> {
   const target = parseRailwayTarget(environment);
   const { stdout } = await execFile(
     "pnpm",
@@ -125,26 +152,73 @@ async function discoverJobsVolume(environment) {
     ],
     { cwd: root, env: process.env, maxBuffer: 1_000_000 },
   );
-  const result = JSON.parse(stdout);
-  const volumes = result.volumes?.filter(
+  const result = JSON.parse(stdout) as { volumes?: RailwayVolume[] };
+  const volumes = (result.volumes ?? []).filter(
     (volume) =>
       volume.serviceName === "Shutter-Jobs" &&
       volume.deletedAt === null &&
       volume.isPendingDeletion === false,
   );
-  if (!volumes || volumes.length === 0) {
-    console.log("No provisioned Jobs volume was found.");
-    return;
-  }
+  if (volumes.length === 0) return undefined;
   if (volumes.length !== 1 || !volumes[0].name) {
     throw new Error("Expected exactly one active Jobs volume");
   }
-  await updateDeploymentInput({ SHUTTER_JOBS_VOLUME_NAME: volumes[0].name });
-  console.log(`Recorded Jobs volume ${volumes[0].name}.`);
+  return volumes[0].name;
 }
 
-export async function renderEdgeDeploymentConfig(environment) {
-  const base = JSON.parse(await readFile(baseWranglerPath, "utf8"));
+/**
+ * Records the live Jobs volume name so the desired graph declares it. The name
+ * always comes from Railway itself, never from operator typing, so the graph
+ * can never contain a volume that differs from the database's real storage.
+ */
+async function discoverJobsVolume(environment: Environment): Promise<void> {
+  const live = await liveJobsVolumeName(environment);
+  if (live === undefined) {
+    console.log("No provisioned Jobs volume was found.");
+    return;
+  }
+  const recorded = environment.SHUTTER_JOBS_VOLUME_NAME?.trim();
+  if (recorded && recorded !== live) {
+    throw new Error(
+      `Recorded Jobs volume ${recorded} does not match the live volume ${live}; ` +
+        "refusing to continue",
+    );
+  }
+  if (recorded === live) return;
+  await updateDeploymentInput({ SHUTTER_JOBS_VOLUME_NAME: live });
+  environment.SHUTTER_JOBS_VOLUME_NAME = live;
+  console.log(`Recorded Jobs volume ${live}.`);
+}
+
+async function controlHasLiveCredentials(environment: Environment): Promise<boolean> {
+  const target = parseRailwayTarget(environment);
+  try {
+    const { stdout } = await execFile(
+      "pnpm",
+      [
+        "exec",
+        "railway",
+        "variable",
+        "list",
+        "--service",
+        "Shutter-Control",
+        "--project",
+        target.projectId,
+        "--environment",
+        target.environmentId,
+        "--kv",
+      ],
+      { cwd: root, env: process.env, maxBuffer: 2_000_000 },
+    );
+    return stdout.split(/\r?\n/u).some((line) => line.startsWith("EDGE_CONFIG_TOKEN="));
+  } catch {
+    // No service yet: nothing live to protect.
+    return false;
+  }
+}
+
+export async function renderEdgeDeploymentConfig(environment: Environment): Promise<string> {
+  const base = JSON.parse(await readFile(baseWranglerPath, "utf8")) as WranglerConfig;
   const deployed = createEdgeDeploymentConfig(base, environment);
   await writeFile(deployedWranglerPath, `${JSON.stringify(deployed, null, 2)}\n`, {
     mode: 0o600,
@@ -152,25 +226,43 @@ export async function renderEdgeDeploymentConfig(environment) {
   return deployedWranglerPath;
 }
 
-async function runRailway(action, environment) {
-  parseDeploymentInput(environment);
+async function runRailway(action: "plan" | "apply", environment: Environment): Promise<void> {
+  const input = parseDeploymentInput(environment);
   await assertRailwayTarget(environment);
+  // Close the two windows where a plan could propose destruction: a live Jobs
+  // volume that the input does not declare yet, and live credentials that the
+  // input does not preserve yet.
+  const state = parseBootstrapState(environment);
+  if (state.phase === "linked") await discoverJobsVolume(environment);
+  if (
+    action === "apply" &&
+    !input.secretsSeeded &&
+    (await controlHasLiveCredentials(environment))
+  ) {
+    throw new Error(
+      "Live credentials exist on Shutter-Control but SHUTTER_SECRETS_SEEDED is not true. " +
+        "Run the wizard credential stage (or set SHUTTER_SECRETS_SEEDED=true) before applying.",
+    );
+  }
   const child = spawn("pnpm", ["exec", "railway", "config", action], {
     cwd: root,
     env: { ...process.env, ...environment },
     stdio: "inherit",
   });
-  const status = await new Promise((resolveStatus, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code, signal) => resolveStatus({ code, signal }));
-  });
+  const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolveStatus, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolveStatus({ code, signal }));
+    },
+  );
   if (status.signal) throw new Error(`Railway config ${action} ended with ${status.signal}`);
   if (status.code !== 0) process.exitCode = status.code ?? 1;
 }
 
-async function main() {
+async function main(): Promise<void> {
   const command = process.argv[2];
   if (
+    command === undefined ||
     !new Set([
       "render-edge",
       "bind-target",
@@ -183,7 +275,7 @@ async function main() {
     ]).has(command)
   ) {
     throw new Error(
-      "Usage: node scripts/deployment-config.mjs render-edge|bind-target|assert-target|bootstrap-phase|cloudflare-phase|discover-volume|plan|apply",
+      "Usage: node scripts/deployment-config.ts render-edge|bind-target|assert-target|bootstrap-phase|cloudflare-phase|discover-volume|plan|apply",
     );
   }
   const environment = await loadDeploymentEnvironment();
@@ -213,7 +305,7 @@ async function main() {
     await discoverJobsVolume(environment);
     return;
   }
-  await runRailway(command, environment);
+  await runRailway(command === "apply" ? "apply" : "plan", environment);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {

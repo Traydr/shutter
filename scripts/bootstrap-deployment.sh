@@ -187,6 +187,7 @@ finish() {
 TOTAL_STAGES=6
 ENV_FILE=".railway/deployment.env"
 PROVIDER_SECRET_COUNT=0
+CONTROL_VARS_FILE=""
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || { warn "$1 is required"; exit 1; }
@@ -197,7 +198,7 @@ generate_credential() {
 }
 
 deployment_config() {
-  node --experimental-strip-types scripts/deployment-config.mjs "$@"
+  node --experimental-strip-types scripts/deployment-config.ts "$@"
 }
 
 set_railway_value() {
@@ -225,8 +226,53 @@ r2_bucket_exists() {
     "$SHUTTER_R2_BUCKET" --config wrangler.deploy.jsonc --json >/dev/null 2>&1
 }
 
+# load_control_vars — snapshot Shutter-Control's live variables to a private
+# temp file so the credential stage can reuse existing values instead of
+# regenerating them. Re-running the stage is a no-op by construction.
+load_control_vars() {
+  CONTROL_VARS_FILE=$(mktemp)
+  chmod 600 "$CONTROL_VARS_FILE"
+  pnpm exec railway variable list --service Shutter-Control \
+    --project "$SHUTTER_RAILWAY_PROJECT_ID" \
+    --environment "$SHUTTER_RAILWAY_ENVIRONMENT_ID" \
+    --kv > "$CONTROL_VARS_FILE" 2>/dev/null || true
+}
+
+# existing_control_value NAME — the live value of NAME on Shutter-Control.
+existing_control_value() {
+  [[ -n "$CONTROL_VARS_FILE" ]] || return 1
+  local line
+  line=$(grep -E "^${1}=" "$CONTROL_VARS_FILE" | head -n1) || return 1
+  printf '%s' "${line#*=}"
+}
+
+# reuse_or_generate KEY — keep the live Control value of KEY if one exists,
+# otherwise generate a fresh credential. Never regenerates an existing value:
+# SHUTTER_ENCRYPTION_KEY in particular seals every Capability Key and has no
+# rotation tooling, so replacing it would be unrecoverable.
+reuse_or_generate() {
+  local key="$1" current
+  if current=$(existing_control_value "$key") && [[ -n "$current" ]]; then
+    printf -v "$key" '%s' "$current"
+    note "reusing the existing $key"
+  else
+    printf -v "$key" '%s' "$(generate_credential)"
+  fi
+}
+
+# reuse_or_ask_secret KEY "Prompt" — keep the live Control value if one
+# exists, otherwise prompt the operator for it.
+reuse_or_ask_secret() {
+  local key="$1" prompt="$2" current
+  if current=$(existing_control_value "$key") && [[ -n "$current" ]]; then
+    printf -v "$key" '%s' "$current"
+    note "reusing the existing $key"
+  else
+    ask_secret "$key" "$prompt"
+  fi
+}
+
 write_public_inputs() {
-  write_env SHUTTER_DEPLOYMENT_MODE "$SHUTTER_DEPLOYMENT_MODE"
   write_env SHUTTER_PROJECT_NAME "$SHUTTER_PROJECT_NAME"
   write_env SHUTTER_GITHUB_REPOSITORY "$SHUTTER_GITHUB_REPOSITORY"
   write_env SHUTTER_RAILWAY_REGION "$SHUTTER_RAILWAY_REGION"
@@ -247,19 +293,7 @@ mkdir -p .railway
 banner "Shutter deployment bootstrap"
 
 stage "Deployment identity"
-say "Choose fresh for a new project or imported for an existing live project."
-PREVIOUS_DEPLOYMENT_MODE="$(_existing SHUTTER_DEPLOYMENT_MODE || true)"
-ask SHUTTER_DEPLOYMENT_MODE "Deployment mode (fresh/imported):"
-if [[ "$SHUTTER_DEPLOYMENT_MODE" != "fresh" && "$SHUTTER_DEPLOYMENT_MODE" != "imported" ]]; then
-  warn "deployment mode must be fresh or imported"
-  exit 1
-fi
-if [[ "$PREVIOUS_DEPLOYMENT_MODE" == "imported" && "$SHUTTER_DEPLOYMENT_MODE" == "fresh" ]]; then
-  warn "refusing to reuse an imported project's input for a fresh bootstrap"
-  say "Move the old .railway/deployment.env aside, link the new project, and rerun."
-  exit 1
-fi
-INITIAL_DEPLOYMENT_MODE="$SHUTTER_DEPLOYMENT_MODE"
+say "These public values describe your deployment. Nothing here is a secret."
 ask SHUTTER_PROJECT_NAME "Railway project name:"
 ask SHUTTER_GITHUB_REPOSITORY "Public GitHub repository (owner/repository):"
 ask SHUTTER_RAILWAY_REGION "Railway region:"
@@ -279,11 +313,13 @@ ask SHUTTER_IMGPROXY_ALLOWED_SOURCES "Comma-separated HTTPS source allowlist:"
 write_public_inputs
 deployment_config render-edge >/dev/null
 R2_PHASE="$(deployment_config cloudflare-phase)"
-if [[ "$SHUTTER_DEPLOYMENT_MODE" == "fresh" && "$R2_PHASE" != "ready" ]]; then
+if [[ "$R2_PHASE" == "ready" ]]; then
+  note "The R2 bucket and lifecycle were completed on an earlier run."
+else
   if [[ "$R2_PHASE" == "changed" ]]; then
     warn "the R2 account or bucket changed since the last completed Cloudflare setup"
   fi
-  if confirm "Create the R2 bucket and apply its cache/ lifecycle rule now?"; then
+  if confirm "Ensure the R2 bucket exists and apply its cache/ lifecycle rule now?"; then
     if r2_bucket_exists; then
       note "The account-bound R2 bucket already exists; keeping it."
     else
@@ -301,141 +337,128 @@ if [[ "$SHUTTER_DEPLOYMENT_MODE" == "fresh" && "$R2_PHASE" != "ready" ]]; then
     warn "create the R2 bucket and lifecycle rule before the Worker deploy"
     SKIPPED+=("R2 bucket and cache/ lifecycle rule")
   fi
-elif [[ "$SHUTTER_DEPLOYMENT_MODE" == "imported" ]]; then
-  note "Imported mode leaves the existing bucket and lifecycle unchanged."
-else
-  note "The R2 bucket and lifecycle were completed on an earlier run."
 fi
 
 stage "Railway topology plan"
-if [[ "$SHUTTER_DEPLOYMENT_MODE" == "fresh" ]]; then
+BOOTSTRAP_PHASE="$(deployment_config bootstrap-phase)"
+if [[ "$BOOTSTRAP_PHASE" == "unlinked" ]]; then
+  say "No Railway project is linked yet."
+  if confirm "Create and link a new empty Railway project now?"; then
+    pnpm exec railway init --name "$SHUTTER_PROJECT_NAME"
+  else
+    warn "for an existing project, link it first: pnpm exec railway link"
+    say "Then rerun this wizard."
+    exit 1
+  fi
+  deployment_config bind-target
   BOOTSTRAP_PHASE="$(deployment_config bootstrap-phase)"
-  if [[ "$BOOTSTRAP_PHASE" == "unlinked" ]]; then
-    if confirm "Create and link the empty Railway project now?"; then
-      pnpm exec railway init --name "$SHUTTER_PROJECT_NAME"
-    else
-      warn "link an empty Railway project, then rerun this wizard"
-      exit 1
-    fi
-    deployment_config bind-target
-    BOOTSTRAP_PHASE="planned"
-  else
-    deployment_config assert-target
-  fi
-  SHUTTER_RAILWAY_PROJECT_ID="$(_existing SHUTTER_RAILWAY_PROJECT_ID)"
-  SHUTTER_RAILWAY_ENVIRONMENT_ID="$(_existing SHUTTER_RAILWAY_ENVIRONMENT_ID)"
-  if [[ "$BOOTSTRAP_PHASE" == "planned" ]]; then
-    deployment_config discover-volume
-    BOOTSTRAP_PHASE="$(deployment_config bootstrap-phase)"
-  fi
-  if [[ "$BOOTSTRAP_PHASE" == "provisioned" ]]; then
-    note "The first topology apply is recorded; resume credential setup."
-  else
-    say "This command only previews changes. Review every resource and variable."
-    pnpm deployment:plan
-  fi
 else
-  ask SHUTTER_JOBS_VOLUME_NAME "Existing Railway Postgres volume name:"
-  write_env SHUTTER_JOBS_VOLUME_NAME "$SHUTTER_JOBS_VOLUME_NAME"
-  BOOTSTRAP_PHASE="$(deployment_config bootstrap-phase)"
-  if [[ "$BOOTSTRAP_PHASE" == "unlinked" ]]; then
-    deployment_config bind-target
-    BOOTSTRAP_PHASE="ready"
-  else
-    deployment_config assert-target
-  fi
-  SHUTTER_RAILWAY_PROJECT_ID="$(_existing SHUTTER_RAILWAY_PROJECT_ID)"
-  SHUTTER_RAILWAY_ENVIRONMENT_ID="$(_existing SHUTTER_RAILWAY_ENVIRONMENT_ID)"
-  say "This command only previews changes. Review every resource and variable."
-  pnpm deployment:plan
+  deployment_config assert-target
 fi
+SHUTTER_RAILWAY_PROJECT_ID="$(_existing SHUTTER_RAILWAY_PROJECT_ID)"
+SHUTTER_RAILWAY_ENVIRONMENT_ID="$(_existing SHUTTER_RAILWAY_ENVIRONMENT_ID)"
+if [[ "$BOOTSTRAP_PHASE" == "linked" ]]; then
+  deployment_config discover-volume
+  BOOTSTRAP_PHASE="$(deployment_config bootstrap-phase)"
+fi
+if [[ "$BOOTSTRAP_PHASE" == "provisioned" ]]; then
+  note "The live Jobs volume is recorded; the plan below declares it."
+fi
+say "This command only previews changes. Review every resource and variable."
+pnpm deployment:plan
+pause "Press Enter after you have reviewed the plan above."
 
 stage "Explicit Railway apply"
-if [[ "$SHUTTER_DEPLOYMENT_MODE" == "fresh" ]]; then
-  if [[ "$BOOTSTRAP_PHASE" == "provisioned" ]]; then
-    note "The first apply was recorded on an earlier run."
-    SHUTTER_JOBS_VOLUME_NAME="$(_existing SHUTTER_JOBS_VOLUME_NAME)"
-  else
-    say "The fresh plan intentionally has no credentials and no imported volume."
-    step "In another terminal, review again and run: pnpm deployment:apply"
-    warn "Do not continue until that explicit apply has created the services and database."
-    pause "Return here only after the reviewed apply finishes."
-    deployment_config discover-volume
-    BOOTSTRAP_PHASE="$(deployment_config bootstrap-phase)"
-    if [[ "$BOOTSTRAP_PHASE" != "provisioned" ]]; then
-      warn "Railway does not report the new Jobs volume; rerun the wizard after the apply finishes"
-      exit 1
-    fi
-    SHUTTER_JOBS_VOLUME_NAME="$(_existing SHUTTER_JOBS_VOLUME_NAME)"
-  fi
+if [[ "$BOOTSTRAP_PHASE" == "provisioned" ]]; then
+  note "The topology apply was completed on an earlier run or project."
+  SHUTTER_JOBS_VOLUME_NAME="$(_existing SHUTTER_JOBS_VOLUME_NAME)"
 else
-  note "Imported mode never applies and never replaces existing credentials."
+  say "The first plan intentionally has no credentials yet."
+  step "In another terminal, review again and run: pnpm deployment:apply"
+  warn "Do not continue until that explicit apply has created the services and database."
+  pause "Return here only after the reviewed apply finishes."
+  deployment_config discover-volume
+  BOOTSTRAP_PHASE="$(deployment_config bootstrap-phase)"
+  if [[ "$BOOTSTRAP_PHASE" != "provisioned" ]]; then
+    warn "Railway does not report the new Jobs volume; rerun the wizard after the apply finishes"
+    exit 1
+  fi
+  SHUTTER_JOBS_VOLUME_NAME="$(_existing SHUTTER_JOBS_VOLUME_NAME)"
 fi
 
 stage "Provider credentials"
-if [[ "$INITIAL_DEPLOYMENT_MODE" == "fresh" ]]; then
-  deployment_config assert-target
-  say "For a fresh project, credentials go directly to provider stores."
-  open_url "https://dash.cloudflare.com/"
-  step "Select Storage & databases, then R2, then Overview."
-  step "Under Account Details, select Manage next to API Tokens."
-  step "Create an Account or User API token with Object Read & Write for only this bucket."
-  step "Copy both one-time values from the confirmation page."
-  ask_secret R2_ACCESS_KEY_ID "R2 S3 access key ID:"
-  ask_secret R2_SECRET_ACCESS_KEY "R2 S3 secret access key:"
-  step "Open My Profile > API Tokens, select Create Token, then create a custom token."
-  step "Give it only Cache Purge permission for the selected zone and copy the one-time secret."
-  ask_secret CLOUDFLARE_CACHE_PURGE_TOKEN "Cloudflare Cache Purge API token:"
-
-  ADMIN_BOOTSTRAP_TOKEN=$(generate_credential)
-  EDGE_CONFIG_TOKEN=$(generate_credential)
-  IMGPROXY_KEY=$(generate_credential)
-  IMGPROXY_SALT=$(generate_credential)
-  IMGPROXY_SECRET=$(generate_credential)
-  ORIGIN_AUTH_TOKEN=$(generate_credential)
-  PDF_EXECUTOR_TOKEN=$(generate_credential)
-  SHUTTER_ENCRYPTION_KEY=$(generate_credential)
-  VIDEO_EXECUTOR_TOKEN=$(generate_credential)
-
-  for target in Shutter-Control Shutter-Imgproxy Shutter-Executor-Video Shutter-Executor-PDF; do
-    set_railway_value "$target" S3_ACCESS_KEY_ID "$R2_ACCESS_KEY_ID"
-    set_railway_value "$target" S3_SECRET_ACCESS_KEY "$R2_SECRET_ACCESS_KEY"
-  done
-  set_railway_value Shutter-Control ADMIN_BOOTSTRAP_TOKEN "$ADMIN_BOOTSTRAP_TOKEN"
-  set_railway_value Shutter-Control CLOUDFLARE_CACHE_PURGE_TOKEN "$CLOUDFLARE_CACHE_PURGE_TOKEN"
-  set_railway_value Shutter-Control EDGE_CONFIG_TOKEN "$EDGE_CONFIG_TOKEN"
-  set_railway_value Shutter-Control IMGPROXY_KEY "$IMGPROXY_KEY"
-  set_railway_value Shutter-Control IMGPROXY_SALT "$IMGPROXY_SALT"
-  set_railway_value Shutter-Control IMGPROXY_SECRET "$IMGPROXY_SECRET"
-  set_railway_value Shutter-Control ORIGIN_AUTH_TOKEN "$ORIGIN_AUTH_TOKEN"
-  set_railway_value Shutter-Control PDF_EXECUTOR_TOKEN "$PDF_EXECUTOR_TOKEN"
-  set_railway_value Shutter-Control SHUTTER_ENCRYPTION_KEY "$SHUTTER_ENCRYPTION_KEY"
-  set_railway_value Shutter-Control VIDEO_EXECUTOR_TOKEN "$VIDEO_EXECUTOR_TOKEN"
-  set_railway_value Shutter-Imgproxy IMGPROXY_KEY "$IMGPROXY_KEY"
-  set_railway_value Shutter-Imgproxy IMGPROXY_SALT "$IMGPROXY_SALT"
-  set_railway_value Shutter-Imgproxy IMGPROXY_SECRET "$IMGPROXY_SECRET"
-  set_railway_value Shutter-Executor-PDF EXECUTOR_ROLE_TOKEN "$PDF_EXECUTOR_TOKEN"
-  set_railway_value Shutter-Executor-Video EXECUTOR_ROLE_TOKEN "$VIDEO_EXECUTOR_TOKEN"
-
-  set_worker_secret EDGE_CONFIG_TOKEN "$EDGE_CONFIG_TOKEN"
-  set_worker_secret ORIGIN_AUTH_TOKEN "$ORIGIN_AUTH_TOKEN"
-  set_worker_secret ORIGIN_BASE_URL "https://$SHUTTER_CONTROL_DOMAIN"
-  if confirm "Redeploy all Railway application services with the new credentials now?"; then
-    for target in Shutter-Control Shutter-Imgproxy Shutter-Executor-Video Shutter-Executor-PDF; do
-      pnpm exec railway redeploy --yes --service "$target" \
-        --project "$SHUTTER_RAILWAY_PROJECT_ID" \
-        --environment "$SHUTTER_RAILWAY_ENVIRONMENT_ID" >/dev/null
-      printf '  %s✓ redeployed%s %s\n' "$GREEN" "$RESET" "$target"
-    done
-  else
-    warn "all four Railway application services must be redeployed before verification"
-    say "The deployment remains in fresh mode so the credential stage can be rerun safely."
-    exit 1
-  fi
-  SHUTTER_DEPLOYMENT_MODE="imported"
-  write_env SHUTTER_DEPLOYMENT_MODE "$SHUTTER_DEPLOYMENT_MODE"
+deployment_config assert-target
+load_control_vars
+if existing_control_value EDGE_CONFIG_TOKEN >/dev/null; then
+  say "Existing credentials were found on Shutter-Control. They are reused as"
+  say "they are; this stage never regenerates a live credential."
 else
-  note "No credential was read, generated, or changed for this imported project."
+  say "Credentials go directly to provider stores. This wizard never writes"
+  say "them to disk or prints them."
+fi
+open_url "https://dash.cloudflare.com/"
+step "Select Storage & databases, then R2, then Overview."
+step "Under Account Details, select Manage next to API Tokens."
+step "Create an Account or User API token with Object Read & Write for only this bucket."
+step "Copy both one-time values from the confirmation page."
+reuse_or_ask_secret S3_ACCESS_KEY_ID "R2 S3 access key ID:"
+reuse_or_ask_secret S3_SECRET_ACCESS_KEY "R2 S3 secret access key:"
+step "Open My Profile > API Tokens, select Create Token, then create a custom token."
+step "Give it only Cache Purge permission for the selected zone and copy the one-time secret."
+reuse_or_ask_secret CLOUDFLARE_CACHE_PURGE_TOKEN "Cloudflare Cache Purge API token:"
+
+reuse_or_generate ADMIN_BOOTSTRAP_TOKEN
+reuse_or_generate EDGE_CONFIG_TOKEN
+reuse_or_generate IMGPROXY_KEY
+reuse_or_generate IMGPROXY_SALT
+reuse_or_generate IMGPROXY_SECRET
+reuse_or_generate ORIGIN_AUTH_TOKEN
+reuse_or_generate PDF_EXECUTOR_TOKEN
+reuse_or_generate SHUTTER_ENCRYPTION_KEY
+reuse_or_generate VIDEO_EXECUTOR_TOKEN
+
+for target in Shutter-Control Shutter-Imgproxy Shutter-Executor-Video Shutter-Executor-PDF; do
+  set_railway_value "$target" S3_ACCESS_KEY_ID "$S3_ACCESS_KEY_ID"
+  set_railway_value "$target" S3_SECRET_ACCESS_KEY "$S3_SECRET_ACCESS_KEY"
+done
+set_railway_value Shutter-Control ADMIN_BOOTSTRAP_TOKEN "$ADMIN_BOOTSTRAP_TOKEN"
+set_railway_value Shutter-Control CLOUDFLARE_CACHE_PURGE_TOKEN "$CLOUDFLARE_CACHE_PURGE_TOKEN"
+set_railway_value Shutter-Control EDGE_CONFIG_TOKEN "$EDGE_CONFIG_TOKEN"
+set_railway_value Shutter-Control IMGPROXY_KEY "$IMGPROXY_KEY"
+set_railway_value Shutter-Control IMGPROXY_SALT "$IMGPROXY_SALT"
+set_railway_value Shutter-Control IMGPROXY_SECRET "$IMGPROXY_SECRET"
+set_railway_value Shutter-Control ORIGIN_AUTH_TOKEN "$ORIGIN_AUTH_TOKEN"
+set_railway_value Shutter-Control PDF_EXECUTOR_TOKEN "$PDF_EXECUTOR_TOKEN"
+set_railway_value Shutter-Control SHUTTER_ENCRYPTION_KEY "$SHUTTER_ENCRYPTION_KEY"
+set_railway_value Shutter-Control VIDEO_EXECUTOR_TOKEN "$VIDEO_EXECUTOR_TOKEN"
+set_railway_value Shutter-Imgproxy IMGPROXY_KEY "$IMGPROXY_KEY"
+set_railway_value Shutter-Imgproxy IMGPROXY_SALT "$IMGPROXY_SALT"
+set_railway_value Shutter-Imgproxy IMGPROXY_SECRET "$IMGPROXY_SECRET"
+set_railway_value Shutter-Executor-PDF EXECUTOR_ROLE_TOKEN "$PDF_EXECUTOR_TOKEN"
+set_railway_value Shutter-Executor-Video EXECUTOR_ROLE_TOKEN "$VIDEO_EXECUTOR_TOKEN"
+
+set_worker_secret EDGE_CONFIG_TOKEN "$EDGE_CONFIG_TOKEN"
+set_worker_secret ORIGIN_AUTH_TOKEN "$ORIGIN_AUTH_TOKEN"
+set_worker_secret ORIGIN_BASE_URL "https://$SHUTTER_CONTROL_DOMAIN"
+rm -f "$CONTROL_VARS_FILE"
+CONTROL_VARS_FILE=""
+
+# Record that credentials now exist on the providers. From here, plans
+# preserve() the credential set and never propose deleting it.
+write_env SHUTTER_SECRETS_SEEDED true
+note "Read ADMIN_BOOTSTRAP_TOKEN later from the Railway dashboard:"
+note "  Shutter-Control → Variables → ADMIN_BOOTSTRAP_TOKEN (needed for /admin)."
+
+if confirm "Redeploy all Railway application services with the credentials now?"; then
+  for target in Shutter-Control Shutter-Imgproxy Shutter-Executor-Video Shutter-Executor-PDF; do
+    pnpm exec railway redeploy --yes --service "$target" \
+      --project "$SHUTTER_RAILWAY_PROJECT_ID" \
+      --environment "$SHUTTER_RAILWAY_ENVIRONMENT_ID" >/dev/null
+    printf '  %s✓ redeployed%s %s\n' "$GREEN" "$RESET" "$target"
+  done
+else
+  warn "all four Railway application services must be redeployed before verification"
+  SKIPPED+=("redeploy Shutter-Control, Shutter-Imgproxy, and both Executors")
 fi
 
 stage "Final review and verification"
@@ -445,7 +468,12 @@ say "This wizard does not apply the final plan or deploy the Worker."
 step "Apply the final Railway plan only after review: pnpm deployment:apply"
 step "Deploy Edge only after Control is healthy: pnpm deploy:edge"
 step "Follow docs/runbooks/self-hosting.md to verify health and public/private Spaces."
-SKIPPED+=("final Railway apply, Edge deploy, and live verification")
+SKIPPED+=("final Railway apply: pnpm deployment:apply")
+SKIPPED+=("Edge Worker deploy: pnpm deploy:edge")
+SKIPPED+=("live verification: docs/runbooks/self-hosting.md")
+pause "Press Enter after you have reviewed the final plan above."
 
 finish
-(( PROVIDER_SECRET_COUNT > 0 )) && note "set $PROVIDER_SECRET_COUNT provider secret value(s)"
+if (( PROVIDER_SECRET_COUNT > 0 )); then
+  note "set $PROVIDER_SECRET_COUNT provider secret value(s)"
+fi

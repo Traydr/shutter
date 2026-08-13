@@ -1,5 +1,4 @@
 const publicInputKeys = [
-  "SHUTTER_DEPLOYMENT_MODE",
   "SHUTTER_PROJECT_NAME",
   "SHUTTER_GITHUB_REPOSITORY",
   "SHUTTER_RAILWAY_REGION",
@@ -11,6 +10,7 @@ const publicInputKeys = [
   "SHUTTER_R2_REGION",
   "SHUTTER_CLOUDFLARE_ZONE_ID",
   "SHUTTER_IMGPROXY_ALLOWED_SOURCES",
+  "SHUTTER_SECRETS_SEEDED",
   "SHUTTER_JOBS_VOLUME_NAME",
   "SHUTTER_RAILWAY_PROJECT_ID",
   "SHUTTER_RAILWAY_ENVIRONMENT_ID",
@@ -35,9 +35,17 @@ interface CommonDeploymentInput {
   imgproxyAllowedSources: string;
 }
 
-export type DeploymentInput =
-  | (CommonDeploymentInput & { mode: "fresh" })
-  | (CommonDeploymentInput & { mode: "imported"; jobsVolumeName: string });
+/**
+ * Two independent facts replace the old fresh/imported mode:
+ * `jobsVolumeName` declares the live Postgres volume as soon as it is known
+ * (discovered or imported), so a later plan can never propose deleting it, and
+ * `secretsSeeded` records that credential variables exist on the providers, so
+ * they are preserve()d exactly from that point on.
+ */
+export type DeploymentInput = CommonDeploymentInput & {
+  jobsVolumeName?: string;
+  secretsSeeded: boolean;
+};
 
 export interface RailwayTarget {
   projectId: string;
@@ -45,11 +53,9 @@ export interface RailwayTarget {
 }
 
 export type BootstrapState =
-  | { mode: "fresh"; phase: "unlinked" }
-  | ({ mode: "fresh"; phase: "planned" } & RailwayTarget)
-  | ({ mode: "fresh"; phase: "provisioned"; jobsVolumeName: string } & RailwayTarget)
-  | { mode: "imported"; phase: "unlinked"; jobsVolumeName: string }
-  | ({ mode: "imported"; phase: "ready"; jobsVolumeName: string } & RailwayTarget);
+  | { phase: "unlinked" }
+  | ({ phase: "linked" } & RailwayTarget)
+  | ({ phase: "provisioned"; jobsVolumeName: string } & RailwayTarget);
 
 export type CloudflareBootstrapState =
   | { phase: "pending" }
@@ -149,11 +155,14 @@ function volumeName(environment: Environment): string | undefined {
   return value || undefined;
 }
 
+function secretsSeeded(environment: Environment): boolean {
+  const value = environment.SHUTTER_SECRETS_SEEDED?.trim();
+  if (value === undefined || value === "" || value === "false") return false;
+  if (value === "true") return true;
+  throw new Error("Deployment input SHUTTER_SECRETS_SEEDED must be true or false");
+}
+
 export function parseDeploymentInput(environment: Environment): DeploymentInput {
-  const mode = required(environment, "SHUTTER_DEPLOYMENT_MODE");
-  if (mode !== "fresh" && mode !== "imported") {
-    throw new Error("Deployment input SHUTTER_DEPLOYMENT_MODE must be fresh or imported");
-  }
   const jobsVolumeName = volumeName(environment);
   const r2Region = required(environment, "SHUTTER_R2_REGION");
   if (!/^[A-Za-z0-9-]+$/u.test(r2Region)) {
@@ -174,9 +183,11 @@ export function parseDeploymentInput(environment: Environment): DeploymentInput 
     cloudflareZoneId: identifier(environment, "SHUTTER_CLOUDFLARE_ZONE_ID"),
     imgproxyAllowedSources: allowedSources(environment),
   };
-  if (mode === "fresh") return Object.freeze({ ...common, mode });
-  if (!jobsVolumeName) throw new Error("Imported deployments require SHUTTER_JOBS_VOLUME_NAME");
-  return Object.freeze({ ...common, mode, jobsVolumeName });
+  return Object.freeze({
+    ...common,
+    secretsSeeded: secretsSeeded(environment),
+    ...(jobsVolumeName === undefined ? {} : { jobsVolumeName }),
+  });
 }
 
 export function parseRailwayTarget(environment: Environment): RailwayTarget {
@@ -190,22 +201,16 @@ export function parseRailwayTarget(environment: Environment): RailwayTarget {
 }
 
 export function parseBootstrapState(environment: Environment): BootstrapState {
-  const input = parseDeploymentInput(environment);
+  parseDeploymentInput(environment);
   const jobsVolumeName = volumeName(environment);
   const hasProject = Boolean(environment.SHUTTER_RAILWAY_PROJECT_ID?.trim());
   const hasEnvironment = Boolean(environment.SHUTTER_RAILWAY_ENVIRONMENT_ID?.trim());
   if (hasProject !== hasEnvironment) throw new Error("Railway target state is incomplete");
   const target = hasProject ? parseRailwayTarget(environment) : undefined;
-
-  if (input.mode === "imported") {
-    return target
-      ? { mode: input.mode, phase: "ready", jobsVolumeName: input.jobsVolumeName, ...target }
-      : { mode: input.mode, phase: "unlinked", jobsVolumeName: input.jobsVolumeName };
-  }
-  if (!target && jobsVolumeName) throw new Error("Fresh volume state has no Railway target");
-  if (!target) return { mode: input.mode, phase: "unlinked" };
-  if (!jobsVolumeName) return { mode: input.mode, phase: "planned", ...target };
-  return { mode: input.mode, phase: "provisioned", jobsVolumeName, ...target };
+  if (!target && jobsVolumeName) throw new Error("Recorded volume state has no Railway target");
+  if (!target) return { phase: "unlinked" };
+  if (!jobsVolumeName) return { phase: "linked", ...target };
+  return { phase: "provisioned", jobsVolumeName, ...target };
 }
 
 export function parseCloudflareBootstrapState(environment: Environment): CloudflareBootstrapState {

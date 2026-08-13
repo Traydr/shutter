@@ -23,26 +23,30 @@ const executorWatchPatterns = [
   ...workspaceWatchPatterns,
 ];
 
-function preserved(names: string[]) {
-  return Object.fromEntries(names.map((name) => [name, preserve()]));
+function preserved<K extends string>(names: readonly K[]): Record<K, VariableValue> {
+  return Object.fromEntries(names.map((name) => [name, preserve()] as const)) as Record<
+    K,
+    VariableValue
+  >;
 }
 
 export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
   const input = parseDeploymentInput(environment);
-  const imported = input.mode === "imported";
+  // Only credentials are ever preserve()d, and only once the credential stage
+  // has seeded them. Every non-secret value is an unconditional literal from
+  // the deployment input, so changing the input actually changes the plan.
+  const seeded = input.secretsSeeded;
   const repository = github(input.repository);
-  const s3PublicEnv: Record<string, string | VariableValue> = imported
-    ? preserved(["S3_BUCKET", "S3_ENDPOINT", "S3_REGION"])
-    : {
-        S3_BUCKET: input.r2Bucket,
-        S3_ENDPOINT: input.r2Endpoint,
-        S3_REGION: input.r2Region,
-      };
-  const s3CredentialEnv: Record<string, VariableValue> = imported
+  const s3PublicEnv: Record<string, string> = {
+    S3_BUCKET: input.r2Bucket,
+    S3_ENDPOINT: input.r2Endpoint,
+    S3_REGION: input.r2Region,
+  };
+  const s3CredentialEnv: Record<string, VariableValue> = seeded
     ? preserved(["S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"])
     : {};
   const s3Env = { ...s3PublicEnv, ...s3CredentialEnv };
-  const imgproxyCredentialEnv: Record<string, VariableValue> = imported
+  const imgproxyCredentialEnv: Record<string, VariableValue> = seeded
     ? preserved(["IMGPROXY_KEY", "IMGPROXY_SALT", "IMGPROXY_SECRET"])
     : {};
 
@@ -55,7 +59,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
     healthcheckTimeout: 30,
     networking: { privateNetworkEndpoint: "shutter-imgproxy" },
     env: {
-      IMGPROXY_ALLOWED_SOURCES: imported ? preserve() : input.imgproxyAllowedSources,
+      IMGPROXY_ALLOWED_SOURCES: input.imgproxyAllowedSources,
       IMGPROXY_ALLOW_LINK_LOCAL_SOURCE_ADDRESSES: "false",
       IMGPROXY_ALLOW_LOOPBACK_SOURCE_ADDRESSES: "false",
       IMGPROXY_ALLOW_PRIVATE_SOURCE_ADDRESSES: "false",
@@ -79,31 +83,35 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
   });
 
   const Jobs = postgres("Shutter-Jobs", { region: input.railwayRegion });
-  const JobsVolume =
-    input.mode === "imported"
-      ? volume(input.jobsVolumeName, {
-          allowOnlineResize: true,
-          region: input.railwayRegion,
-          sizeMB: 50_000,
-          alerts: { usage: { "80": {}, "95": {}, "100": {} } },
-        })
-      : undefined;
+  // Railway IaC 3.5.2 creates this volume implicitly for postgres(), but does
+  // not retain it in the next desired graph. Declare the live volume as soon
+  // as its name is known (discovered after the first apply, or supplied for an
+  // imported project) so later plans cannot propose deleting the database's
+  // attached storage.
+  const JobsVolume = input.jobsVolumeName
+    ? volume(input.jobsVolumeName, {
+        allowOnlineResize: true,
+        region: input.railwayRegion,
+        sizeMB: 50_000,
+        alerts: { usage: { "80": {}, "95": {}, "100": {} } },
+      })
+    : undefined;
 
-  const controlSecretEnv: Record<string, VariableValue> = imported
-    ? {
-        ADMIN_BOOTSTRAP_TOKEN: preserve(),
-        CLOUDFLARE_CACHE_PURGE_TOKEN: preserve(),
-        EDGE_CONFIG_TOKEN: preserve(),
-        IMGPROXY_KEY: preserve(),
-        IMGPROXY_SALT: preserve(),
-        IMGPROXY_SECRET: preserve(),
-        ORIGIN_AUTH_TOKEN: preserve(),
-        PDF_EXECUTOR_TOKEN: preserve(),
-        SHUTTER_ENCRYPTION_KEY: preserve(),
-        VIDEO_EXECUTOR_TOKEN: preserve(),
-      }
+  const controlSecretEnv: Record<string, VariableValue> = seeded
+    ? preserved([
+        "ADMIN_BOOTSTRAP_TOKEN",
+        "CLOUDFLARE_CACHE_PURGE_TOKEN",
+        "EDGE_CONFIG_TOKEN",
+        "IMGPROXY_KEY",
+        "IMGPROXY_SALT",
+        "IMGPROXY_SECRET",
+        "ORIGIN_AUTH_TOKEN",
+        "PDF_EXECUTOR_TOKEN",
+        "SHUTTER_ENCRYPTION_KEY",
+        "VIDEO_EXECUTOR_TOKEN",
+      ])
     : {};
-  const observabilityEnv: Record<string, string | VariableValue> = imported
+  const observabilityEnv: Record<string, string | VariableValue> = seeded
     ? {
         ...preserved([
           "OTEL_EXPORTER_OTLP_LOGS_ALLOWED_ENDPOINTS",
@@ -116,9 +124,9 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
     : {};
 
   const controlEnv: Record<string, string | VariableValue> = {
-    CLOUDFLARE_ZONE_ID: imported ? preserve() : input.cloudflareZoneId,
+    CLOUDFLARE_ZONE_ID: input.cloudflareZoneId,
     DATABASE_URL: Jobs.env.DATABASE_URL,
-    EDGE_BASE_URL: imported ? preserve() : `https://${input.edgeDomain}`,
+    EDGE_BASE_URL: `https://${input.edgeDomain}`,
     IMGPROXY_BASE_URL: `http://\${{Shutter-Imgproxy.RAILWAY_PRIVATE_DOMAIN}}:${imgproxyPort}`,
     IMGPROXY_ALLOWED_SOURCES: Imgproxy.env.IMGPROXY_ALLOWED_SOURCES,
     NODE_ENV: "production",
@@ -156,7 +164,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
       PORT: String(nodePort),
       ...s3Env,
     };
-    if (imported) values.EXECUTOR_ROLE_TOKEN = ref(Control, roleToken);
+    if (seeded) values.EXECUTOR_ROLE_TOKEN = ref(Control, roleToken);
     return values;
   };
 
