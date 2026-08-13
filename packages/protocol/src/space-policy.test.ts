@@ -18,6 +18,27 @@ describe("parseSpacePolicy", () => {
     });
   });
 
+  it("canonicalizes a root path prefix by omitting it", () => {
+    for (const pathPrefix of ["/", "//", "///"]) {
+      expect(
+        parseSpacePolicy({
+          ...validPublicPolicy,
+          allowedSourceOrigins: [{ origin: "https://sources.example.com", pathPrefix }],
+        }).allowedSourceOrigins,
+      ).toEqual([{ origin: "https://sources.example.com" }]);
+    }
+  });
+
+  it("is idempotent: its own output is valid input and parses identically", () => {
+    for (const pathPrefix of ["/", "//", "/media/", "/media//"]) {
+      const once = parseSpacePolicy({
+        ...validPublicPolicy,
+        allowedSourceOrigins: [{ origin: "https://sources.example.com", pathPrefix }],
+      });
+      expect(parseSpacePolicy(once)).toEqual(once);
+    }
+  });
+
   it("accepts a private Space without Source Resolvers", () => {
     expect(
       parseSpacePolicy({
@@ -53,6 +74,13 @@ describe("parseSpacePolicy", () => {
       },
     ],
     ["private resolver", { ...validPublicPolicy, routeClass: "private" }],
+    [
+      "path prefix with a comma",
+      {
+        ...validPublicPolicy,
+        allowedSourceOrigins: [{ origin: "https://sources.example.com", pathPrefix: "/a,b" }],
+      },
+    ],
     ["quality outside range", { ...validPublicPolicy, qualities: [0, 75] }],
     ["missing default quality", { ...validPublicPolicy, defaultQuality: 80 }],
   ])("rejects %s", (_name, input) => {

@@ -16,6 +16,19 @@ export class SpacePolicyValidationError extends Error {
   }
 }
 
+/**
+ * The one canonical Source Origin path-prefix normalization. The parser, the
+ * Postgres storage layer, and locator enforcement must all agree on this form
+ * or the Source Locator allowlist breaks: "/" is the canonical root prefix,
+ * every other prefix keeps its leading "/" and loses trailing "/" runs.
+ */
+export function normalizeSourceOriginPathPrefix(pathPrefix: string | undefined): string {
+  if (pathPrefix === undefined) return "/";
+  const rooted = pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
+  const trimmed = rooted.replace(/\/+$/u, "");
+  return trimmed === "" ? "/" : trimmed;
+}
+
 function record(value: unknown, name: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new SpacePolicyValidationError(`${name} must be an object`);
@@ -75,11 +88,13 @@ function sourceOrigin(value: unknown, index: number): SourceOriginRule {
     typeof input.pathPrefix !== "string" ||
     !input.pathPrefix.startsWith("/") ||
     input.pathPrefix.includes("?") ||
-    input.pathPrefix.includes("#")
+    input.pathPrefix.includes("#") ||
+    input.pathPrefix.includes(",")
   ) {
     throw new SpacePolicyValidationError(`${name}.pathPrefix must be an absolute URL path`);
   }
-  const pathPrefix = input.pathPrefix === "/" ? "/" : input.pathPrefix.replace(/\/+$/u, "");
+  const pathPrefix = normalizeSourceOriginPathPrefix(input.pathPrefix);
+  if (pathPrefix === "/") return Object.freeze({ origin: url.origin });
   return Object.freeze({ origin: url.origin, pathPrefix });
 }
 
