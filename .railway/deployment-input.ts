@@ -162,6 +162,31 @@ function secretsSeeded(environment: Environment): boolean {
   throw new Error("Deployment input SHUTTER_SECRETS_SEEDED must be true or false");
 }
 
+export interface EdgeDeploymentInput {
+  edgeWorkerName: string;
+  r2Bucket: string;
+  cloudflareAccountId?: string;
+  edgeDomain?: string;
+}
+
+// The subset a Worker version upload actually bakes into the version: the
+// Worker name and the R2 binding's bucket. Account ID and routes are optional
+// because Workers Builds injects CLOUDFLARE_ACCOUNT_ID and a version upload
+// never applies routes.
+export function parseEdgeDeploymentInput(environment: Environment): EdgeDeploymentInput {
+  const input: EdgeDeploymentInput = {
+    edgeWorkerName: identifier(environment, "SHUTTER_EDGE_WORKER_NAME"),
+    r2Bucket: r2Bucket(environment),
+  };
+  if (environment.SHUTTER_R2_ENDPOINT) {
+    input.cloudflareAccountId = r2Endpoint(environment).accountId;
+  }
+  if (environment.SHUTTER_EDGE_DOMAIN) {
+    input.edgeDomain = hostname(environment, "SHUTTER_EDGE_DOMAIN");
+  }
+  return Object.freeze(input);
+}
+
 export function parseDeploymentInput(environment: Environment): DeploymentInput {
   const jobsVolumeName = volumeName(environment);
   const r2Region = required(environment, "SHUTTER_R2_REGION");

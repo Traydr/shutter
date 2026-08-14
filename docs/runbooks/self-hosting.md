@@ -92,10 +92,11 @@ R2 bucket name.
 
 Cloudflare Workers Builds runs `pnpm --filter @shutter/edge deploy:preview`,
 which performs the same regeneration first. CI has no checkout of the ignored
-input file, so set the public inputs from `.railway/deployment.env` as build
-environment variables on the Workers Builds settings page. They contain no
-secrets. Without them the deploy fails with "Missing .railway/deployment.env
-and no SHUTTER_* variables are set".
+input file and needs only the two values a version upload bakes into the
+version: set `SHUTTER_EDGE_WORKER_NAME` and `SHUTTER_R2_BUCKET` as build
+environment variables on the Workers Builds settings page. Neither is a
+secret. Workers Builds injects the account and credentials itself, and a
+version upload never applies routes, so no other input is required.
 
 ## Registry and route acceptance
 

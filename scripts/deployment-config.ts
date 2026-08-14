@@ -7,6 +7,7 @@ import {
   parseCloudflareBootstrapState,
   parseDeploymentEnvFile,
   parseDeploymentInput,
+  parseEdgeDeploymentInput,
   parseRailwayTarget,
   publicInputKeys,
 } from "../.railway/deployment-input.ts";
@@ -57,7 +58,8 @@ function deploymentEnvironmentFromProcess(): Environment {
   if (Object.keys(environment).length === 0) {
     throw new Error(
       "Missing .railway/deployment.env and no SHUTTER_* variables are set. " +
-        "Run scripts/bootstrap-deployment.sh, or export the public inputs in CI.",
+        "Run scripts/bootstrap-deployment.sh, or set SHUTTER_EDGE_WORKER_NAME " +
+        "and SHUTTER_R2_BUCKET in CI.",
     );
   }
   return environment;
@@ -67,14 +69,19 @@ export function createEdgeDeploymentConfig(
   base: WranglerConfig,
   environment: Environment,
 ): WranglerConfig {
-  const input = parseDeploymentInput(environment);
-  return {
+  const input = parseEdgeDeploymentInput(environment);
+  const config: WranglerConfig = {
     ...base,
-    account_id: input.cloudflareAccountId,
     name: input.edgeWorkerName,
-    routes: [{ pattern: input.edgeDomain, custom_domain: true }],
     r2_buckets: [{ binding: "MEDIA_STORE", bucket_name: input.r2Bucket }],
   };
+  delete config.account_id;
+  delete config.routes;
+  if (input.cloudflareAccountId !== undefined) config.account_id = input.cloudflareAccountId;
+  if (input.edgeDomain !== undefined) {
+    config.routes = [{ pattern: input.edgeDomain, custom_domain: true }];
+  }
+  return config;
 }
 
 async function currentRailwayTarget(environment: Environment): Promise<CurrentEnvironment> {

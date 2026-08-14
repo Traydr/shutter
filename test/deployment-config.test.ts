@@ -158,6 +158,19 @@ describe("deployment configuration", () => {
     );
   });
 
+  it("renders a preview-uploadable config from the two CI inputs alone", async () => {
+    const base = JSON.parse(await readFile("apps/edge/wrangler.jsonc", "utf8"));
+    const deployed = createEdgeDeploymentConfig(base, {
+      SHUTTER_EDGE_WORKER_NAME: "example-shutter-edge",
+      SHUTTER_R2_BUCKET: "example-media",
+    });
+
+    expect(deployed.name).toBe("example-shutter-edge");
+    expect(deployed.r2_buckets).toEqual([{ binding: "MEDIA_STORE", bucket_name: "example-media" }]);
+    expect(deployed.account_id).toBeUndefined();
+    expect(deployed.routes).toBeUndefined();
+  });
+
   it("renders owner-specific Worker values only into the ignored deployment config", async () => {
     const base = JSON.parse(await readFile("apps/edge/wrangler.jsonc", "utf8"));
     const deployed = createEdgeDeploymentConfig(base, { ...commonEnvironment });
