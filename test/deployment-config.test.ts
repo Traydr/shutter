@@ -18,7 +18,7 @@ const commonEnvironment = {
   SHUTTER_CONTROL_DOMAIN: "control.example.com",
   SHUTTER_EDGE_WORKER_NAME: "example-shutter-edge",
   SHUTTER_EDGE_DOMAIN: "media.example.com",
-  SHUTTER_R2_BUCKET: "example-renditions",
+  SHUTTER_R2_BUCKET: "example-media",
   SHUTTER_R2_ENDPOINT: "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.r2.cloudflarestorage.com",
   SHUTTER_R2_REGION: "auto",
   SHUTTER_CLOUDFLARE_ZONE_ID: "example-zone-id",
@@ -64,7 +64,7 @@ describe("deployment configuration", () => {
     expect(control.variables.S3_ACCESS_KEY_ID).toBeUndefined();
     expect(control.variables.S3_BUCKET).toMatchObject({
       type: "literal",
-      value: "example-renditions",
+      value: "example-media",
     });
     expect(imgproxy.variables.IMGPROXY_ALLOWED_SOURCES).toMatchObject({
       type: "literal",
@@ -101,7 +101,7 @@ describe("deployment configuration", () => {
     // even after bootstrap, or Source purge targets a dead host.
     expect(control.variables.S3_BUCKET).toMatchObject({
       type: "literal",
-      value: "example-renditions",
+      value: "example-media",
     });
     expect(control.variables.EDGE_BASE_URL).toMatchObject({
       type: "literal",
@@ -158,6 +158,19 @@ describe("deployment configuration", () => {
     );
   });
 
+  it("renders a preview-uploadable config from the two CI inputs alone", async () => {
+    const base = JSON.parse(await readFile("apps/edge/wrangler.jsonc", "utf8"));
+    const deployed = createEdgeDeploymentConfig(base, {
+      SHUTTER_EDGE_WORKER_NAME: "example-shutter-edge",
+      SHUTTER_R2_BUCKET: "example-media",
+    });
+
+    expect(deployed.name).toBe("example-shutter-edge");
+    expect(deployed.r2_buckets).toEqual([{ binding: "MEDIA_STORE", bucket_name: "example-media" }]);
+    expect(deployed.account_id).toBeUndefined();
+    expect(deployed.routes).toBeUndefined();
+  });
+
   it("renders owner-specific Worker values only into the ignored deployment config", async () => {
     const base = JSON.parse(await readFile("apps/edge/wrangler.jsonc", "utf8"));
     const deployed = createEdgeDeploymentConfig(base, { ...commonEnvironment });
@@ -167,9 +180,7 @@ describe("deployment configuration", () => {
     expect(deployed.name).toBe("example-shutter-edge");
     expect(deployed.account_id).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     expect(deployed.routes).toEqual([{ pattern: "media.example.com", custom_domain: true }]);
-    expect(deployed.r2_buckets).toEqual([
-      { binding: "RENDITION_STORE", bucket_name: "example-renditions" },
-    ]);
+    expect(deployed.r2_buckets).toEqual([{ binding: "MEDIA_STORE", bucket_name: "example-media" }]);
     expect(deployed.compatibility_flags).toBeUndefined();
   });
 
@@ -217,14 +228,14 @@ describe("deployment configuration", () => {
       parseCloudflareBootstrapState({
         ...commonEnvironment,
         SHUTTER_R2_READY_ACCOUNT_ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        SHUTTER_R2_READY_BUCKET: "example-renditions",
+        SHUTTER_R2_READY_BUCKET: "example-media",
       }),
     ).toEqual({ phase: "ready" });
     expect(
       parseCloudflareBootstrapState({
         ...commonEnvironment,
         SHUTTER_R2_READY_ACCOUNT_ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        SHUTTER_R2_READY_BUCKET: "old-renditions",
+        SHUTTER_R2_READY_BUCKET: "old-media",
       }),
     ).toEqual({ phase: "changed" });
     expect(() =>
@@ -239,7 +250,7 @@ describe("deployment configuration", () => {
     const lifecycle = JSON.parse(await readFile("infra/cloudflare/r2-lifecycle.json", "utf8"));
     expect(lifecycle.rules).toEqual([
       {
-        id: "expire-disposable-renditions-after-30-days",
+        id: "expire-delivery-cache-after-30-days",
         enabled: true,
         conditions: { prefix: "cache/" },
         deleteObjectsTransition: { condition: { type: "Age", maxAge: 2_592_000 } },

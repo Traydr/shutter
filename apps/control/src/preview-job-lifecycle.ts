@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import type {
   JobFailureCode,
   JobStatus,
-  RenditionJobRepresentation,
-  RenditionKind,
+  PreviewJobRepresentation,
+  PreviewKind,
 } from "@shutter/protocol";
 import { createFailedJobRepresentation } from "@shutter/protocol";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
@@ -17,7 +17,7 @@ export const JOB_RETRY_WINDOW_SECONDS = 23 * 60 * 60;
 export interface JobIdentity {
   spaceId: string;
   sourceId: string;
-  kind: RenditionKind;
+  kind: PreviewKind;
 }
 
 export interface SourceIdentity {
@@ -63,16 +63,16 @@ interface JobRecord extends JobIdentity {
   failureCode?: JobFailureCode | undefined;
 }
 
-export interface RenditionJobView extends JobIdentity {
+export interface PreviewJobView extends JobIdentity {
   status: JobStatus;
   executionCycle: number;
   attemptNumber: number;
-  representation: RenditionJobRepresentation;
+  representation: PreviewJobRepresentation;
 }
 
 export interface SubmissionResult {
   disposition: "created" | "existing" | "reactivated";
-  job: RenditionJobView;
+  job: PreviewJobView;
 }
 
 export type AttemptMutationResult = { outcome: "accepted" } | { outcome: "stale_attempt" };
@@ -85,13 +85,13 @@ export type FailureResult =
 export interface MaintenanceResult {
   expiredPendingJobs: number;
   recoveredLeases: number;
-  runnableKinds: readonly RenditionKind[];
+  runnableKinds: readonly PreviewKind[];
 }
 
-export interface RenditionJobLifecycle {
+export interface PreviewJobLifecycle {
   submit(input: SubmitJobInput, now: Date): Promise<SubmissionResult>;
-  read(identity: JobIdentity): Promise<RenditionJobView | undefined>;
-  claim(kind: RenditionKind, now: Date): Promise<ClaimedJob | undefined>;
+  read(identity: JobIdentity): Promise<PreviewJobView | undefined>;
+  claim(kind: PreviewKind, now: Date): Promise<ClaimedJob | undefined>;
   heartbeat(
     identity: JobIdentity,
     processingToken: string,
@@ -116,7 +116,7 @@ export interface RenditionJobLifecycle {
   ): Promise<{ invalidatedJobs: number; value: T }>;
 }
 
-function jobRepresentation(record: JobRecord): RenditionJobRepresentation {
+function jobRepresentation(record: JobRecord): PreviewJobRepresentation {
   if (record.status === "pending" || record.status === "processing") {
     return { status: record.status };
   }
@@ -142,7 +142,7 @@ function jobRepresentation(record: JobRecord): RenditionJobRepresentation {
   };
 }
 
-function jobView(record: JobRecord): RenditionJobView {
+function jobView(record: JobRecord): PreviewJobView {
   return {
     spaceId: record.spaceId,
     sourceId: record.sourceId,
@@ -157,7 +157,7 @@ function jobView(record: JobRecord): RenditionJobView {
 interface JobRow extends QueryResultRow {
   space_id: string;
   source_id: string;
-  kind: RenditionKind;
+  kind: PreviewKind;
   status: JobStatus;
   source_capability: string | null;
   execution_cycle: number;
@@ -214,7 +214,7 @@ export function postgresSourceLockKey(spaceId: string, sourceId: string): string
   return JSON.stringify([spaceId, sourceId]);
 }
 
-export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
+export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
   readonly #pool: Pool;
 
   constructor(pool: Pool) {
@@ -226,7 +226,7 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
       await lockSource(client, input.spaceId, input.sourceId);
       const deadline = retryDeadline(input, now);
       const inserted = await client.query<JobRow>(
-        `insert into rendition_jobs
+        `insert into preview_jobs
           (space_id, source_id, kind, status, source_capability, retry_deadline_at, next_attempt_at, updated_at)
          values ($1, $2, $3, 'pending', $4, $5, $6, $6)
          on conflict do nothing returning *`,
@@ -237,7 +237,7 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
       }
 
       const existing = await client.query<JobRow>(
-        `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3 for update`,
+        `select * from preview_jobs where space_id = $1 and source_id = $2 and kind = $3 for update`,
         [input.spaceId, input.sourceId, input.kind],
       );
       const current = existing.rows[0];
@@ -249,7 +249,7 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
         return { disposition: "existing", job: jobView(fromRow(current)) };
       }
       const reactivated = await client.query<JobRow>(
-        `update rendition_jobs set
+        `update preview_jobs set
           status = 'pending', source_capability = $4, execution_cycle = execution_cycle + 1,
           attempt_number = 0, retry_deadline_at = $5, next_attempt_at = $6,
           processing_token = null, lease_expires_at = null, heartbeat_at = null,
@@ -264,32 +264,32 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
     });
   }
 
-  async read(identity: JobIdentity): Promise<RenditionJobView | undefined> {
+  async read(identity: JobIdentity): Promise<PreviewJobView | undefined> {
     const result = await this.#pool.query<JobRow>(
-      `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3`,
+      `select * from preview_jobs where space_id = $1 and source_id = $2 and kind = $3`,
       [identity.spaceId, identity.sourceId, identity.kind],
     );
     return result.rows[0] === undefined ? undefined : jobView(fromRow(result.rows[0]));
   }
 
-  async claim(kind: RenditionKind, now: Date): Promise<ClaimedJob | undefined> {
+  async claim(kind: PreviewKind, now: Date): Promise<ClaimedJob | undefined> {
     const token = randomUUID();
     const lease = new Date(now.getTime() + PROCESSING_LEASE_SECONDS * 1_000);
     return transaction(this.#pool, async (client) => {
       await client.query(
-        `update rendition_jobs set status = 'failed', source_capability = null,
+        `update preview_jobs set status = 'failed', source_capability = null,
           failure_code = 'source_expired', next_attempt_at = null, updated_at = $1
          where status = 'pending' and retry_deadline_at <= $1`,
         [now],
       );
       const result = await client.query<JobRow>(
         `with candidate as (
-          select space_id, source_id, kind from rendition_jobs
+          select space_id, source_id, kind from preview_jobs
           where kind = $1 and status = 'pending' and retry_deadline_at > $2
             and (next_attempt_at is null or next_attempt_at <= $2)
           order by created_at for update skip locked limit 1
         )
-        update rendition_jobs jobs set status = 'processing', attempt_number = attempt_number + 1,
+        update preview_jobs jobs set status = 'processing', attempt_number = attempt_number + 1,
           processing_token = $3, lease_expires_at = $4, heartbeat_at = $2,
           next_attempt_at = null, updated_at = $2
         from candidate
@@ -319,7 +319,7 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
   ): Promise<AttemptMutationResult> {
     const lease = new Date(now.getTime() + PROCESSING_LEASE_SECONDS * 1_000);
     const result = await this.#pool.query(
-      `update rendition_jobs set heartbeat_at = $5, lease_expires_at = $6, updated_at = $5
+      `update preview_jobs set heartbeat_at = $5, lease_expires_at = $6, updated_at = $5
        where space_id = $1 and source_id = $2 and kind = $3
          and status = 'processing' and processing_token = $4`,
       [identity.spaceId, identity.sourceId, identity.kind, processingToken, now, lease],
@@ -336,7 +336,7 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
     return transaction(this.#pool, async (client) => {
       await lockSource(client, identity.spaceId, identity.sourceId);
       const result = await client.query(
-        `update rendition_jobs set status = 'ready', source_capability = null,
+        `update preview_jobs set status = 'ready', source_capability = null,
         processing_token = null, lease_expires_at = null, heartbeat_at = null,
         master_key = $5, master_width = $6, master_height = $7, master_format = $8,
         object_etag = $9, failure_code = null, updated_at = $10
@@ -367,7 +367,7 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
   ): Promise<FailureResult> {
     return transaction(this.#pool, async (client) => {
       const selected = await client.query<JobRow>(
-        `select * from rendition_jobs where space_id = $1 and source_id = $2 and kind = $3
+        `select * from preview_jobs where space_id = $1 and source_id = $2 and kind = $3
           and status = 'processing' and processing_token = $4 for update`,
         [identity.spaceId, identity.sourceId, identity.kind, processingToken],
       );
@@ -378,7 +378,7 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
         const nextAttempt = new Date(now.getTime() + delay * 1_000);
         if (nextAttempt < row.retry_deadline_at) {
           await client.query(
-            `update rendition_jobs set status = 'pending', processing_token = null,
+            `update preview_jobs set status = 'pending', processing_token = null,
               lease_expires_at = null, heartbeat_at = null, next_attempt_at = $5, updated_at = $6
              where space_id = $1 and source_id = $2 and kind = $3 and processing_token = $4`,
             [identity.spaceId, identity.sourceId, identity.kind, processingToken, nextAttempt, now],
@@ -390,7 +390,7 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
         ? "attempts_exhausted"
         : (failure.code ?? "internal_invariant");
       await client.query(
-        `update rendition_jobs set status = 'failed', source_capability = null,
+        `update preview_jobs set status = 'failed', source_capability = null,
           processing_token = null, lease_expires_at = null, heartbeat_at = null,
           next_attempt_at = null, failure_code = $5, updated_at = $6
          where space_id = $1 and source_id = $2 and kind = $3 and processing_token = $4`,
@@ -403,13 +403,13 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
   async maintain(now: Date, limit: number): Promise<MaintenanceResult> {
     return transaction(this.#pool, async (client) => {
       const expired = await client.query(
-        `update rendition_jobs set status = 'failed', source_capability = null,
+        `update preview_jobs set status = 'failed', source_capability = null,
           next_attempt_at = null, failure_code = 'source_expired', updated_at = $1
          where status = 'pending' and retry_deadline_at <= $1`,
         [now],
       );
       const recovered = await client.query(
-        `update rendition_jobs set status = case when attempt_number >= $2 then 'failed' else 'pending' end,
+        `update preview_jobs set status = case when attempt_number >= $2 then 'failed' else 'pending' end,
           source_capability = case when attempt_number >= $2 then null else source_capability end,
           processing_token = null, lease_expires_at = null, heartbeat_at = null,
           next_attempt_at = case when attempt_number >= $2 then null else $1 end,
@@ -419,7 +419,7 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
         [now, MAX_ATTEMPTS],
       );
       const runnable = await client.query<Pick<JobRow, "kind">>(
-        `select kind from rendition_jobs
+        `select kind from preview_jobs
          where status = 'pending' and retry_deadline_at > $1
            and (next_attempt_at is null or next_attempt_at <= $1)
          order by retry_deadline_at, created_at
@@ -448,7 +448,7 @@ export class PostgresRenditionJobLifecycle implements RenditionJobLifecycle {
       let invalidatedJobs: number;
       try {
         const deleted = await client.query(
-          `delete from rendition_jobs where space_id = $1 and source_id = $2`,
+          `delete from preview_jobs where space_id = $1 and source_id = $2`,
           [source.spaceId, source.sourceId],
         );
         invalidatedJobs = deleted.rowCount ?? 0;

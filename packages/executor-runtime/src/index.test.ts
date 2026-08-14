@@ -48,7 +48,7 @@ function setup(options?: {
   const config: ExecutorConfig = {
     controlBaseUrl: "https://control.test",
     roleToken: "r".repeat(32),
-    bucket: "renditions",
+    bucket: "media",
     s3: { send } as unknown as S3Client,
     fetch,
   };

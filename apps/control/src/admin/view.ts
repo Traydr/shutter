@@ -174,7 +174,7 @@ export function overviewView(model: AdminOverview): string {
         <button type="submit">Create Space</button>
       </form>
       <h2>imgproxy deployment allowlist</h2>
-      <div class="card"><p>Copy this Space-derived value into <code>IMGPROXY_ALLOWED_SOURCES</code>. Keep any additional Rendition Store source that your deployment needs.</p><div class="secret">${htmlEscape(model.coverage.derivedValue || "No active Space origins")}</div>
+      <div class="card"><p>Copy this Space-derived value into <code>IMGPROXY_ALLOWED_SOURCES</code>. Keep any additional Media Store source that your deployment needs.</p><div class="secret">${htmlEscape(model.coverage.derivedValue || "No active Space origins")}</div>
       ${uncovered === "" ? '<p class="notice">The configured deployment allowlist covers every active Space origin.</p>' : `<div class="notice warning"><strong>Deployment update required.</strong><p>These active Space sources are not covered:</p><ul>${uncovered}</ul></div>`}</div>
     </main>`,
   );

@@ -13,8 +13,8 @@
   },
   "r2_buckets": [
     {
-      "binding": "RENDITION_STORE",
-      "bucket_name": "shutter-renditions-local"
+      "binding": "MEDIA_STORE",
+      "bucket_name": "shutter-media-local"
     }
   ],
   "secrets": {

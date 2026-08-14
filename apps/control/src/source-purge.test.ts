@@ -3,7 +3,7 @@ import { buildSourceCacheTag } from "@shutter/protocol";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlLogger } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
-import type { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
+import type { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
 import { createSourcePurge } from "./source-purge.js";
 
 const EDGE_BASE = "https://edge.shutter.test";
@@ -12,7 +12,7 @@ const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
 
 describe("Source Purge", () => {
   let test: PostgresTestLifecycle;
-  let lifecycle: PostgresRenditionJobLifecycle;
+  let lifecycle: PostgresPreviewJobLifecycle;
 
   beforeAll(async () => {
     test = await createPostgresTestLifecycle();
@@ -22,7 +22,7 @@ describe("Source Purge", () => {
   afterAll(async () => test.close());
 
   beforeEach(async () => {
-    await test.pool.query("truncate table rendition_jobs");
+    await test.pool.query("truncate table preview_jobs");
   });
 
   function createPurge(fetch: typeof globalThis.fetch, send: S3Client["send"]) {
@@ -30,7 +30,7 @@ describe("Source Purge", () => {
       logger: NOOP_LOGGER,
       lifecycle,
       s3: { send } as unknown as S3Client,
-      bucket: "shutter-renditions",
+      bucket: "shutter-media",
       cloudflareZoneId: "zone-id",
       cloudflareApiToken: "token",
       edgeBaseUrl: EDGE_BASE,
@@ -39,7 +39,7 @@ describe("Source Purge", () => {
     });
   }
 
-  it("deletes Renditions and purges the shared Source Delivery cache tag", async () => {
+  it("deletes stored media and purges the shared Source Delivery cache tag", async () => {
     const identity = { spaceId: "example-private", sourceId: "source/one", kind: "video" as const };
     await lifecycle.submit(
       {
@@ -111,7 +111,7 @@ describe("Source Purge", () => {
     );
     await expect(
       deleteFails.purge({ spaceId: "example-private", sourceId: "source" }),
-    ).rejects.toThrow("rendition deletion failed");
+    ).rejects.toThrow("media store deletion failed");
 
     const workerFetch = vi.fn(async () => new Response(null, { status: 503 }));
     const workerFails = createPurge(

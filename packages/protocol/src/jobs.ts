@@ -8,7 +8,7 @@ import type {
   FailedJobRepresentation,
   JobFailureCode,
   PreviewJobSubmission,
-  RenditionKind,
+  PreviewKind,
   SourceOriginRule,
 } from "./types.js";
 import { FAILURE_ACTIONS } from "./types.js";
@@ -59,7 +59,7 @@ function requireString(
   return value;
 }
 
-function requireKind(value: unknown): RenditionKind {
+function requireKind(value: unknown): PreviewKind {
   if (value !== "video" && value !== "pdf") {
     throw new ProtocolError("request_invalid", "kind must be video or pdf");
   }

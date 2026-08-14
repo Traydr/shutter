@@ -70,7 +70,7 @@ const EVENT_FIELD_PROJECTIONS = {
   mediaClass: "shutter.media.class",
   byteRangeOutcome: "shutter.byte_range.outcome",
   originFetchResult: "shutter.origin_fetch.result",
-  kind: "shutter.rendition.kind",
+  kind: "shutter.preview.kind",
   executionCycle: "shutter.execution.cycle",
   attemptNumber: "shutter.attempt.number",
   durationMs: "shutter.duration_ms",

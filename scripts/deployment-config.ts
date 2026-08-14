@@ -7,7 +7,9 @@ import {
   parseCloudflareBootstrapState,
   parseDeploymentEnvFile,
   parseDeploymentInput,
+  parseEdgeDeploymentInput,
   parseRailwayTarget,
+  publicInputKeys,
 } from "../.railway/deployment-input.ts";
 
 const execFile = promisify(execFileCallback);
@@ -36,15 +38,30 @@ interface CurrentEnvironment {
 
 export async function loadDeploymentEnvironment(): Promise<Environment> {
   const source = await readFile(inputPath, "utf8").catch((error) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(
-        "Missing .railway/deployment.env. Run scripts/bootstrap-deployment.sh first.",
-      );
-    }
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   });
-  const environment = parseDeploymentEnvFile(source);
+  const environment =
+    source === undefined ? deploymentEnvironmentFromProcess() : parseDeploymentEnvFile(source);
   parseCloudflareBootstrapState(environment);
+  return environment;
+}
+
+// CI (Cloudflare Workers Builds) has no checkout of the git-ignored input
+// file; it supplies the same public inputs as build environment variables.
+function deploymentEnvironmentFromProcess(): Environment {
+  const environment: Environment = {};
+  for (const key of publicInputKeys) {
+    const value = process.env[key];
+    if (value !== undefined && value !== "") environment[key] = value;
+  }
+  if (Object.keys(environment).length === 0) {
+    throw new Error(
+      "Missing .railway/deployment.env and no SHUTTER_* variables are set. " +
+        "Run scripts/bootstrap-deployment.sh, or set SHUTTER_EDGE_WORKER_NAME " +
+        "and SHUTTER_R2_BUCKET in CI.",
+    );
+  }
   return environment;
 }
 
@@ -52,14 +69,19 @@ export function createEdgeDeploymentConfig(
   base: WranglerConfig,
   environment: Environment,
 ): WranglerConfig {
-  const input = parseDeploymentInput(environment);
-  return {
+  const input = parseEdgeDeploymentInput(environment);
+  const config: WranglerConfig = {
     ...base,
-    account_id: input.cloudflareAccountId,
     name: input.edgeWorkerName,
-    routes: [{ pattern: input.edgeDomain, custom_domain: true }],
-    r2_buckets: [{ binding: "RENDITION_STORE", bucket_name: input.r2Bucket }],
+    r2_buckets: [{ binding: "MEDIA_STORE", bucket_name: input.r2Bucket }],
   };
+  delete config.account_id;
+  delete config.routes;
+  if (input.cloudflareAccountId !== undefined) config.account_id = input.cloudflareAccountId;
+  if (input.edgeDomain !== undefined) {
+    config.routes = [{ pattern: input.edgeDomain, custom_domain: true }];
+  }
+  return config;
 }
 
 async function currentRailwayTarget(environment: Environment): Promise<CurrentEnvironment> {

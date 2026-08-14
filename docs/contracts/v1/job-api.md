@@ -1,4 +1,4 @@
-# V1 Rendition Job API
+# V1 Preview Job API
 
 ## Canonical resource
 

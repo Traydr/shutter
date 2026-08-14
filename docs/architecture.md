@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Shutter centralizes rendition concerns that would otherwise be duplicated across
+Shutter centralizes media processing concerns that would otherwise be duplicated across
 applications: on-demand image optimization, durable video and PDF thumbnail
 jobs, controlled delivery, and specialised execution. Consuming applications
 retain their uploads, media catalog, users, business records, storage
@@ -15,11 +15,11 @@ flowchart LR
   app["Consuming application"] --> control["Shutter Control"]
   control --> registry[("Space Registry")]
   app --> source["Application-owned S3 storage"]
-  app -->|"Rendition Job"| control
-  control --> jobs[("Rendition Jobs")]
+  app -->|"Preview Job"| control
+  control --> jobs[("Preview Jobs")]
   jobs --> video["Shutter Video"]
   jobs --> pdf["Shutter PDF"]
-  video --> derived["Shutter Rendition Store on R2"]
+  video --> derived["Shutter Media Store on R2"]
   pdf --> derived
   browser["Browser"] --> worker["Cloudflare Worker"]
   control -->|"Atomic Space snapshot"| worker
@@ -35,11 +35,11 @@ flowchart LR
 
 ## Deployment boundary
 
-Cloudflare is Shutter's delivery edge and durable Rendition storage provider. A
+Cloudflare is Shutter's delivery edge and durable media storage provider. A
 Cloudflare Worker decrypts and validates private Source Capabilities before
-every data-center-local edge-cache lookup and can read stored Renditions through
+every data-center-local edge-cache lookup and can read stored media through
 an R2 binding; ordinary Cloudflare CDN caching serves canonical public
-Renditions. Railway hosts Shutter Control, imgproxy, the isolated Executors, and
+optimized images. Railway hosts Shutter Control, imgproxy, the isolated Executors, and
 the job database. Executors write Master Previews to R2 through its
 S3-compatible API.
 
@@ -75,7 +75,7 @@ authorization to remain under quota.
 ## Implementation stack
 
 Shutter is a TypeScript pnpm workspace. Shutter Control and both Executors run
-on Node with Hono; Drizzle manages the Postgres job schema; R2 is the Rendition
+on Node with Hono; Drizzle manages the Postgres job schema; R2 is the Media
 Store; imgproxy remains a separate upstream container image.
 
 The Cloudflare edge app is a web-native Hono Worker. It uses `wrangler.jsonc` for
@@ -90,10 +90,10 @@ Worker does not enable `nodejs_compat` unless a measured future dependency makes
 it unavoidable.
 
 The Worker owns no database state and uses no D1, KV, or Durable Objects in v1.
-Its only durable binding is the R2 Rendition Store. Jobs and operational metadata
+Its only durable binding is the R2 Media Store. Jobs and operational metadata
 remain in Postgres on Railway.
 
-Postgres contains the Space Registry and the `rendition_jobs` ledger. A registry
+Postgres contains the Space Registry and the `preview_jobs` ledger. A registry
 generation makes policy and credential changes visible as one snapshot. The job ledger's composite
 identity is `(space_id, source_id, kind)`. The row holds only current operational
 state: the opaque Source Capability while work is active, execution-cycle and
@@ -121,10 +121,10 @@ closed. A published SDK can be reconsidered if the consumer count grows.
 | Source bucket/prefix provisioning and retention | Consuming application |
 | Direct-upload authorization and grant | Consuming application |
 | Source Object bytes | Consuming application |
-| Media identity and source-to-rendition relationships | Consuming application |
-| Space policy configuration, Rendition Jobs, attempts, retries | Shutter |
+| Media identity and source-to-output relationships | Consuming application |
+| Space policy configuration, Preview Jobs, attempts, retries | Shutter |
 | Image Optimization | imgproxy, configured by Shutter |
-| Generated and cached Rendition bytes | Shutter Rendition Store |
+| Generated and cached media bytes | Shutter Media Store |
 | Video and PDF materialization | Their Shutter Executors |
 
 ## Space authentication
@@ -192,14 +192,14 @@ parser rules remain protocol invariants in code and contracts.
 
 Source Objects remain in application-owned storage. Shutter does not accept or
 coordinate uploads, store source Bucket credentials, or copy originals into its
-Rendition Store. Source Delivery can stream an allowlisted Source Object through
+Media Store. Source Delivery can stream an allowlisted Source Object through
 the Worker and keep a complete object in the ephemeral Cloudflare cache. A
-Rendition Job may retain the source reference and output metadata needed for
+Preview Job may retain the source reference and output metadata needed for
 execution, but those operational records do not form a media catalog.
 
 Every source request separates an immutable application-issued Source ID from a
 replaceable Source Locator. The Source ID drives cache keys, job idempotency,
-Rendition Store keys, and Source Purge. A Source Locator supplies only the
+Media Store keys, and Source Purge. A Source Locator supplies only the
 current fetch path. A private Space can therefore keep the same SHA-256 Source ID while
 moving its locator from a Railway presigned GET URL to an R2 presigned GET URL.
 
@@ -217,13 +217,13 @@ with a valid length of at most 512 MB can use the Cloudflare Cache API. Warm
 range and conditional requests use that complete entry. Cold ranges and larger
 objects stream from the origin and do not enter R2.
 
-Shutter owns a separate Rendition Store containing only generated Rendition
+Shutter owns a separate Media Store containing only generated media
 bytes. Object keys are deterministic from the Shutter Space, Source ID,
-rendition kind, and normalized parameters. Applications retain the
-meaningful relationship between their media records and returned Rendition
+preview kind, and normalized parameters. Applications retain the
+meaningful relationship between their media records and returned media
 references. Private reads pass through the Shutter authorization gateway.
 
-The v1 Rendition Store is Cloudflare R2. The Worker reads it through a native R2
+The v1 Media Store is Cloudflare R2. The Worker reads it through a native R2
 binding after authorization; Railway Executors write Master Previews through
 R2's S3-compatible API. Cache and master prefixes have separate lifecycle
 policies so disposable Image Optimizations can expire without deleting durable
@@ -232,9 +232,9 @@ Master Previews.
 Optimized image bytes under `cache/{space}/` are disposable cache entries with
 an R2 lifecycle rule that deletes them 30 days after creation. V1 does not track
 last access or enforce per-Space storage budgets. Video posters and PDF covers
-under `masters/{space}/` are durable Derivatives retained until the consuming
+under `masters/{space}/` are durable Master Previews retained until the consuming
 application requests a Source Purge. A Source Purge removes every cached image
-variant, stored Derivative, and operational Rendition Job for that Source ID;
+variant, stored Master Preview, and operational Preview Job for that Source ID;
 revoking or allowing a Source Capability to expire removes access but does not
 itself delete bytes.
 
@@ -249,16 +249,16 @@ POST /v1/spaces/{spaceId}/sources/{sourceId}/purge
 Before calling it, the consuming application must make the Source Object
 unavailable, stop issuing capabilities for it, and stop submitting work for it.
 Shutter cannot use purge as instant authorization revocation: a still-valid
-capability can recreate a rendition while its Source Locator remains fetchable.
+capability can recreate an optimized image while its Source Locator remains fetchable.
 
 All Cloudflare cache entries for a source carry a tag derived from a hash of the
-Space ID and Source ID. R2 keys group cached renditions and Master Previews under
+Space ID and Source ID. R2 keys group cached optimized images and Master Previews under
 equivalent per-source prefixes. While serializing Control operations for that
 source, Shutter invalidates its jobs, deletes all matching R2 objects through
 paginated prefix listing, purges the Worker Cache API via Edge
 `POST /internal/v1/cache/purge`, globally purges the Cloudflare zone cache tag,
 and then returns `204 No Content`. The R2 deletion precedes both edge purges so a
-concurrent edge request cannot repopulate a purged cache from a stored rendition.
+concurrent edge request cannot repopulate a purged cache from a stored Master Preview.
 
 The operation returns success only after R2, the Worker Cache API, and the zone
 CDN tag are cleared. A partial failure returns a retryable service error;
@@ -273,8 +273,8 @@ Image Optimization is request-driven:
 1. A public application supplies a trusted resolver path, or a consuming
    application authorizes its user and issues an encrypted, time-limited Source
    Capability binding a Source ID to a Source Locator.
-2. The frontend combines that source reference with permitted rendition
-   parameters in a stateless Rendition URL; it does not call Shutter to mint the
+2. The frontend combines that source reference with permitted optimization
+   parameters in a stateless Delivery URL; it does not call Shutter to mint the
    URL.
 3. Shutter validates the resolver or capability and parameters, then sends a
    signed source request to imgproxy.
@@ -288,7 +288,7 @@ Image Optimization is request-driven:
 
 Cache policy is trusted Space configuration, not a caller-controlled query
 parameter. Private cache objects use a stable key derived from Source ID and
-normalized rendition parameters, so a refreshed Source Capability
+normalized optimization parameters, so a refreshed Source Capability
 can reuse existing bytes without extending the previous capability's access.
 
 Private image Source Capabilities live for 24 hours in v1. Public optimized
@@ -297,7 +297,7 @@ while browsers retain public responses for one day.
 Public sources resolved directly, such as UploadThing, need no capability. When
 a public source still needs a presigned locator, its capability authorizes an
 origin miss only and is excluded from the CDN key; renewing it reuses the same
-30-day cached rendition.
+30-day cached optimized image.
 
 Public responses use `Cache-Control: public, max-age=86400,
 s-maxage=2592000`: Source Purge can invalidate Cloudflare and R2 immediately,
@@ -307,7 +307,7 @@ recall from a user's device.
 Private responses use `Cache-Control: private, no-store`. The Worker therefore
 receives and validates a Source Capability for every network response instead
 of allowing a browser cache to bypass Shutter authorization. Internally, the
-Worker clones an authorized rendition into its canonical Cache API key with a
+Worker clones an authorized optimized image into its canonical Cache API key with a
 24-hour edge TTL; the response sent to the browser retains `no-store`. Private
 optimized objects remain eligible for the same 30-day R2 cache-object lifecycle,
 and every read from either internal layer still sits behind Worker validation.
@@ -386,7 +386,7 @@ smaller source.
 Video posters and PDF covers are durable jobs. Shutter Control persists each job,
 wakes the matching Executor over private networking, and records completion or
 retry state. The Executor writes one canonical high-quality Master Preview to
-the Rendition Store. Unpic and imgproxy then produce normalized responsive image
+the Media Store. Unpic and imgproxy then produce normalized responsive image
 sizes from that master through the ordinary image-delivery pipeline rather than
 scheduling size-specific video or PDF work. Each serverless Executor claims and
 completes at most one job per invocation; it
@@ -398,7 +398,7 @@ re-wakes jobs whose initial dispatch was missed.
 Postgres stores the submitted Source Capability as its original opaque,
 authenticated-encryption blob, never as a plaintext Source Locator. When the
 matching Executor claims a job, Control decrypts and revalidates the capability,
-including Space, Source ID, purpose, rendition kind, expiry, and origin policy.
+including Space, Source ID, purpose, preview kind, expiry, and origin policy.
 The authenticated private claim response contains only the locator needed for
 that attempt, deterministic output key, and processing token. The Executor holds
 the locator in process memory for the attempt and never receives a capability
@@ -422,7 +422,7 @@ the original. If access expires before completion, the job terminates as
 fresh capability.
 
 Job completion is polling-based in v1. Idempotent submission returns an existing
-ready Master Preview or a Rendition Job reference. Applications poll that
+ready Master Preview or a Preview Job reference. Applications poll that
 resource with bounded backoff through `pending`, `processing`, `ready`, or a
 terminal failure. A ready response includes a stable Master Preview descriptor:
 Source ID, kind, actual dimensions, and WebP format. It never contains an

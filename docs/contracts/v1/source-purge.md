@@ -8,7 +8,7 @@ POST /v1/spaces/{spaceId}/sources/{sourceId}/purge
 
 The Space API credential authenticates the request and must match `spaceId`.
 The application must first make the Source Object unavailable, stop issuing new
-Source Capabilities, and stop submitting Rendition Jobs for the Source ID.
+Source Capabilities, and stop submitting Preview Jobs for the Source ID.
 
 Source Purge is cleanup, not capability revocation. It provides no guarantee
 that a capability can no longer fetch a Source Object that remains available.
@@ -17,10 +17,10 @@ that a capability can no longer fetch a Source Object that remains available.
 
 Shutter serializes job submission, completion, and purge for the source, then:
 
-1. Invalidates and removes its Rendition Jobs.
+1. Invalidates and removes its Preview Jobs.
 2. Deletes every object beneath its per-source R2 cache and master prefixes.
 3. Purges the hashed source cache tag from the Edge Worker Cache API, including
-   cached Source Delivery bytes and Renditions.
+   cached Source Delivery bytes and optimized images.
 4. Globally purges the same hashed Cloudflare zone cache tag.
 
 `204 No Content` means all four steps completed. Missing jobs or objects still

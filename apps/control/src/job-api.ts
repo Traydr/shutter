@@ -6,13 +6,13 @@ import {
   type ExecutorFailRequest,
   type ExecutorHeartbeatRequest,
   operationalEvent,
+  type PreviewJobRepresentation,
+  type PreviewKind,
   ProtocolError,
   parseExecutorCompleteRequest,
   parseExecutorFailRequest,
   parseExecutorHeartbeatRequest,
   parsePreviewJobSubmission,
-  type RenditionJobRepresentation,
-  type RenditionKind,
   verifySourceCapability,
 } from "@shutter/protocol";
 import { Hono } from "hono";
@@ -20,18 +20,18 @@ import { type ControlLogger, operationalErrorType } from "./logging.js";
 import type {
   JobIdentity,
   MasterCompletion,
-  RenditionJobLifecycle,
-} from "./rendition-job-lifecycle.js";
+  PreviewJobLifecycle,
+} from "./preview-job-lifecycle.js";
 import type { SourcePurge } from "./source-purge.js";
 import type { ActiveSpaceAuthorization, SpaceRegistry } from "./spaces/registry.js";
 
 export interface JobApiRuntime {
   logger: ControlLogger;
-  lifecycle: RenditionJobLifecycle;
+  lifecycle: PreviewJobLifecycle;
   now(): Date;
   spaceRegistry: SpaceRegistry;
-  executorToken(kind: RenditionKind): string | undefined;
-  dispatch(kind: RenditionKind): Promise<void>;
+  executorToken(kind: PreviewKind): string | undefined;
+  dispatch(kind: PreviewKind): Promise<void>;
   sourcePurge?: SourcePurge;
 }
 
@@ -51,7 +51,7 @@ function tokenMatches(actual: string | undefined, expected: readonly string[]): 
   });
 }
 
-function kind(value: string): RenditionKind | undefined {
+function kind(value: string): PreviewKind | undefined {
   return value === "video" || value === "pdf" ? value : undefined;
 }
 
@@ -96,7 +96,7 @@ async function spaceAccess(
   }
 }
 
-function activeResponse(body: RenditionJobRepresentation, location: string): Response {
+function activeResponse(body: PreviewJobRepresentation, location: string): Response {
   const active = body.status === "pending" || body.status === "processing";
   return Response.json(body, {
     status: active ? 202 : 200,

@@ -6,7 +6,7 @@ import {
   operationalEvent,
 } from "@shutter/protocol";
 import type { ControlLogger } from "./logging.js";
-import type { RenditionJobLifecycle, SourceIdentity } from "./rendition-job-lifecycle.js";
+import type { PreviewJobLifecycle, SourceIdentity } from "./preview-job-lifecycle.js";
 
 export interface SourcePurge {
   purge(source: SourceIdentity): Promise<void>;
@@ -14,7 +14,7 @@ export interface SourcePurge {
 
 export interface SourcePurgeConfig {
   logger: ControlLogger;
-  lifecycle: RenditionJobLifecycle;
+  lifecycle: PreviewJobLifecycle;
   s3: S3Client;
   bucket: string;
   cloudflareZoneId: string;
@@ -41,11 +41,11 @@ async function deletePrefix(s3: S3Client, bucket: string, prefix: string): Promi
       const deleted = await s3.send(
         new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: objects, Quiet: true } }),
       );
-      if ((deleted.Errors?.length ?? 0) > 0) throw new Error("rendition deletion failed");
+      if ((deleted.Errors?.length ?? 0) > 0) throw new Error("media store deletion failed");
     }
     continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
     if (page.IsTruncated && continuationToken === undefined)
-      throw new Error("rendition listing pagination failed");
+      throw new Error("media store listing pagination failed");
   } while (continuationToken !== undefined);
 }
 

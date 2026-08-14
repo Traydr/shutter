@@ -1,4 +1,4 @@
-# V1 Rendition URLs
+# V1 Delivery URLs
 
 ## Routes
 
@@ -19,7 +19,7 @@ before capability decryption; the capability is required and validated only
 when Shutter must fetch the application-owned original. The capability is not
 part of public cache identity. This is the deliberate public located-source
 exception to the general rule that a route validates capability purpose before
-cache access: an already-materialized public Rendition remains public after the
+cache access: an already-materialized public optimized image remains public after the
 source-fetch capability expires.
 
 The public master route accepts `kind` values `video` and `pdf` and requires no
@@ -31,7 +31,7 @@ claims. Every route class must match configured Space policy.
 
 `w` and `q` are the only accepted query parameters. Width is required; omitting
 it returns an uncacheable `400 Bad Request`. Quality may be omitted and uses the
-Space default. Values are normalized by the V1 Rendition Policy. Duplicate,
+Space default. Values are normalized by the V1 Optimization Policy. Duplicate,
 malformed, and unknown query parameters also return an uncacheable `400`.
 
 For the public route, valid non-canonical values or an omitted quality receive

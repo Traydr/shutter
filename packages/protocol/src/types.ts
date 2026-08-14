@@ -1,7 +1,7 @@
 import type { SHUTTER_FORMAT } from "./constants.js";
 
 export type RouteClass = "public" | "private";
-export type RenditionKind = "video" | "pdf";
+export type PreviewKind = "video" | "pdf";
 export type CapabilityPurpose =
   | "image_source"
   | "source_delivery"
@@ -28,12 +28,12 @@ export interface SourceDeliveryClaims extends CommonClaims {
 
 export interface MasterPreviewClaims extends CommonClaims {
   purpose: "master_preview";
-  kind: RenditionKind;
+  kind: PreviewKind;
 }
 
 export interface PreviewJobClaims extends CommonClaims {
   purpose: "preview_job";
-  kind: RenditionKind;
+  kind: PreviewKind;
   locator: string;
 }
 
@@ -98,7 +98,7 @@ export type ActiveJobRepresentation = {
 
 export interface MasterPreviewDescriptor {
   sourceId: string;
-  kind: RenditionKind;
+  kind: PreviewKind;
   width: number;
   height: number;
   format: typeof SHUTTER_FORMAT;
@@ -119,7 +119,7 @@ export type FailedJobRepresentation = {
   };
 }[JobFailureCode];
 
-export type RenditionJobRepresentation =
+export type PreviewJobRepresentation =
   | ActiveJobRepresentation
   | ReadyJobRepresentation
   | FailedJobRepresentation;
@@ -131,7 +131,7 @@ export interface PreviewJobSubmission {
 export interface ExecutorClaim {
   spaceId: string;
   sourceId: string;
-  kind: RenditionKind;
+  kind: PreviewKind;
   locator: string;
   outputKey: string;
   processingToken: string;
@@ -159,4 +159,4 @@ export interface ExecutorFailRequest {
   code?: JobFailureCode;
 }
 
-export type RenditionInput = { type: "source" } | { type: "master"; kind: RenditionKind };
+export type OptimizationInput = { type: "source" } | { type: "master"; kind: PreviewKind };

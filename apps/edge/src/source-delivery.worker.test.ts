@@ -147,7 +147,7 @@ describe("Source Delivery", () => {
     expect(head.headers.get("content-length")).toBe("11");
     expect(head.headers.get("x-shutter-cache")).toBe("edge-hit");
     expect(origin).toHaveBeenCalledOnce();
-    expect((await env.RENDITION_STORE.list()).objects).toHaveLength(0);
+    expect((await env.MEDIA_STORE.list()).objects).toHaveLength(0);
   });
 
   it("serves warm video ranges from one complete cache entry", async () => {

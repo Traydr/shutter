@@ -28,7 +28,7 @@ const SPACE_REGISTRY = new MemorySpaceRegistry({
 });
 
 function spikeUrl(): string {
-  const url = new URL("http://shutter.test/internal/v1/spike/rendition");
+  const url = new URL("http://shutter.test/internal/v1/optimize-source");
   url.searchParams.set(
     "key",
     "cache/v1/private/example-private/gMNnP86xbOKzyOCG34XyJJ5czSTAojiMAnH4AQSdh9s/source/w640-q75.webp",
@@ -90,7 +90,7 @@ describe("control app", () => {
     expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${IMGPROXY.secret}`);
   });
 
-  it("rejects incomplete or malformed rendition requests before imgproxy", async () => {
+  it("rejects incomplete or malformed optimization requests before imgproxy", async () => {
     const fetch = vi.fn();
     const control = createControlApp({
       logger: NOOP_LOGGER,
@@ -100,7 +100,7 @@ describe("control app", () => {
       fetch,
     });
     const missingSource = await control.request(
-      "http://shutter.test/internal/v1/spike/rendition?key=cache/v1/private/example-private/fp/source/w640-q75.webp&w=640&q=75",
+      "http://shutter.test/internal/v1/optimize-source?key=cache/v1/private/example-private/fp/source/w640-q75.webp&w=640&q=75",
       { headers: { authorization: `Bearer ${TOKEN}` } },
     );
 
@@ -115,14 +115,14 @@ describe("control app", () => {
       imgproxyConfig: () => IMGPROXY,
       fetch: vi.fn(),
     });
-    const rendition = await control.request(spikeUrl(), {
+    const optimization = await control.request(spikeUrl(), {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     const job = await control.request(
       "http://shutter.test/v1/spaces/example-private/sources/source/previews/video",
     );
 
-    expect(rendition.status).toBe(503);
+    expect(optimization.status).toBe(503);
     expect(job.status).toBe(503);
     expect(job.headers.get("cache-control")).toBe("private, no-store");
   });
@@ -146,7 +146,7 @@ describe("control app", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("authenticates and strictly validates master rendition requests", async () => {
+  it("authenticates and strictly validates optimize-master requests", async () => {
     const presignGet = vi.fn(async () => "https://r2.example.test/signed-master?signature=secret");
     const fetch = vi.fn(async () => new Response("master", { status: 200 }));
     const control = createControlApp({
@@ -157,7 +157,7 @@ describe("control app", () => {
       fetch,
       masterStore: { presignGet },
     });
-    const url = "http://shutter.test/internal/v1/master-rendition";
+    const url = "http://shutter.test/internal/v1/optimize-master";
     const body = JSON.stringify({
       spaceId: "example-private",
       sourceId: "source/one",
@@ -200,7 +200,7 @@ describe("control app", () => {
       fetch: vi.fn(async () => new Response(null, { status: 502 })),
       masterStore: { presignGet: async () => signed },
     });
-    const response = await control.request("http://shutter.test/internal/v1/master-rendition", {
+    const response = await control.request("http://shutter.test/internal/v1/optimize-master", {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
       body: JSON.stringify({
@@ -224,7 +224,7 @@ describe("control app", () => {
       imgproxyConfig: () => IMGPROXY,
       fetch: vi.fn(),
     });
-    const response = await control.request("http://shutter.test/internal/v1/spike/rendition", {
+    const response = await control.request("http://shutter.test/internal/v1/optimize-source", {
       headers: { "x-request-id": "caller-controlled-secret" },
     });
 
@@ -411,18 +411,18 @@ describe("control app", () => {
       ).status,
     ).toBe(204);
 
-    const renditionUrl = new URL("https://shutter.test/internal/v1/spike/rendition");
-    renditionUrl.searchParams.set(
+    const deliveryUrl = new URL("https://shutter.test/internal/v1/optimize-source");
+    deliveryUrl.searchParams.set(
       "key",
       "cache/v1/public/admin-created/fingerprint/source/w640-q75.webp",
     );
-    renditionUrl.searchParams.set("source", "https://sources.example.com/media/image.jpg");
-    renditionUrl.searchParams.set("w", "640");
-    renditionUrl.searchParams.set("q", "75");
-    const rendition = await control.request(renditionUrl, {
+    deliveryUrl.searchParams.set("source", "https://sources.example.com/media/image.jpg");
+    deliveryUrl.searchParams.set("w", "640");
+    deliveryUrl.searchParams.set("q", "75");
+    const optimization = await control.request(deliveryUrl, {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
-    expect(rendition.status).toBe(200);
+    expect(optimization.status).toBe(200);
     expect(fetch).toHaveBeenCalledOnce();
 
     const refreshedDashboard = await control.request("https://shutter.test/admin", {
@@ -446,7 +446,7 @@ describe("control app", () => {
       fetch: vi.fn(),
     });
 
-    const response = await control.request("http://shutter.test/internal/v1/spike/rendition");
+    const response = await control.request("http://shutter.test/internal/v1/optimize-source");
     const body = await response.text();
 
     expect(response.status).toBe(500);

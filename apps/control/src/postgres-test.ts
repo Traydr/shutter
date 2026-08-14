@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import { Pool } from "pg";
 import { env } from "./env/server.js";
-import { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
+import { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
 
 export interface PostgresTestLifecycle {
-  lifecycle: PostgresRenditionJobLifecycle;
+  lifecycle: PostgresPreviewJobLifecycle;
   pool: Pool;
   close(): Promise<void>;
 }
@@ -37,7 +37,7 @@ export async function createPostgresTestLifecycle(): Promise<PostgresTestLifecyc
   }
 
   return {
-    lifecycle: new PostgresRenditionJobLifecycle(pool),
+    lifecycle: new PostgresPreviewJobLifecycle(pool),
     pool,
     close: () => pool.end(),
   };

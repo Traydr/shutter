@@ -3,9 +3,9 @@ import {
   buildR2CacheKey,
   buildSourceCacheTag,
   emitOperationalEvent,
-  normalizeRenditionQuery,
+  normalizeOptimizationQuery,
+  type OptimizationCacheIdentity,
   operationalEvent,
-  type RenditionCacheIdentity,
   type SpacePolicy,
   verifySourceCapability,
 } from "@shutter/protocol";
@@ -22,14 +22,14 @@ declare module "hono" {
   }
 }
 
-async function emitRenditionEvent(
-  identity: RenditionCacheIdentity,
+async function emitDeliveryEvent(
+  identity: OptimizationCacheIdentity,
   cacheOutcome: "edge-hit" | "r2-hit" | "origin",
 ): Promise<void> {
   emitOperationalEvent(
     "info",
     await operationalEvent({
-      event: "edge.rendition",
+      event: "edge.delivery",
       spaceId: identity.spaceId,
       sourceId: identity.sourceId,
       fields: {
@@ -66,7 +66,7 @@ async function fetchOrigin(
   width: number,
   quality: number,
 ): Promise<Response> {
-  const originUrl = new URL("/internal/v1/spike/rendition", bindings.ORIGIN_BASE_URL);
+  const originUrl = new URL("/internal/v1/optimize-source", bindings.ORIGIN_BASE_URL);
   originUrl.searchParams.set("key", key);
   originUrl.searchParams.set("source", sourceUrl);
   originUrl.searchParams.set("w", String(width));
@@ -83,10 +83,10 @@ async function fetchOrigin(
 
 async function fetchMasterOrigin(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: OptimizationCacheIdentity,
 ): Promise<Response> {
   if (identity.input.type !== "master") throw new Error("master input required");
-  const response = await fetch(new URL("/internal/v1/master-rendition", bindings.ORIGIN_BASE_URL), {
+  const response = await fetch(new URL("/internal/v1/optimize-master", bindings.ORIGIN_BASE_URL), {
     method: "POST",
     headers: {
       authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}`,
@@ -107,7 +107,7 @@ async function fetchMasterOrigin(
 
 async function populateCaches(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: OptimizationCacheIdentity,
   cacheTag: string,
   sourceUrl?: string,
 ): Promise<Response> {
@@ -118,7 +118,7 @@ async function populateCaches(
       : await fetchOrigin(bindings, key, sourceUrl, identity.width, identity.quality);
   const bytes = await origin.arrayBuffer();
   const contentType = origin.headers.get("content-type") ?? "application/octet-stream";
-  await bindings.RENDITION_STORE.put(key, bytes, {
+  await bindings.MEDIA_STORE.put(key, bytes, {
     httpMetadata: { contentType },
     customMetadata: { cacheTag },
   });
@@ -127,9 +127,9 @@ async function populateCaches(
 
 type OriginSource = string | (() => Promise<string>) | undefined;
 
-async function deliverRendition(
+async function deliverOptimizedImage(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: OptimizationCacheIdentity,
   originSource?: OriginSource,
 ): Promise<Response> {
   const canonicalUrl = await buildCanonicalCacheUrl(identity);
@@ -137,7 +137,7 @@ async function deliverRendition(
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
   const cached = await caches.default.match(cacheKey);
   if (cached !== undefined) {
-    await emitRenditionEvent(identity, "edge-hit");
+    await emitDeliveryEvent(identity, "edge-hit");
     return edgeBrowserResponse(cached, {
       routeClass: identity.routeClass,
       cacheStatus: "edge-hit",
@@ -146,7 +146,7 @@ async function deliverRendition(
   }
 
   const key = await buildR2CacheKey(identity);
-  const stored = await readR2Response(bindings.RENDITION_STORE, key);
+  const stored = await readR2Response(bindings.MEDIA_STORE, key);
   let response = stored;
   if (response === undefined) {
     const sourceUrl = typeof originSource === "function" ? await originSource() : originSource;
@@ -156,7 +156,7 @@ async function deliverRendition(
 
   const internal = internalEdgeCacheResponse(response, identity.routeClass, cacheTag);
   await caches.default.put(cacheKey, internal.clone());
-  await emitRenditionEvent(identity, outcome);
+  await emitDeliveryEvent(identity, outcome);
   return edgeBrowserResponse(internal, {
     routeClass: identity.routeClass,
     cacheStatus: outcome,
@@ -164,22 +164,22 @@ async function deliverRendition(
   });
 }
 
-async function privateRendition(
+async function privateDelivery(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: OptimizationCacheIdentity,
   sourceUrl?: string,
 ): Promise<Response> {
-  return deliverRendition(bindings, identity, sourceUrl);
+  return deliverOptimizedImage(bindings, identity, sourceUrl);
 }
 
-async function publicLocatedRendition(
+async function publicLocatedDelivery(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: OptimizationCacheIdentity,
   capability: string,
   policy: SpacePolicy,
   keys: ReadonlyMap<string, Uint8Array>,
 ): Promise<Response> {
-  return deliverRendition(bindings, identity, async () => {
+  return deliverOptimizedImage(bindings, identity, async () => {
     const claims = await verifySourceCapability(capability, {
       spaceId: identity.spaceId,
       expectedPurpose: "image_source",
@@ -192,19 +192,19 @@ async function publicLocatedRendition(
   });
 }
 
-async function publicResolverRendition(
+async function publicResolverDelivery(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: OptimizationCacheIdentity,
   sourceUrl: string,
 ): Promise<Response> {
-  return deliverRendition(bindings, identity, sourceUrl);
+  return deliverOptimizedImage(bindings, identity, sourceUrl);
 }
 
-async function publicMasterRendition(
+async function publicMasterDelivery(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: OptimizationCacheIdentity,
 ): Promise<Response> {
-  return deliverRendition(bindings, identity);
+  return deliverOptimizedImage(bindings, identity);
 }
 
 function timingSafeEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
@@ -294,11 +294,11 @@ spaceRoute(
     if (sourceRef === undefined) return notFound();
     const source = resolveUploadThingSource(sourceRef, resolver.allowedProjectIds);
     if (source === undefined) return notFound();
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = normalizeOptimizationQuery(new URL(context.req.url).searchParams, policy);
     if (!query.isCanonical) {
       return canonicalRedirect(context.req.url, query.width, query.quality);
     }
-    return publicResolverRendition(
+    return publicResolverDelivery(
       context.env,
       {
         routeClass: "public",
@@ -317,7 +317,7 @@ spaceRoute(
   app,
   { methods: ["GET"], path: "/v1/private/:spaceId/master/:capability", routeClass: "private" },
   async (context, { spaceId, policy, snapshot }) => {
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = normalizeOptimizationQuery(new URL(context.req.url).searchParams, policy);
     const claims = await verifySourceCapability(context.req.param("capability") ?? "", {
       spaceId,
       expectedPurpose: "master_preview",
@@ -325,7 +325,7 @@ spaceRoute(
       now: Math.floor(Date.now() / 1000),
     });
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
-    return privateRendition(context.env, {
+    return privateDelivery(context.env, {
       routeClass: "private",
       spaceId,
       sourceId: claims.source_id,
@@ -342,11 +342,11 @@ spaceRoute(
   async (context, { spaceId, policy }) => {
     const kind = context.req.param("kind") ?? "";
     if (kind !== "video" && kind !== "pdf") return notFound();
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = normalizeOptimizationQuery(new URL(context.req.url).searchParams, policy);
     if (!query.isCanonical) {
       return canonicalRedirect(context.req.url, query.width, query.quality);
     }
-    return publicMasterRendition(context.env, {
+    return publicMasterDelivery(context.env, {
       routeClass: "public",
       spaceId,
       sourceId: context.req.param("sourceId") ?? "",
@@ -361,7 +361,7 @@ spaceRoute(
   app,
   { methods: ["GET"], path: "/v1/private/:spaceId/source/:capability", routeClass: "private" },
   async (context, { spaceId, policy, snapshot }) => {
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = normalizeOptimizationQuery(new URL(context.req.url).searchParams, policy);
     const claims = await verifySourceCapability(context.req.param("capability") ?? "", {
       spaceId,
       expectedPurpose: "image_source",
@@ -370,7 +370,7 @@ spaceRoute(
       allowedSourceOrigins: policy.allowedSourceOrigins,
     });
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
-    return privateRendition(
+    return privateDelivery(
       context.env,
       {
         routeClass: "private",
@@ -393,9 +393,9 @@ spaceRoute(
     routeClass: "public",
   },
   async (context, { spaceId, policy, snapshot }) => {
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = normalizeOptimizationQuery(new URL(context.req.url).searchParams, policy);
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
-    return publicLocatedRendition(
+    return publicLocatedDelivery(
       context.env,
       {
         routeClass: "public",
