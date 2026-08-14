@@ -1,6 +1,6 @@
 # Copy to .dev.vars for `wrangler dev` / `vite dev`. Wrangler loads this file
 # automatically; it is gitignored. In production these are Worker secrets, and
-# the R2 Rendition Store is a native binding declared in wrangler.jsonc.
+# the R2 Derivative Store is a native binding declared in wrangler.jsonc.
 
 # Dedicated credential for reading the complete configuration snapshot from
 # Control. It must match Control's EDGE_CONFIG_TOKEN.
@@ -9,7 +9,7 @@ EDGE_CONFIG_TOKEN=
 # Shared credential presented to the Railway origin. Must match Control's value.
 ORIGIN_AUTH_TOKEN=
 
-# Shutter Control, which fronts imgproxy and the Rendition Store. Loopback
+# Shutter Control, which fronts imgproxy and the Derivative Store. Loopback
 # origins may use plain http so a local Worker can read config from a local
 # Control process; anything else must be https.
 ORIGIN_BASE_URL=http://localhost:3000

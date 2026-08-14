@@ -6,12 +6,12 @@ describe("master store", () => {
     const store = createMasterStore({
       endpoint: "https://account.r2.cloudflarestorage.com",
       region: "auto",
-      bucket: "shutter-renditions",
+      bucket: "shutter-derivatives",
       accessKeyId: "test-access-key",
       secretAccessKey: "test-secret-key",
     });
     const signed = new URL(await store.presignGet("masters/v1/space/fingerprint/video.webp"));
-    expect(signed.pathname).toBe("/shutter-renditions/masters/v1/space/fingerprint/video.webp");
+    expect(signed.pathname).toBe("/shutter-derivatives/masters/v1/space/fingerprint/video.webp");
     expect(signed.searchParams.get("X-Amz-Expires")).toBe(String(MASTER_READ_EXPIRY_SECONDS));
     expect(signed.searchParams.get("X-Amz-Signature")).toMatch(/^[a-f0-9]{64}$/u);
   });

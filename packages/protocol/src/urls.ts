@@ -1,6 +1,6 @@
-import type { RenditionKind } from "./types.js";
+import type { DerivativeKind } from "./types.js";
 
-interface RenditionParameters {
+interface DerivativeParameters {
   width: number;
   quality: number;
 }
@@ -10,7 +10,7 @@ function segment(value: string): string {
   return encodeURIComponent(value);
 }
 
-function renditionQuery({ width, quality }: RenditionParameters): string {
+function derivativeQuery({ width, quality }: DerivativeParameters): string {
   return `w=${width}&q=${quality}`;
 }
 
@@ -18,18 +18,18 @@ export function buildPublicResolverUrl(
   spaceId: string,
   resolverId: string,
   sourceRef: string,
-  parameters: RenditionParameters,
+  parameters: DerivativeParameters,
 ): string {
-  return `/v1/public/${segment(spaceId)}/resolver/${segment(resolverId)}/${segment(sourceRef)}?${renditionQuery(parameters)}`;
+  return `/v1/public/${segment(spaceId)}/resolver/${segment(resolverId)}/${segment(sourceRef)}?${derivativeQuery(parameters)}`;
 }
 
 export function buildPublicLocatedSourceUrl(
   spaceId: string,
   sourceId: string,
   capability: string,
-  parameters: RenditionParameters,
+  parameters: DerivativeParameters,
 ): string {
-  return `/v1/public/${segment(spaceId)}/located/${segment(sourceId)}/${segment(capability)}?${renditionQuery(parameters)}`;
+  return `/v1/public/${segment(spaceId)}/located/${segment(sourceId)}/${segment(capability)}?${derivativeQuery(parameters)}`;
 }
 
 export function buildPublicResolverDeliveryUrl(
@@ -54,30 +54,34 @@ export function buildPrivateDeliveryUrl(spaceId: string, capability: string): st
 
 export function buildPublicMasterUrl(
   spaceId: string,
-  kind: RenditionKind,
+  kind: DerivativeKind,
   sourceId: string,
-  parameters: RenditionParameters,
+  parameters: DerivativeParameters,
 ): string {
-  return `/v1/public/${segment(spaceId)}/master/${kind}/${segment(sourceId)}?${renditionQuery(parameters)}`;
+  return `/v1/public/${segment(spaceId)}/master/${kind}/${segment(sourceId)}?${derivativeQuery(parameters)}`;
 }
 
 export function buildPrivateSourceUrl(
   spaceId: string,
   capability: string,
-  parameters: RenditionParameters,
+  parameters: DerivativeParameters,
 ): string {
-  return `/v1/private/${segment(spaceId)}/source/${segment(capability)}?${renditionQuery(parameters)}`;
+  return `/v1/private/${segment(spaceId)}/source/${segment(capability)}?${derivativeQuery(parameters)}`;
 }
 
 export function buildPrivateMasterUrl(
   spaceId: string,
   capability: string,
-  parameters: RenditionParameters,
+  parameters: DerivativeParameters,
 ): string {
-  return `/v1/private/${segment(spaceId)}/master/${segment(capability)}?${renditionQuery(parameters)}`;
+  return `/v1/private/${segment(spaceId)}/master/${segment(capability)}?${derivativeQuery(parameters)}`;
 }
 
-export function buildPreviewJobUrl(spaceId: string, sourceId: string, kind: RenditionKind): string {
+export function buildPreviewJobUrl(
+  spaceId: string,
+  sourceId: string,
+  kind: DerivativeKind,
+): string {
   return `/v1/spaces/${segment(spaceId)}/sources/${segment(sourceId)}/previews/${kind}`;
 }
 

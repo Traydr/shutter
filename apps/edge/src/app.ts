@@ -2,10 +2,10 @@ import {
   buildCanonicalCacheUrl,
   buildR2CacheKey,
   buildSourceCacheTag,
+  type DerivativeCacheIdentity,
   emitOperationalEvent,
-  normalizeRenditionQuery,
+  normalizeDerivativeQuery,
   operationalEvent,
-  type RenditionCacheIdentity,
   type SpacePolicy,
   verifySourceCapability,
 } from "@shutter/protocol";
@@ -22,14 +22,14 @@ declare module "hono" {
   }
 }
 
-async function emitRenditionEvent(
-  identity: RenditionCacheIdentity,
+async function emitDerivativeEvent(
+  identity: DerivativeCacheIdentity,
   cacheOutcome: "edge-hit" | "r2-hit" | "origin",
 ): Promise<void> {
   emitOperationalEvent(
     "info",
     await operationalEvent({
-      event: "edge.rendition",
+      event: "edge.derivative",
       spaceId: identity.spaceId,
       sourceId: identity.sourceId,
       fields: {
@@ -66,7 +66,7 @@ async function fetchOrigin(
   width: number,
   quality: number,
 ): Promise<Response> {
-  const originUrl = new URL("/internal/v1/spike/rendition", bindings.ORIGIN_BASE_URL);
+  const originUrl = new URL("/internal/v1/spike/derivative", bindings.ORIGIN_BASE_URL);
   originUrl.searchParams.set("key", key);
   originUrl.searchParams.set("source", sourceUrl);
   originUrl.searchParams.set("w", String(width));
@@ -83,31 +83,34 @@ async function fetchOrigin(
 
 async function fetchMasterOrigin(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: DerivativeCacheIdentity,
 ): Promise<Response> {
   if (identity.input.type !== "master") throw new Error("master input required");
-  const response = await fetch(new URL("/internal/v1/master-rendition", bindings.ORIGIN_BASE_URL), {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}`,
-      "content-type": "application/json",
+  const response = await fetch(
+    new URL("/internal/v1/master-derivative", bindings.ORIGIN_BASE_URL),
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        spaceId: identity.spaceId,
+        sourceId: identity.sourceId,
+        kind: identity.input.kind,
+        w: identity.width,
+        q: identity.quality,
+      }),
+      redirect: "manual",
     },
-    body: JSON.stringify({
-      spaceId: identity.spaceId,
-      sourceId: identity.sourceId,
-      kind: identity.input.kind,
-      w: identity.width,
-      q: identity.quality,
-    }),
-    redirect: "manual",
-  });
+  );
   if (!response.ok) throw new Error(`origin returned ${response.status}`);
   return response;
 }
 
 async function populateCaches(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: DerivativeCacheIdentity,
   cacheTag: string,
   sourceUrl?: string,
 ): Promise<Response> {
@@ -118,7 +121,7 @@ async function populateCaches(
       : await fetchOrigin(bindings, key, sourceUrl, identity.width, identity.quality);
   const bytes = await origin.arrayBuffer();
   const contentType = origin.headers.get("content-type") ?? "application/octet-stream";
-  await bindings.RENDITION_STORE.put(key, bytes, {
+  await bindings.DERIVATIVE_STORE.put(key, bytes, {
     httpMetadata: { contentType },
     customMetadata: { cacheTag },
   });
@@ -127,9 +130,9 @@ async function populateCaches(
 
 type OriginSource = string | (() => Promise<string>) | undefined;
 
-async function deliverRendition(
+async function deliverDerivative(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: DerivativeCacheIdentity,
   originSource?: OriginSource,
 ): Promise<Response> {
   const canonicalUrl = await buildCanonicalCacheUrl(identity);
@@ -137,7 +140,7 @@ async function deliverRendition(
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
   const cached = await caches.default.match(cacheKey);
   if (cached !== undefined) {
-    await emitRenditionEvent(identity, "edge-hit");
+    await emitDerivativeEvent(identity, "edge-hit");
     return edgeBrowserResponse(cached, {
       routeClass: identity.routeClass,
       cacheStatus: "edge-hit",
@@ -146,7 +149,7 @@ async function deliverRendition(
   }
 
   const key = await buildR2CacheKey(identity);
-  const stored = await readR2Response(bindings.RENDITION_STORE, key);
+  const stored = await readR2Response(bindings.DERIVATIVE_STORE, key);
   let response = stored;
   if (response === undefined) {
     const sourceUrl = typeof originSource === "function" ? await originSource() : originSource;
@@ -156,7 +159,7 @@ async function deliverRendition(
 
   const internal = internalEdgeCacheResponse(response, identity.routeClass, cacheTag);
   await caches.default.put(cacheKey, internal.clone());
-  await emitRenditionEvent(identity, outcome);
+  await emitDerivativeEvent(identity, outcome);
   return edgeBrowserResponse(internal, {
     routeClass: identity.routeClass,
     cacheStatus: outcome,
@@ -164,22 +167,22 @@ async function deliverRendition(
   });
 }
 
-async function privateRendition(
+async function privateDerivative(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: DerivativeCacheIdentity,
   sourceUrl?: string,
 ): Promise<Response> {
-  return deliverRendition(bindings, identity, sourceUrl);
+  return deliverDerivative(bindings, identity, sourceUrl);
 }
 
-async function publicLocatedRendition(
+async function publicLocatedDerivative(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: DerivativeCacheIdentity,
   capability: string,
   policy: SpacePolicy,
   keys: ReadonlyMap<string, Uint8Array>,
 ): Promise<Response> {
-  return deliverRendition(bindings, identity, async () => {
+  return deliverDerivative(bindings, identity, async () => {
     const claims = await verifySourceCapability(capability, {
       spaceId: identity.spaceId,
       expectedPurpose: "image_source",
@@ -192,19 +195,19 @@ async function publicLocatedRendition(
   });
 }
 
-async function publicResolverRendition(
+async function publicResolverDerivative(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: DerivativeCacheIdentity,
   sourceUrl: string,
 ): Promise<Response> {
-  return deliverRendition(bindings, identity, sourceUrl);
+  return deliverDerivative(bindings, identity, sourceUrl);
 }
 
-async function publicMasterRendition(
+async function publicMasterDerivative(
   bindings: CloudflareBindings,
-  identity: RenditionCacheIdentity,
+  identity: DerivativeCacheIdentity,
 ): Promise<Response> {
-  return deliverRendition(bindings, identity);
+  return deliverDerivative(bindings, identity);
 }
 
 function timingSafeEqualBytes(left: Uint8Array, right: Uint8Array): boolean {
@@ -294,11 +297,11 @@ spaceRoute(
     if (sourceRef === undefined) return notFound();
     const source = resolveUploadThingSource(sourceRef, resolver.allowedProjectIds);
     if (source === undefined) return notFound();
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = normalizeDerivativeQuery(new URL(context.req.url).searchParams, policy);
     if (!query.isCanonical) {
       return canonicalRedirect(context.req.url, query.width, query.quality);
     }
-    return publicResolverRendition(
+    return publicResolverDerivative(
       context.env,
       {
         routeClass: "public",
@@ -317,7 +320,7 @@ spaceRoute(
   app,
   { methods: ["GET"], path: "/v1/private/:spaceId/master/:capability", routeClass: "private" },
   async (context, { spaceId, policy, snapshot }) => {
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = normalizeDerivativeQuery(new URL(context.req.url).searchParams, policy);
     const claims = await verifySourceCapability(context.req.param("capability") ?? "", {
       spaceId,
       expectedPurpose: "master_preview",
@@ -325,7 +328,7 @@ spaceRoute(
       now: Math.floor(Date.now() / 1000),
     });
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
-    return privateRendition(context.env, {
+    return privateDerivative(context.env, {
       routeClass: "private",
       spaceId,
       sourceId: claims.source_id,
@@ -342,11 +345,11 @@ spaceRoute(
   async (context, { spaceId, policy }) => {
     const kind = context.req.param("kind") ?? "";
     if (kind !== "video" && kind !== "pdf") return notFound();
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = normalizeDerivativeQuery(new URL(context.req.url).searchParams, policy);
     if (!query.isCanonical) {
       return canonicalRedirect(context.req.url, query.width, query.quality);
     }
-    return publicMasterRendition(context.env, {
+    return publicMasterDerivative(context.env, {
       routeClass: "public",
       spaceId,
       sourceId: context.req.param("sourceId") ?? "",
@@ -361,7 +364,7 @@ spaceRoute(
   app,
   { methods: ["GET"], path: "/v1/private/:spaceId/source/:capability", routeClass: "private" },
   async (context, { spaceId, policy, snapshot }) => {
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = normalizeDerivativeQuery(new URL(context.req.url).searchParams, policy);
     const claims = await verifySourceCapability(context.req.param("capability") ?? "", {
       spaceId,
       expectedPurpose: "image_source",
@@ -370,7 +373,7 @@ spaceRoute(
       allowedSourceOrigins: policy.allowedSourceOrigins,
     });
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
-    return privateRendition(
+    return privateDerivative(
       context.env,
       {
         routeClass: "private",
@@ -393,9 +396,9 @@ spaceRoute(
     routeClass: "public",
   },
   async (context, { spaceId, policy, snapshot }) => {
-    const query = normalizeRenditionQuery(new URL(context.req.url).searchParams, policy);
+    const query = normalizeDerivativeQuery(new URL(context.req.url).searchParams, policy);
     if (!query.isCanonical) return canonicalRedirect(context.req.url, query.width, query.quality);
-    return publicLocatedRendition(
+    return publicLocatedDerivative(
       context.env,
       {
         routeClass: "public",

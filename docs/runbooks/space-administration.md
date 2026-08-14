@@ -19,7 +19,7 @@ SameSite=Strict session. All pages are non-cacheable.
 6. Issue an API token and a Capability Key from the Space page. Each full secret
    appears once. Copy it directly into the consuming application's secret store.
 7. Wait until the latest Edge refresh generation is at least the new registry
-   generation. Test one rendition before you send production traffic.
+   generation. Test one derivative before you send production traffic.
 
 ## Change policy
 
@@ -67,7 +67,7 @@ that key will fail. Do not wait for the overlap window.
 The dashboard derives the Space portion of `IMGPROXY_ALLOWED_SOURCES` and lists
 active Space origins that the deployed value does not cover. Copy the derived
 value into the Railway variable, while retaining any additional source needed
-for Rendition Store Master Preview reads. Review the result; do not widen it to
+for Derivative Store Master Preview reads. Review the result; do not widen it to
 all sources.
 
 Run `railway config plan`, review every change, then deploy imgproxy. The value

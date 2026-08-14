@@ -55,8 +55,8 @@ type PreviewJobClaims = CommonClaims & {
 
 `locator` is an exact HTTPS GET location that must also pass the Space origin
 allowlist and global source-safety rules. `master_preview` never contains an
-original locator. Rendition width and quality are outside every capability and
-are constrained by the Space Rendition Policy.
+original locator. Derivative width and quality are outside every capability and
+are constrained by the Space Derivative Policy.
 
 The four purposes are non-interchangeable. A route validates purpose before
 performing a cache lookup, R2 read, job mutation, or source fetch. The sole

@@ -1,6 +1,6 @@
 /**
  * Extracts the percent-encoded Source reference that follows the
- * `/resolver/:resolverId/` marker. Both the rendition and the delivery route
+ * `/resolver/:resolverId/` marker. Both the derivative and the delivery route
  * share this one copy so a malformed escape or an unencoded `/` answers 404
  * identically on each.
  */

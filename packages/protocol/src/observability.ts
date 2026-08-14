@@ -1,14 +1,14 @@
 import { sourceFingerprint } from "./cache-identity.js";
 import { CONTROL_HTTP_ROUTES, type ControlHttpRoute } from "./control-routes.js";
 import {
+  type DerivativeKind,
   FAILURE_ACTIONS,
   type JobFailureCode,
-  type RenditionKind,
   type RouteClass,
 } from "./types.js";
 
 export const OPERATIONAL_EVENT_NAMES = [
-  "edge.rendition",
+  "edge.derivative",
   "edge.source_delivery",
   "edge.failure",
   "control.job.submitted",
@@ -21,8 +21,8 @@ export const OPERATIONAL_EVENT_NAMES = [
   "control.recovery.completed",
   "control.recovery.failed",
   "control.http.completed",
-  "control.rendition.failed",
-  "control.rendition.delegated",
+  "control.derivative.failed",
+  "control.derivative.delegated",
   "control.service.started",
   "control.service.stopping",
   "control.service.failed",
@@ -49,7 +49,7 @@ export interface OperationalEventFields {
     | "unsatisfied"
     | "rejected"
     | "failed";
-  kind?: RenditionKind;
+  kind?: DerivativeKind;
   executionCycle?: number;
   attemptNumber?: number;
   durationMs?: number;

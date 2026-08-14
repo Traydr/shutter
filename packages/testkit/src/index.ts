@@ -1,6 +1,6 @@
 import type {
   CapabilityKeyMaterial,
-  RenditionCacheIdentity,
+  DerivativeCacheIdentity,
   SourceCapabilityClaims,
   SourceDeliveryCacheIdentity,
   VerifyCapabilityOptions,
@@ -97,7 +97,7 @@ export const URL_FIXTURES = Object.freeze({
   sourcePurge: "/v1/spaces/example-private/sources/source%2Fone/purge",
 });
 
-export const CACHE_IDENTITY_FIXTURE: Readonly<RenditionCacheIdentity> = Object.freeze({
+export const CACHE_IDENTITY_FIXTURE: Readonly<DerivativeCacheIdentity> = Object.freeze({
   routeClass: "private",
   spaceId: "example-private",
   sourceId: "sha256:fixture-source",

@@ -40,13 +40,13 @@ Each Node service is a Hono server with a `/healthz` endpoint, and its port
 comes from `PORT`.
 
 ```sh
-pnpm --filter @shutter/control dev         # control plane + Rendition Job API
+pnpm --filter @shutter/control dev         # control plane + Derivative Job API
 pnpm --filter @shutter/executor-video dev
 pnpm --filter @shutter/executor-pdf dev
 pnpm --filter @shutter/edge dev            # see the caveat below
 ```
 
-To exercise the Rendition Job API end to end you need Postgres plus
+To exercise the Derivative Job API end to end you need Postgres plus
 `DATABASE_URL` and `SHUTTER_ENCRYPTION_KEY`. Run migrations first:
 
 ```sh

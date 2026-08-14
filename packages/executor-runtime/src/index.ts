@@ -5,12 +5,12 @@ import { join } from "node:path";
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { serve } from "@hono/node-server";
 import {
+  type DerivativeKind,
   type ExecutorClaim,
   emitOperationalEvent,
   type JobFailureCode,
   operationalEvent,
   parseExecutorClaim,
-  type RenditionKind,
   type SourceOriginRule,
 } from "@shutter/protocol";
 import { Hono } from "hono";
@@ -39,7 +39,7 @@ export interface ProcessedMasterPreview {
 }
 
 export interface ExecutorProcessor {
-  kind: RenditionKind;
+  kind: DerivativeKind;
   process(
     locator: string,
     directory: string,
@@ -66,7 +66,7 @@ export async function runExecutorOnce(
   if (claimed.status === 204) return "idle";
   if (!claimed.ok) throw new Error(`Control claim failed with ${claimed.status}`);
   const claim = parseExecutorClaim(await claimed.json());
-  if (claim.kind !== processor.kind) throw new Error("Control returned the wrong Rendition kind");
+  if (claim.kind !== processor.kind) throw new Error("Control returned the wrong Derivative kind");
   const startedAt = Date.now();
   emitOperationalEvent(
     "info",
@@ -218,7 +218,7 @@ function authorizedWake(header: string | undefined, expectedToken: string): bool
 }
 
 export function createExecutorApp(
-  kind: RenditionKind,
+  kind: DerivativeKind,
   config?: ExecutorConfig,
   run?: ExecutorRunner,
 ): Hono {
@@ -279,7 +279,7 @@ export function createExecutorConfigFromEnv(): ExecutorConfig | undefined {
 }
 
 export function serveExecutorApp(
-  kind: RenditionKind,
+  kind: DerivativeKind,
   app: Hono,
 ): { close(callback?: (error?: Error) => void): void } {
   const portValue = process.env.PORT ?? "3000";

@@ -1,9 +1,9 @@
-import type { RenditionKind } from "@shutter/protocol";
+import type { DerivativeKind } from "@shutter/protocol";
 
-export type ExecutorWake = (kind: RenditionKind) => Promise<void>;
+export type ExecutorWake = (kind: DerivativeKind) => Promise<void>;
 
 export function createSerializedExecutorDispatch(wake: ExecutorWake): ExecutorWake {
-  const tails = new Map<RenditionKind, Promise<void>>();
+  const tails = new Map<DerivativeKind, Promise<void>>();
 
   return (kind) => {
     const previous = tails.get(kind) ?? Promise.resolve();

@@ -14,6 +14,7 @@ import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
 import { Pool } from "pg";
 import { createAdminApp } from "./admin/app.js";
+import { PostgresDerivativeJobLifecycle } from "./derivative-job-lifecycle.js";
 import { EdgeRefreshTracker } from "./edge-refresh-status.js";
 import { env } from "./env/server.js";
 import { createSerializedExecutorDispatch, sendExecutorWake } from "./executor-dispatch.js";
@@ -21,7 +22,6 @@ import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
 import { type ControlLogger, controlLogger, operationalErrorType } from "./logging.js";
 import { createMasterStore, type MasterStore } from "./master-store.js";
-import { PostgresRenditionJobLifecycle } from "./rendition-job-lifecycle.js";
 import { createSourcePurge } from "./source-purge.js";
 import { CapabilityKeyEncryption } from "./spaces/encryption.js";
 import { PostgresSpaceRegistry } from "./spaces/postgres-registry.js";
@@ -244,7 +244,7 @@ export function createControlApp(
     }
   }
 
-  control.get(CONTROL_HTTP_ROUTES.spikeRendition, async (context) => {
+  control.get(CONTROL_HTTP_ROUTES.spikeDerivative, async (context) => {
     if (!authorized(context.req.header("authorization"), runtime.originAuthToken())) {
       return context.json({ error: { code: "unauthorized" } }, 401, {
         "cache-control": "private, no-store",
@@ -311,7 +311,7 @@ export function createControlApp(
     try {
       const request = buildImgproxyRequest({ sourceUrl: source, width, quality }, imgproxy);
       runtime.logger.emit("info", {
-        event: "control.rendition.delegated",
+        event: "control.derivative.delegated",
         outcome: "accepted",
       });
       const response = await runtime.fetch(request.url, {
@@ -320,37 +320,37 @@ export function createControlApp(
       });
       if (!response.ok || response.body === null) {
         runtime.logger.emit("error", {
-          event: "control.rendition.failed",
+          event: "control.derivative.failed",
           outcome: "failed",
           failureCode: "service_unavailable",
         });
-        return context.json({ error: { code: "rendition_failed" } }, 502, {
+        return context.json({ error: { code: "derivative_failed" } }, 502, {
           "cache-control": "private, no-store",
         });
       }
       runtime.logger.emit("info", {
-        event: "control.rendition.delegated",
+        event: "control.derivative.delegated",
         outcome: "ready",
       });
       const headers = new Headers({
         "cache-control": "private, no-store",
         "content-type": response.headers.get("content-type") ?? "image/webp",
-        "x-shutter-rendition-key": key,
+        "x-shutter-derivative-key": key,
       });
       return new Response(response.body, { status: 200, headers });
     } catch {
       runtime.logger.emit("error", {
-        event: "control.rendition.failed",
+        event: "control.derivative.failed",
         outcome: "failed",
         failureCode: "service_unavailable",
       });
-      return context.json({ error: { code: "rendition_failed" } }, 502, {
+      return context.json({ error: { code: "derivative_failed" } }, 502, {
         "cache-control": "private, no-store",
       });
     }
   });
 
-  control.post(CONTROL_HTTP_ROUTES.masterRendition, async (context) => {
+  control.post(CONTROL_HTTP_ROUTES.masterDerivative, async (context) => {
     if (!authorized(context.req.header("authorization"), runtime.originAuthToken())) {
       return context.json({ error: { code: "unauthorized" } }, 401, {
         "cache-control": "private, no-store",
@@ -409,7 +409,7 @@ export function createControlApp(
       if (imgproxy === undefined) throw new Error("imgproxy unavailable");
       const request = buildImgproxyRequest({ sourceUrl, width, quality }, imgproxy);
       runtime.logger.emit("info", {
-        event: "control.rendition.delegated",
+        event: "control.derivative.delegated",
         kind: value.kind,
         outcome: "accepted",
       });
@@ -417,9 +417,9 @@ export function createControlApp(
         headers: request.headers,
         redirect: "error",
       });
-      if (!response.ok || response.body === null) throw new Error("rendition failed");
+      if (!response.ok || response.body === null) throw new Error("derivative failed");
       runtime.logger.emit("info", {
-        event: "control.rendition.delegated",
+        event: "control.derivative.delegated",
         kind: value.kind,
         outcome: "ready",
       });
@@ -431,12 +431,12 @@ export function createControlApp(
       });
     } catch {
       runtime.logger.emit("error", {
-        event: "control.rendition.failed",
+        event: "control.derivative.failed",
         kind: value.kind as "video" | "pdf",
         outcome: "failed",
         failureCode: "service_unavailable",
       });
-      return context.json({ error: { code: "rendition_failed" } }, 502, {
+      return context.json({ error: { code: "derivative_failed" } }, 502, {
         "cache-control": "private, no-store",
       });
     }
@@ -478,8 +478,8 @@ const dispatchExecutor = createSerializedExecutorDispatch((kind) =>
 
 const databaseUrl = env.DATABASE_URL;
 const jobPool = databaseUrl === undefined ? undefined : new Pool({ connectionString: databaseUrl });
-const renditionJobLifecycle =
-  jobPool === undefined ? undefined : new PostgresRenditionJobLifecycle(jobPool);
+const derivativeJobLifecycle =
+  jobPool === undefined ? undefined : new PostgresDerivativeJobLifecycle(jobPool);
 function configuredCapabilityKeyEncryption(): CapabilityKeyEncryption | undefined {
   if (env.SHUTTER_ENCRYPTION_KEY === undefined) return undefined;
   try {
@@ -513,7 +513,7 @@ const masterStore =
         secretAccessKey: env.S3_SECRET_ACCESS_KEY,
       })
     : undefined;
-const renditionS3 =
+const derivativeS3 =
   env.S3_ENDPOINT && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY
     ? new S3Client({
         endpoint: env.S3_ENDPOINT,
@@ -526,8 +526,8 @@ const renditionS3 =
       })
     : undefined;
 const sourcePurge =
-  renditionS3 &&
-  renditionJobLifecycle &&
+  derivativeS3 &&
+  derivativeJobLifecycle &&
   env.S3_BUCKET &&
   env.CLOUDFLARE_ZONE_ID &&
   env.CLOUDFLARE_CACHE_PURGE_TOKEN &&
@@ -535,8 +535,8 @@ const sourcePurge =
   env.ORIGIN_AUTH_TOKEN
     ? createSourcePurge({
         logger: controlLogger,
-        lifecycle: renditionJobLifecycle,
-        s3: renditionS3,
+        lifecycle: derivativeJobLifecycle,
+        s3: derivativeS3,
         bucket: env.S3_BUCKET,
         cloudflareZoneId: env.CLOUDFLARE_ZONE_ID,
         cloudflareApiToken: env.CLOUDFLARE_CACHE_PURGE_TOKEN,
@@ -547,10 +547,10 @@ const sourcePurge =
     : undefined;
 
 export const jobApiRuntime: JobApiRuntime | undefined =
-  renditionJobLifecycle === undefined || spaceRegistry === undefined
+  derivativeJobLifecycle === undefined || spaceRegistry === undefined
     ? undefined
     : {
-        lifecycle: renditionJobLifecycle,
+        lifecycle: derivativeJobLifecycle,
         now: () => new Date(),
         spaceRegistry,
         executorToken: (kind) =>

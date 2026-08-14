@@ -1,71 +1,47 @@
-<p align="center">
-  <strong>Optimized renditions for media your application already owns</strong><br/>
-  <strong>Image Optimization • Video &amp; PDF Previews • Private Delivery</strong><br/>
-  <sub>Resize and WebP-encode on demand. Materialize video posters and PDF covers. Serve private media through the edge without ever handing over your storage, your users, or your authorization rules.</sub>
-</p>
-
-<p align="center">
-  <a href="./docs/architecture.md">Architecture</a> ·
-  <a href="./docs/adr/">Decision records</a> ·
-  <a href="./docs/contracts/v1/">v1 contracts</a> ·
-  <a href="./docs/development.md">Development</a> ·
-  <a href="./docs/runbooks/">Runbooks</a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/Traydr/shutter/actions/workflows/ci.yml"><img src="https://github.com/Traydr/shutter/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
-</p>
-
 # Shutter
 
-Shutter is a rendition service for applications that keep their own uploads,
+[![CI](https://github.com/Traydr/shutter/actions/workflows/ci.yml/badge.svg)](https://github.com/Traydr/shutter/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
+Shutter is a media derivative service for applications that keep their own uploads,
 storage, media records, and end-user authorization. It turns images, videos, and
-PDFs into optimized WebP renditions and durable thumbnails without taking custody
-of any of it.
+PDFs into optimized WebP derivatives and durable thumbnails without taking
+custody of any of it.
 
-**The application stays the authority, and Shutter never learns its domain
-model.** Most image CDNs solve this by becoming the system of record — you upload
-to them, they own the bytes, and private media either leaks into a public URL
-space or forces you to proxy every request through your own app. Shutter takes
-the opposite position: applications issue short-lived, encrypted capability
-tokens for the sources they are willing to expose, and Shutter renders only what
-a token authorizes.
+Most image CDNs become the system of record. You upload to them, they own the
+bytes, and private media either leaks into a public URL space or forces you to
+proxy every request through your own app. Shutter takes the opposite position.
+Applications issue short-lived, encrypted capability tokens for the sources they
+are willing to expose, and Shutter renders only what a token authorizes. The
+application stays the authority, and Shutter never learns its domain model.
 
-<table>
-<tr>
-<td width="42%" valign="top">
+[Architecture](./docs/architecture.md) ·
+[Decision records](./docs/adr/) ·
+[v1 contracts](./docs/contracts/v1/) ·
+[Development](./docs/development.md) ·
+[Runbooks](./docs/runbooks/)
 
-### Image Optimization
+## What it does
+
+### Image optimization
 
 Resize to a requested width and WebP-encode at a requested quality, preserving
-composition. Widths and qualities come from Space policy, not from the caller;
-non-canonical public values redirect once to their canonical form and cache
+composition. Widths and qualities come from Space policy, not from the caller.
+Non-canonical public values redirect once to their canonical form and cache
 there.
-
-</td>
-<td width="58%" valign="top">
 
 ```text
 GET /v1/public/{space}/resolver/{resolver}/{ref}?w=1200&q=75
 GET /v1/public/{space}/located/{sourceId}/{cap}?w=1200&q=75
 ```
 
-</td>
-</tr>
-<tr>
-<td width="42%" valign="top">
+### Video and PDF Master Previews
 
-### Video &amp; PDF Master Previews
-
-One durable Derivative per source: a one-second video frame with
-first-decodable-frame fallback, or the first PDF page, encoded as quality-90 WebP
-within 1920px. Every responsive thumbnail is an Image Optimization of that
-master. Jobs are keyed by `(space, source, kind)` — no client-side idempotency
-key, no duplicate work.
-
-</td>
-<td width="58%" valign="top">
+One durable Derivative per source: a one-second video frame with a
+first-decodable-frame fallback, or the first PDF page, encoded as quality-90
+WebP within 1920px. Every responsive thumbnail is an Image Optimization of that
+master. Jobs are keyed by `(space, source, kind)`, so there is no client-side
+idempotency key and no duplicate work.
 
 ```http
 PUT /v1/spaces/{space}/sources/{sourceId}/previews/video
@@ -85,38 +61,22 @@ Authorization: Bearer <space-api-token>
 }
 ```
 
-</td>
-</tr>
-<tr>
-<td width="42%" valign="top">
+### Private delivery
 
-### Private Delivery
-
-A Cloudflare Worker decrypts and validates the capability **before** any cache
+A Cloudflare Worker decrypts and validates the capability before any cache
 lookup, so an authorization failure can never be served from cache. Browser
-responses are `private, no-store`; the internal cache key excludes the expiring
-capability so hits still survive token rotation.
-
-</td>
-<td width="58%" valign="top">
+responses are `private, no-store`. The internal cache key excludes the expiring
+capability, so hits survive token rotation.
 
 ```text
 GET /v1/private/{space}/source/{cap}?w=1200&q=75
 GET /v1/private/{space}/master/{cap}?w=1200&q=75
 ```
 
-</td>
-</tr>
-</table>
-
-<p align="center">
-  <sub><strong>Full wire behavior:</strong> <a href="./docs/contracts/v1/rendition-urls.md">rendition URLs</a> ·
-  <a href="./docs/contracts/v1/job-api.md">job API</a> ·
-  <a href="./docs/contracts/v1/source-capability.md">source capability</a> ·
-  <a href="./docs/contracts/v1/source-purge.md">source purge</a></sub>
-</p>
-
----
+Full wire behavior: [derivative URLs](./docs/contracts/v1/derivative-urls.md) ·
+[job API](./docs/contracts/v1/job-api.md) ·
+[source capability](./docs/contracts/v1/source-capability.md) ·
+[source purge](./docs/contracts/v1/source-purge.md)
 
 ## Usage
 
@@ -150,9 +110,9 @@ const src = buildPrivateSourceUrl("demo-private", capability, {
 });
 ```
 
-Three purposes, each bound to exactly one job: `image_source` optimizes a private
-original, `master_preview` reads a stored Derivative, `preview_job` runs one
-bounded Rendition Job. A capability carries a Source Locator only when its
+Three purposes, each bound to exactly one job: `image_source` optimizes a
+private original, `master_preview` reads a stored Derivative, `preview_job` runs
+one bounded Derivative Job. A capability carries a Source Locator only when its
 purpose has to fetch your bytes.
 
 ### Request a Master Preview
@@ -172,9 +132,9 @@ await fetch(controlBaseUrl + buildPreviewJobUrl(space, sourceId, "video"), {
 
 `202` while pending or processing (with `Location` and `Retry-After`), `200`
 once the job reaches `ready` or a persisted `failed`. Poll the same canonical
-`GET`; the JSON `status` is authoritative. Repeat `PUT`s are safe — a fresh
-capability reactivates a `source_expired` or `attempts_exhausted` job on the same
-record.
+`GET`; the JSON `status` is authoritative. Repeat `PUT`s are safe. A fresh
+capability reactivates a `source_expired` or `attempts_exhausted` job on the
+same record.
 
 ### Purge a source
 
@@ -182,11 +142,9 @@ record.
 POST /v1/spaces/{space}/sources/{sourceId}/purge
 ```
 
-After you have made the original unavailable. It removes every cached Rendition,
-stored Derivative, and Rendition Job for that immutable identity. It does not
-revoke an otherwise-valid capability — short lifetimes do that.
-
----
+After you have made the original unavailable. It removes every cached and
+materialized Derivative and the Derivative Job for that immutable identity. It does not
+revoke an otherwise-valid capability. Short lifetimes do that.
 
 ## How it works
 
@@ -194,11 +152,11 @@ revoke an otherwise-valid capability — short lifetimes do that.
 flowchart LR
   app["Consuming application"] --> control["Shutter Control"]
   app --> source["Application-owned S3 storage"]
-  app -->|"Rendition Job"| control
-  control --> jobs[("Rendition Jobs")]
+  app -->|"Derivative Job"| control
+  control --> jobs[("Derivative Jobs")]
   jobs --> video["Video Executor"]
   jobs --> pdf["PDF Executor"]
-  video --> derived["Rendition Store on R2"]
+  video --> derived["Derivative Store on R2"]
   pdf --> derived
   browser["Browser"] --> worker["Cloudflare Worker"]
   worker --> privateCache["Private edge cache"]
@@ -214,7 +172,7 @@ flowchart LR
 ### Private image request
 
 ```text
-Browser requests a private rendition URL
+Browser requests a private derivative URL
   -> Worker decrypts the capability and checks purpose, space, source, expiry
   -> Reject: 401/403, nothing is cached, no cache is consulted
   -> Normalize w and q, derive the internal cache key (capability excluded)
@@ -229,7 +187,7 @@ Browser requests a private rendition URL
 Application PUTs a preview_job capability
   -> Control creates or returns the job at (space, source, kind)
   -> Executor claims one job, heartbeats, invokes ffmpeg or poppler
-  -> Master Preview uploaded to the Rendition Store on R2
+  -> Master Preview uploaded to the Derivative Store on R2
   -> Job reaches ready with real width, height, and format
   -> Application builds the public or private master URL from that descriptor
 ```
@@ -237,13 +195,11 @@ Application PUTs a preview_job capability
 Control never authorizes end users and never mints delivery capabilities. The
 ready descriptor contains no URL, no locator, and no capability.
 
----
-
 ## Design decisions worth reading
 
-The interesting part of this repo is the reasoning as much as the code. Twenty
-[architecture decision records](./docs/adr/) cover the tradeoffs; the
-[v1 contracts](./docs/contracts/v1/) pin the wire behavior each consumer can
+The interesting part of this repo is the reasoning as much as the code.
+Twenty-four [architecture decision records](./docs/adr/) cover the tradeoffs;
+the [v1 contracts](./docs/contracts/v1/) pin the wire behavior each consumer can
 depend on.
 
 | Decision | Why it matters |
@@ -266,11 +222,9 @@ A few properties fall out of those decisions:
 - **Enforced runtime boundary.** `scripts/check-edge-boundary.mjs` fails the
   build if Worker code reaches for Node APIs; the Worker runs on Web standards
   only, with no `nodejs_compat`.
-- **Conformance fixtures, not just tests.** `@shutter/testkit` ships versioned
-  fixtures for capability encryption, URL construction, and normalization that
-  every consumer runs against its own adapter.
-
----
+- **Conformance fixtures.** `@shutter/testkit` ships versioned fixtures for
+  capability encryption, URL construction, and normalization. Every consumer
+  runs them against its own adapter.
 
 ## Layout
 
@@ -284,8 +238,6 @@ A few properties fall out of those decisions:
 | `packages/executor-runtime` | Shared claim, heartbeat, upload, and cleanup work cycle |
 | `packages/observability-node` | Structured logging and OTLP export for Node services |
 
----
-
 ## Development
 
 TypeScript workspace on Node 22 and pnpm 11.1.
@@ -295,19 +247,19 @@ pnpm install --frozen-lockfile
 pnpm check
 ```
 
-`pnpm check` runs formatting, the runtime-boundary lint, configuration tests, TypeScript,
-the Node and `workerd` test suites, and every application build. The Control
-tests start a throwaway Postgres through testcontainers, so `pnpm test` needs a
-running container runtime (Docker, OrbStack, or Podman).
+`pnpm check` runs formatting, the runtime-boundary lint, configuration tests,
+TypeScript, the Node and `workerd` test suites, and every application build. The
+Control tests start a throwaway Postgres through testcontainers, so `pnpm test`
+needs a running container runtime (Docker, OrbStack, or Podman).
 
 To run the services, copy `.env.example` to `.env` (and
 `apps/edge/.dev.vars.example` to `apps/edge/.dev.vars`) and fill in what you
-need — everything is fail-closed, so you can enable one capability at a time.
-The video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
+need. Everything is fail-closed, so you can enable one capability at a time. The
+video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
 `poppler-utils`.
 
 ```sh
-pnpm --filter @shutter/control db:migrate   # Space Registry and Rendition Job ledger
+pnpm --filter @shutter/control db:migrate   # Space Registry and Derivative Job ledger
 pnpm --filter @shutter/control dev          # Control plane on :3000
 ```
 
@@ -320,11 +272,11 @@ server from booting.
 
 | Variable | Description |
 |---|---|
-| `DATABASE_URL` | Postgres for the Space Registry and Rendition Job ledger |
+| `DATABASE_URL` | Postgres for the Space Registry and Derivative Job ledger |
 | `SHUTTER_ENCRYPTION_KEY` | Master key for Capability Keys stored in the Space Registry |
 | `EDGE_CONFIG_TOKEN` | Dedicated credential shared by Control and Edge for snapshot reads |
 | `ADMIN_BOOTSTRAP_TOKEN` | Bootstrap login for Control's server-rendered `/admin` interface |
-| `S3_ENDPOINT`, `S3_BUCKET`, `S3_*` | Rendition Store, shared verbatim with imgproxy and both Executors |
+| `S3_ENDPOINT`, `S3_BUCKET`, `S3_*` | Derivative Store, shared verbatim with imgproxy and both Executors |
 | `IMGPROXY_BASE_URL`, `IMGPROXY_KEY`, `IMGPROXY_SALT`, `IMGPROXY_SECRET` | On-demand image rendering |
 | `EDGE_BASE_URL`, `ORIGIN_AUTH_TOKEN` | Delivery edge; the token must match the Worker's value exactly |
 | `VIDEO_EXECUTOR_*`, `PDF_EXECUTOR_*` | Executor callbacks; tokens must match each Executor's `EXECUTOR_ROLE_TOKEN` |
@@ -340,21 +292,18 @@ See [`.env.example`](./.env.example) for the annotated full set.
 
 Space policies, API tokens, and Capability Keys are records in Postgres. Manage
 them at Control's `/admin` page; they are not deployment variables or checked-in
-tenant configuration. See the [Space administration
-runbook](./docs/runbooks/space-administration.md) for creation, policy changes,
-credential rotation, decommissioning, and imgproxy allowlist updates.
+tenant configuration. The [Space administration
+runbook](./docs/runbooks/space-administration.md) covers creation, policy
+changes, credential rotation, decommissioning, and imgproxy allowlist updates.
 
-Deployment-specific values — custom domains, regions, repository and storage
-names, the imgproxy source allowlist, and credentials — are not in source. The
+Custom domains, regions, repository and storage names, the imgproxy source
+allowlist, and credentials are deployment inputs, never source. The
 [self-hosting runbook](./docs/runbooks/self-hosting.md) describes the public
 input file, fresh and imported Railway modes, reviewed plan, secret bootstrap,
 and live acceptance checks.
 
 </details>
 
----
-
 ## License
 
-MIT — see [LICENSE](./LICENSE).
-</content>
+MIT. See [LICENSE](./LICENSE).

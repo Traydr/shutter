@@ -58,7 +58,7 @@ export function createEdgeDeploymentConfig(
     account_id: input.cloudflareAccountId,
     name: input.edgeWorkerName,
     routes: [{ pattern: input.edgeDomain, custom_domain: true }],
-    r2_buckets: [{ binding: "RENDITION_STORE", bucket_name: input.r2Bucket }],
+    r2_buckets: [{ binding: "DERIVATIVE_STORE", bucket_name: input.r2Bucket }],
   };
 }
 

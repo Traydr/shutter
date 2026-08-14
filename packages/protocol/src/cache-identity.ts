@@ -1,13 +1,13 @@
 import { encodeBase64Url } from "./base64url.js";
 import { frameStrings } from "./binary.js";
 import { PROTOCOL_VERSION } from "./constants.js";
-import type { RenditionInput, RenditionKind, RouteClass } from "./types.js";
+import type { DerivativeInput, DerivativeKind, RouteClass } from "./types.js";
 
-export interface RenditionCacheIdentity {
+export interface DerivativeCacheIdentity {
   routeClass: RouteClass;
   spaceId: string;
   sourceId: string;
-  input: RenditionInput;
+  input: DerivativeInput;
   width: number;
   quality: number;
 }
@@ -24,11 +24,11 @@ export async function sourceFingerprint(spaceId: string, sourceId: string): Prom
   return encodeBase64Url(new Uint8Array(digest));
 }
 
-function inputSegment(input: RenditionInput): string {
+function inputSegment(input: DerivativeInput): string {
   return input.type === "source" ? "source" : `master-${input.kind}`;
 }
 
-export async function buildR2CacheKey(identity: RenditionCacheIdentity): Promise<string> {
+export async function buildR2CacheKey(identity: DerivativeCacheIdentity): Promise<string> {
   const fingerprint = await sourceFingerprint(identity.spaceId, identity.sourceId);
   return `cache/v1/${identity.routeClass}/${encodeURIComponent(identity.spaceId)}/${fingerprint}/${inputSegment(identity.input)}/w${identity.width}-q${identity.quality}.webp`;
 }
@@ -45,7 +45,7 @@ export async function buildR2CachePurgePrefix(
 export async function buildMasterPreviewKey(
   spaceId: string,
   sourceId: string,
-  kind: RenditionKind,
+  kind: DerivativeKind,
 ): Promise<string> {
   const fingerprint = await sourceFingerprint(spaceId, sourceId);
   return `masters/v1/${encodeURIComponent(spaceId)}/${fingerprint}/${kind}.webp`;
@@ -60,7 +60,7 @@ export async function buildSourceCacheTag(spaceId: string, sourceId: string): Pr
   return `shutter-v1-${await sourceFingerprint(spaceId, sourceId)}`;
 }
 
-export async function buildCanonicalCacheUrl(identity: RenditionCacheIdentity): Promise<string> {
+export async function buildCanonicalCacheUrl(identity: DerivativeCacheIdentity): Promise<string> {
   const key = await buildR2CacheKey(identity);
   return new URL(`/${key}`, "https://cache.shutter.invalid").toString();
 }
