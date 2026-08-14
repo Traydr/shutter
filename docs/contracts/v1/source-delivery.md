@@ -52,7 +52,7 @@ without entering the cache. A valid cold `206` whose total size fits the cache
 bound warms the complete object in the background so later ranges hit the edge.
 Cold partial and `416` responses carry `private, no-store` so downstream caches
 never store them. Source Delivery never writes an original to the R2
-Derivative Store. Source Purge removes the canonical entry with the shared hashed
+Media Store. Source Purge removes the canonical entry with the shared hashed
 Source tag.
 
 Private browser responses use `Cache-Control: private, no-store` and do not

@@ -126,8 +126,8 @@ export const spaceRegistryMetadata = pgTable(
   ],
 );
 
-export const derivativeJobs = pgTable(
-  "derivative_jobs",
+export const previewJobs = pgTable(
+  "preview_jobs",
   {
     spaceId: text("space_id").notNull(),
     sourceId: text("source_id").notNull(),
@@ -152,14 +152,14 @@ export const derivativeJobs = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.spaceId, table.sourceId, table.kind] }),
-    index("derivative_jobs_claim_idx").on(table.kind, table.status, table.nextAttemptAt),
-    check("derivative_jobs_kind_check", sql`${table.kind} in ('video', 'pdf')`),
+    index("preview_jobs_claim_idx").on(table.kind, table.status, table.nextAttemptAt),
+    check("preview_jobs_kind_check", sql`${table.kind} in ('video', 'pdf')`),
     check(
-      "derivative_jobs_status_check",
+      "preview_jobs_status_check",
       sql`${table.status} in ('pending', 'processing', 'ready', 'failed')`,
     ),
     check(
-      "derivative_jobs_counter_check",
+      "preview_jobs_counter_check",
       sql`${table.executionCycle} >= 0 and ${table.attemptNumber} >= 0`,
     ),
   ],

@@ -3,9 +3,9 @@
 [![CI](https://github.com/Traydr/shutter/actions/workflows/ci.yml/badge.svg)](https://github.com/Traydr/shutter/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-Shutter is a media derivative service for applications that keep their own uploads,
+Shutter is an image optimization and preview service for applications that keep their own uploads,
 storage, media records, and end-user authorization. It turns images, videos, and
-PDFs into optimized WebP derivatives and durable thumbnails without taking
+PDFs into optimized WebP images and durable thumbnails without taking
 custody of any of it.
 
 Most image CDNs become the system of record. You upload to them, they own the
@@ -37,7 +37,7 @@ GET /v1/public/{space}/located/{sourceId}/{cap}?w=1200&q=75
 
 ### Video and PDF Master Previews
 
-One durable Derivative per source: a one-second video frame with a
+One durable Master Preview per source: a one-second video frame with a
 first-decodable-frame fallback, or the first PDF page, encoded as quality-90
 WebP within 1920px. Every responsive thumbnail is an Image Optimization of that
 master. Jobs are keyed by `(space, source, kind)`, so there is no client-side
@@ -73,7 +73,7 @@ GET /v1/private/{space}/source/{cap}?w=1200&q=75
 GET /v1/private/{space}/master/{cap}?w=1200&q=75
 ```
 
-Full wire behavior: [derivative URLs](./docs/contracts/v1/derivative-urls.md) ·
+Full wire behavior: [delivery URLs](./docs/contracts/v1/delivery-urls.md) ·
 [job API](./docs/contracts/v1/job-api.md) ·
 [source capability](./docs/contracts/v1/source-capability.md) ·
 [source purge](./docs/contracts/v1/source-purge.md)
@@ -111,8 +111,8 @@ const src = buildPrivateSourceUrl("demo-private", capability, {
 ```
 
 Three purposes, each bound to exactly one job: `image_source` optimizes a
-private original, `master_preview` reads a stored Derivative, `preview_job` runs
-one bounded Derivative Job. A capability carries a Source Locator only when its
+private original, `master_preview` reads a stored Master Preview, `preview_job` runs
+one bounded Preview Job. A capability carries a Source Locator only when its
 purpose has to fetch your bytes.
 
 ### Request a Master Preview
@@ -142,8 +142,9 @@ same record.
 POST /v1/spaces/{space}/sources/{sourceId}/purge
 ```
 
-After you have made the original unavailable. It removes every cached and
-materialized Derivative and the Derivative Job for that immutable identity. It does not
+After you have made the original unavailable. It removes every cached optimized
+image, stored Master Preview, and Preview Job for that immutable identity. It
+does not
 revoke an otherwise-valid capability. Short lifetimes do that.
 
 ## How it works
@@ -152,11 +153,11 @@ revoke an otherwise-valid capability. Short lifetimes do that.
 flowchart LR
   app["Consuming application"] --> control["Shutter Control"]
   app --> source["Application-owned S3 storage"]
-  app -->|"Derivative Job"| control
-  control --> jobs[("Derivative Jobs")]
+  app -->|"Preview Job"| control
+  control --> jobs[("Preview Jobs")]
   jobs --> video["Video Executor"]
   jobs --> pdf["PDF Executor"]
-  video --> derived["Derivative Store on R2"]
+  video --> derived["Media Store on R2"]
   pdf --> derived
   browser["Browser"] --> worker["Cloudflare Worker"]
   worker --> privateCache["Private edge cache"]
@@ -172,7 +173,7 @@ flowchart LR
 ### Private image request
 
 ```text
-Browser requests a private derivative URL
+Browser requests a private delivery URL
   -> Worker decrypts the capability and checks purpose, space, source, expiry
   -> Reject: 401/403, nothing is cached, no cache is consulted
   -> Normalize w and q, derive the internal cache key (capability excluded)
@@ -187,7 +188,7 @@ Browser requests a private derivative URL
 Application PUTs a preview_job capability
   -> Control creates or returns the job at (space, source, kind)
   -> Executor claims one job, heartbeats, invokes ffmpeg or poppler
-  -> Master Preview uploaded to the Derivative Store on R2
+  -> Master Preview uploaded to the Media Store on R2
   -> Job reaches ready with real width, height, and format
   -> Application builds the public or private master URL from that descriptor
 ```
@@ -259,7 +260,7 @@ video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
 `poppler-utils`.
 
 ```sh
-pnpm --filter @shutter/control db:migrate   # Space Registry and Derivative Job ledger
+pnpm --filter @shutter/control db:migrate   # Space Registry and Preview Job ledger
 pnpm --filter @shutter/control dev          # Control plane on :3000
 ```
 
@@ -272,11 +273,11 @@ server from booting.
 
 | Variable | Description |
 |---|---|
-| `DATABASE_URL` | Postgres for the Space Registry and Derivative Job ledger |
+| `DATABASE_URL` | Postgres for the Space Registry and Preview Job ledger |
 | `SHUTTER_ENCRYPTION_KEY` | Master key for Capability Keys stored in the Space Registry |
 | `EDGE_CONFIG_TOKEN` | Dedicated credential shared by Control and Edge for snapshot reads |
 | `ADMIN_BOOTSTRAP_TOKEN` | Bootstrap login for Control's server-rendered `/admin` interface |
-| `S3_ENDPOINT`, `S3_BUCKET`, `S3_*` | Derivative Store, shared verbatim with imgproxy and both Executors |
+| `S3_ENDPOINT`, `S3_BUCKET`, `S3_*` | Media Store, shared verbatim with imgproxy and both Executors |
 | `IMGPROXY_BASE_URL`, `IMGPROXY_KEY`, `IMGPROXY_SALT`, `IMGPROXY_SECRET` | On-demand image rendering |
 | `EDGE_BASE_URL`, `ORIGIN_AUTH_TOKEN` | Delivery edge; the token must match the Worker's value exactly |
 | `VIDEO_EXECUTOR_*`, `PDF_EXECUTOR_*` | Executor callbacks; tokens must match each Executor's `EXECUTOR_ROLE_TOKEN` |

@@ -1,7 +1,6 @@
 import { ProtocolError } from "./errors.js";
 import { parseSourceOriginRules, SpacePolicyValidationError } from "./space-policy.js";
 import type {
-  DerivativeKind,
   ExecutorClaim,
   ExecutorCompleteRequest,
   ExecutorFailRequest,
@@ -9,6 +8,7 @@ import type {
   FailedJobRepresentation,
   JobFailureCode,
   PreviewJobSubmission,
+  PreviewKind,
   SourceOriginRule,
 } from "./types.js";
 import { FAILURE_ACTIONS } from "./types.js";
@@ -59,7 +59,7 @@ function requireString(
   return value;
 }
 
-function requireKind(value: unknown): DerivativeKind {
+function requireKind(value: unknown): PreviewKind {
   if (value !== "video" && value !== "pdf") {
     throw new ProtocolError("request_invalid", "kind must be video or pdf");
   }

@@ -38,12 +38,12 @@ describe("Node protocol conformance", () => {
   });
 
   it("matches the canonical URL fixtures", () => {
-    const derivative = { width: 640, quality: 75 };
+    const parameters = { width: 640, quality: 75 };
     expect(
-      buildPublicResolverUrl("example-public", "uploadthing", "project/file one", derivative),
+      buildPublicResolverUrl("example-public", "uploadthing", "project/file one", parameters),
     ).toBe(URL_FIXTURES.publicResolver);
     expect(
-      buildPublicLocatedSourceUrl("example-public", "source/one", "capability.token", derivative),
+      buildPublicLocatedSourceUrl("example-public", "source/one", "capability.token", parameters),
     ).toBe(URL_FIXTURES.publicLocated);
     expect(
       buildPublicResolverDeliveryUrl("example-public", "uploadthing", "project/file one"),
@@ -51,16 +51,16 @@ describe("Node protocol conformance", () => {
     expect(buildPublicLocatedDeliveryUrl("example-public", "source/one", "capability.token")).toBe(
       URL_FIXTURES.publicLocatedDelivery,
     );
-    expect(buildPublicMasterUrl("example-public", "video", "source/one", derivative)).toBe(
+    expect(buildPublicMasterUrl("example-public", "video", "source/one", parameters)).toBe(
       URL_FIXTURES.publicMaster,
     );
-    expect(buildPrivateSourceUrl("example-private", "capability.token", derivative)).toBe(
+    expect(buildPrivateSourceUrl("example-private", "capability.token", parameters)).toBe(
       URL_FIXTURES.privateSource,
     );
     expect(buildPrivateDeliveryUrl("example-private", "capability.token")).toBe(
       URL_FIXTURES.privateDelivery,
     );
-    expect(buildPrivateMasterUrl("example-private", "capability.token", derivative)).toBe(
+    expect(buildPrivateMasterUrl("example-private", "capability.token", parameters)).toBe(
       URL_FIXTURES.privateMaster,
     );
     expect(buildPreviewJobUrl("example-private", "source/one", "pdf")).toBe(

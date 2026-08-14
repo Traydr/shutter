@@ -1,12 +1,12 @@
 import { SHUTTER_PLACEHOLDER_WIDTH, SHUTTER_WIDTHS } from "./constants.js";
 import { ProtocolError } from "./errors.js";
 
-export interface DerivativePolicyInput {
+export interface OptimizationPolicyInput {
   qualities: readonly number[];
   defaultQuality: number;
 }
 
-export interface NormalizedDerivativeQuery {
+export interface NormalizedOptimizationQuery {
   width: number;
   quality: number;
   isCanonical: boolean;
@@ -53,13 +53,13 @@ export function normalizeQuality(requestedQuality: number, permitted: readonly n
     });
 }
 
-export function normalizeDerivativeQuery(
+export function normalizeOptimizationQuery(
   query: URLSearchParams,
-  policy: DerivativePolicyInput,
-): NormalizedDerivativeQuery {
+  policy: OptimizationPolicyInput,
+): NormalizedOptimizationQuery {
   for (const key of query.keys()) {
     if (key !== "w" && key !== "q") {
-      throw new ProtocolError("query_invalid", `unknown derivative parameter: ${key}`);
+      throw new ProtocolError("query_invalid", `unknown optimization parameter: ${key}`);
     }
   }
   if (query.getAll("w").length !== 1 || query.getAll("q").length > 1) {

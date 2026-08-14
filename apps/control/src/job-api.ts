@@ -2,12 +2,12 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import {
   buildMasterPreviewKey,
   CONTROL_HTTP_ROUTES,
-  type DerivativeJobRepresentation,
-  type DerivativeKind,
   type ExecutorCompleteRequest,
   type ExecutorFailRequest,
   type ExecutorHeartbeatRequest,
   operationalEvent,
+  type PreviewJobRepresentation,
+  type PreviewKind,
   ProtocolError,
   parseExecutorCompleteRequest,
   parseExecutorFailRequest,
@@ -16,22 +16,22 @@ import {
   verifySourceCapability,
 } from "@shutter/protocol";
 import { Hono } from "hono";
+import { type ControlLogger, operationalErrorType } from "./logging.js";
 import type {
-  DerivativeJobLifecycle,
   JobIdentity,
   MasterCompletion,
-} from "./derivative-job-lifecycle.js";
-import { type ControlLogger, operationalErrorType } from "./logging.js";
+  PreviewJobLifecycle,
+} from "./preview-job-lifecycle.js";
 import type { SourcePurge } from "./source-purge.js";
 import type { ActiveSpaceAuthorization, SpaceRegistry } from "./spaces/registry.js";
 
 export interface JobApiRuntime {
   logger: ControlLogger;
-  lifecycle: DerivativeJobLifecycle;
+  lifecycle: PreviewJobLifecycle;
   now(): Date;
   spaceRegistry: SpaceRegistry;
-  executorToken(kind: DerivativeKind): string | undefined;
-  dispatch(kind: DerivativeKind): Promise<void>;
+  executorToken(kind: PreviewKind): string | undefined;
+  dispatch(kind: PreviewKind): Promise<void>;
   sourcePurge?: SourcePurge;
 }
 
@@ -51,7 +51,7 @@ function tokenMatches(actual: string | undefined, expected: readonly string[]): 
   });
 }
 
-function kind(value: string): DerivativeKind | undefined {
+function kind(value: string): PreviewKind | undefined {
   return value === "video" || value === "pdf" ? value : undefined;
 }
 
@@ -96,7 +96,7 @@ async function spaceAccess(
   }
 }
 
-function activeResponse(body: DerivativeJobRepresentation, location: string): Response {
+function activeResponse(body: PreviewJobRepresentation, location: string): Response {
   const active = body.status === "pending" || body.status === "processing";
   return Response.json(body, {
     status: active ? 202 : 200,

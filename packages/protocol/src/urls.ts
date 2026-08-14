@@ -1,6 +1,6 @@
-import type { DerivativeKind } from "./types.js";
+import type { PreviewKind } from "./types.js";
 
-interface DerivativeParameters {
+interface OptimizationParameters {
   width: number;
   quality: number;
 }
@@ -10,7 +10,7 @@ function segment(value: string): string {
   return encodeURIComponent(value);
 }
 
-function derivativeQuery({ width, quality }: DerivativeParameters): string {
+function optimizationQuery({ width, quality }: OptimizationParameters): string {
   return `w=${width}&q=${quality}`;
 }
 
@@ -18,18 +18,18 @@ export function buildPublicResolverUrl(
   spaceId: string,
   resolverId: string,
   sourceRef: string,
-  parameters: DerivativeParameters,
+  parameters: OptimizationParameters,
 ): string {
-  return `/v1/public/${segment(spaceId)}/resolver/${segment(resolverId)}/${segment(sourceRef)}?${derivativeQuery(parameters)}`;
+  return `/v1/public/${segment(spaceId)}/resolver/${segment(resolverId)}/${segment(sourceRef)}?${optimizationQuery(parameters)}`;
 }
 
 export function buildPublicLocatedSourceUrl(
   spaceId: string,
   sourceId: string,
   capability: string,
-  parameters: DerivativeParameters,
+  parameters: OptimizationParameters,
 ): string {
-  return `/v1/public/${segment(spaceId)}/located/${segment(sourceId)}/${segment(capability)}?${derivativeQuery(parameters)}`;
+  return `/v1/public/${segment(spaceId)}/located/${segment(sourceId)}/${segment(capability)}?${optimizationQuery(parameters)}`;
 }
 
 export function buildPublicResolverDeliveryUrl(
@@ -54,34 +54,30 @@ export function buildPrivateDeliveryUrl(spaceId: string, capability: string): st
 
 export function buildPublicMasterUrl(
   spaceId: string,
-  kind: DerivativeKind,
+  kind: PreviewKind,
   sourceId: string,
-  parameters: DerivativeParameters,
+  parameters: OptimizationParameters,
 ): string {
-  return `/v1/public/${segment(spaceId)}/master/${kind}/${segment(sourceId)}?${derivativeQuery(parameters)}`;
+  return `/v1/public/${segment(spaceId)}/master/${kind}/${segment(sourceId)}?${optimizationQuery(parameters)}`;
 }
 
 export function buildPrivateSourceUrl(
   spaceId: string,
   capability: string,
-  parameters: DerivativeParameters,
+  parameters: OptimizationParameters,
 ): string {
-  return `/v1/private/${segment(spaceId)}/source/${segment(capability)}?${derivativeQuery(parameters)}`;
+  return `/v1/private/${segment(spaceId)}/source/${segment(capability)}?${optimizationQuery(parameters)}`;
 }
 
 export function buildPrivateMasterUrl(
   spaceId: string,
   capability: string,
-  parameters: DerivativeParameters,
+  parameters: OptimizationParameters,
 ): string {
-  return `/v1/private/${segment(spaceId)}/master/${segment(capability)}?${derivativeQuery(parameters)}`;
+  return `/v1/private/${segment(spaceId)}/master/${segment(capability)}?${optimizationQuery(parameters)}`;
 }
 
-export function buildPreviewJobUrl(
-  spaceId: string,
-  sourceId: string,
-  kind: DerivativeKind,
-): string {
+export function buildPreviewJobUrl(spaceId: string, sourceId: string, kind: PreviewKind): string {
   return `/v1/spaces/${segment(spaceId)}/sources/${segment(sourceId)}/previews/${kind}`;
 }
 

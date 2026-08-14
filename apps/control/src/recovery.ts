@@ -1,15 +1,15 @@
-import { type DerivativeKind, operationalEvent } from "@shutter/protocol";
-import type { DerivativeJobLifecycle } from "./derivative-job-lifecycle.js";
+import { operationalEvent, type PreviewKind } from "@shutter/protocol";
 import type { ControlLogger } from "./logging.js";
+import type { PreviewJobLifecycle } from "./preview-job-lifecycle.js";
 
 export const RECOVERY_INTERVAL_MS = 5 * 60 * 1_000;
 export const RECOVERY_BATCH_SIZE = 100;
 
 export interface RecoveryRuntime {
   logger: ControlLogger;
-  lifecycle: DerivativeJobLifecycle;
+  lifecycle: PreviewJobLifecycle;
   now(): Date;
-  dispatch(kind: DerivativeKind): Promise<void>;
+  dispatch(kind: PreviewKind): Promise<void>;
 }
 
 export interface RecoveryResult {
@@ -20,7 +20,7 @@ export interface RecoveryResult {
 }
 
 async function dispatchKind(
-  kind: DerivativeKind,
+  kind: PreviewKind,
   count: number,
   dispatch: RecoveryRuntime["dispatch"],
   logger: ControlLogger,
@@ -46,7 +46,7 @@ async function dispatchKind(
 export async function runRecoverySweep(runtime: RecoveryRuntime): Promise<RecoveryResult> {
   const now = runtime.now();
   const maintenance = await runtime.lifecycle.maintain(now, RECOVERY_BATCH_SIZE);
-  const counts: Record<DerivativeKind, number> = { video: 0, pdf: 0 };
+  const counts: Record<PreviewKind, number> = { video: 0, pdf: 0 };
   for (const kind of maintenance.runnableKinds) counts[kind] += 1;
 
   const [video, pdf] = await Promise.all([

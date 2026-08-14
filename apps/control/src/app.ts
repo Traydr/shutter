@@ -14,7 +14,6 @@ import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
 import { Pool } from "pg";
 import { createAdminApp } from "./admin/app.js";
-import { PostgresDerivativeJobLifecycle } from "./derivative-job-lifecycle.js";
 import { EdgeRefreshTracker } from "./edge-refresh-status.js";
 import { env } from "./env/server.js";
 import { createSerializedExecutorDispatch, sendExecutorWake } from "./executor-dispatch.js";
@@ -22,6 +21,7 @@ import { buildImgproxyRequest, type ImgproxyConfig } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
 import { type ControlLogger, controlLogger, operationalErrorType } from "./logging.js";
 import { createMasterStore, type MasterStore } from "./master-store.js";
+import { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
 import { createSourcePurge } from "./source-purge.js";
 import { CapabilityKeyEncryption } from "./spaces/encryption.js";
 import { PostgresSpaceRegistry } from "./spaces/postgres-registry.js";
@@ -244,7 +244,7 @@ export function createControlApp(
     }
   }
 
-  control.get(CONTROL_HTTP_ROUTES.spikeDerivative, async (context) => {
+  control.get(CONTROL_HTTP_ROUTES.optimizeSource, async (context) => {
     if (!authorized(context.req.header("authorization"), runtime.originAuthToken())) {
       return context.json({ error: { code: "unauthorized" } }, 401, {
         "cache-control": "private, no-store",
@@ -311,7 +311,7 @@ export function createControlApp(
     try {
       const request = buildImgproxyRequest({ sourceUrl: source, width, quality }, imgproxy);
       runtime.logger.emit("info", {
-        event: "control.derivative.delegated",
+        event: "control.optimize.delegated",
         outcome: "accepted",
       });
       const response = await runtime.fetch(request.url, {
@@ -320,37 +320,37 @@ export function createControlApp(
       });
       if (!response.ok || response.body === null) {
         runtime.logger.emit("error", {
-          event: "control.derivative.failed",
+          event: "control.optimize.failed",
           outcome: "failed",
           failureCode: "service_unavailable",
         });
-        return context.json({ error: { code: "derivative_failed" } }, 502, {
+        return context.json({ error: { code: "optimization_failed" } }, 502, {
           "cache-control": "private, no-store",
         });
       }
       runtime.logger.emit("info", {
-        event: "control.derivative.delegated",
+        event: "control.optimize.delegated",
         outcome: "ready",
       });
       const headers = new Headers({
         "cache-control": "private, no-store",
         "content-type": response.headers.get("content-type") ?? "image/webp",
-        "x-shutter-derivative-key": key,
+        "x-shutter-cache-key": key,
       });
       return new Response(response.body, { status: 200, headers });
     } catch {
       runtime.logger.emit("error", {
-        event: "control.derivative.failed",
+        event: "control.optimize.failed",
         outcome: "failed",
         failureCode: "service_unavailable",
       });
-      return context.json({ error: { code: "derivative_failed" } }, 502, {
+      return context.json({ error: { code: "optimization_failed" } }, 502, {
         "cache-control": "private, no-store",
       });
     }
   });
 
-  control.post(CONTROL_HTTP_ROUTES.masterDerivative, async (context) => {
+  control.post(CONTROL_HTTP_ROUTES.optimizeMaster, async (context) => {
     if (!authorized(context.req.header("authorization"), runtime.originAuthToken())) {
       return context.json({ error: { code: "unauthorized" } }, 401, {
         "cache-control": "private, no-store",
@@ -409,7 +409,7 @@ export function createControlApp(
       if (imgproxy === undefined) throw new Error("imgproxy unavailable");
       const request = buildImgproxyRequest({ sourceUrl, width, quality }, imgproxy);
       runtime.logger.emit("info", {
-        event: "control.derivative.delegated",
+        event: "control.optimize.delegated",
         kind: value.kind,
         outcome: "accepted",
       });
@@ -417,9 +417,9 @@ export function createControlApp(
         headers: request.headers,
         redirect: "error",
       });
-      if (!response.ok || response.body === null) throw new Error("derivative failed");
+      if (!response.ok || response.body === null) throw new Error("optimization failed");
       runtime.logger.emit("info", {
-        event: "control.derivative.delegated",
+        event: "control.optimize.delegated",
         kind: value.kind,
         outcome: "ready",
       });
@@ -431,12 +431,12 @@ export function createControlApp(
       });
     } catch {
       runtime.logger.emit("error", {
-        event: "control.derivative.failed",
+        event: "control.optimize.failed",
         kind: value.kind as "video" | "pdf",
         outcome: "failed",
         failureCode: "service_unavailable",
       });
-      return context.json({ error: { code: "derivative_failed" } }, 502, {
+      return context.json({ error: { code: "optimization_failed" } }, 502, {
         "cache-control": "private, no-store",
       });
     }
@@ -478,8 +478,8 @@ const dispatchExecutor = createSerializedExecutorDispatch((kind) =>
 
 const databaseUrl = env.DATABASE_URL;
 const jobPool = databaseUrl === undefined ? undefined : new Pool({ connectionString: databaseUrl });
-const derivativeJobLifecycle =
-  jobPool === undefined ? undefined : new PostgresDerivativeJobLifecycle(jobPool);
+const previewJobLifecycle =
+  jobPool === undefined ? undefined : new PostgresPreviewJobLifecycle(jobPool);
 function configuredCapabilityKeyEncryption(): CapabilityKeyEncryption | undefined {
   if (env.SHUTTER_ENCRYPTION_KEY === undefined) return undefined;
   try {
@@ -513,7 +513,7 @@ const masterStore =
         secretAccessKey: env.S3_SECRET_ACCESS_KEY,
       })
     : undefined;
-const derivativeS3 =
+const mediaStoreS3 =
   env.S3_ENDPOINT && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY
     ? new S3Client({
         endpoint: env.S3_ENDPOINT,
@@ -526,8 +526,8 @@ const derivativeS3 =
       })
     : undefined;
 const sourcePurge =
-  derivativeS3 &&
-  derivativeJobLifecycle &&
+  mediaStoreS3 &&
+  previewJobLifecycle &&
   env.S3_BUCKET &&
   env.CLOUDFLARE_ZONE_ID &&
   env.CLOUDFLARE_CACHE_PURGE_TOKEN &&
@@ -535,8 +535,8 @@ const sourcePurge =
   env.ORIGIN_AUTH_TOKEN
     ? createSourcePurge({
         logger: controlLogger,
-        lifecycle: derivativeJobLifecycle,
-        s3: derivativeS3,
+        lifecycle: previewJobLifecycle,
+        s3: mediaStoreS3,
         bucket: env.S3_BUCKET,
         cloudflareZoneId: env.CLOUDFLARE_ZONE_ID,
         cloudflareApiToken: env.CLOUDFLARE_CACHE_PURGE_TOKEN,
@@ -547,10 +547,10 @@ const sourcePurge =
     : undefined;
 
 export const jobApiRuntime: JobApiRuntime | undefined =
-  derivativeJobLifecycle === undefined || spaceRegistry === undefined
+  previewJobLifecycle === undefined || spaceRegistry === undefined
     ? undefined
     : {
-        lifecycle: derivativeJobLifecycle,
+        lifecycle: previewJobLifecycle,
         now: () => new Date(),
         spaceRegistry,
         executorToken: (kind) =>

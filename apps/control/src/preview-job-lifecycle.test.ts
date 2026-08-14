@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import {
   JOB_RETRY_WINDOW_SECONDS,
   MAX_ATTEMPTS,
-  type PostgresDerivativeJobLifecycle,
+  type PostgresPreviewJobLifecycle,
   PROCESSING_LEASE_SECONDS,
   postgresSourceLockKey,
   RETRY_DELAYS_SECONDS,
-} from "./derivative-job-lifecycle.js";
-import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
+} from "./preview-job-lifecycle.js";
 
 const start = new Date("2026-01-01T00:00:00.000Z");
 const identity = { spaceId: "example-private", sourceId: "source-1", kind: "video" as const };
@@ -24,9 +24,9 @@ const master = {
   objectEtag: "etag",
 };
 
-describe("Postgres Derivative Job lifecycle", () => {
+describe("Postgres Preview Job lifecycle", () => {
   let test: PostgresTestLifecycle;
-  let lifecycle: PostgresDerivativeJobLifecycle;
+  let lifecycle: PostgresPreviewJobLifecycle;
 
   beforeAll(async () => {
     test = await createPostgresTestLifecycle();
@@ -36,7 +36,7 @@ describe("Postgres Derivative Job lifecycle", () => {
   afterAll(async () => test.close());
 
   beforeEach(async () => {
-    await test.pool.query("truncate table derivative_jobs");
+    await test.pool.query("truncate table preview_jobs");
   });
 
   it("builds source-lock keys without forbidden NUL bytes or tuple collisions", () => {
@@ -73,7 +73,7 @@ describe("Postgres Derivative Job lifecycle", () => {
     });
   });
 
-  it("claims one Derivative Job only once across concurrent connections", async () => {
+  it("claims one Preview Job only once across concurrent connections", async () => {
     await lifecycle.submit(input, start);
     const claims = await Promise.all([
       lifecycle.claim("video", start),
@@ -126,7 +126,7 @@ describe("Postgres Derivative Job lifecycle", () => {
       runnableKinds: [],
     });
 
-    await test.pool.query("truncate table derivative_jobs");
+    await test.pool.query("truncate table preview_jobs");
     await lifecycle.submit(input, start);
     await lifecycle.claim("video", start);
     const recoveredAt = new Date(start.getTime() + PROCESSING_LEASE_SECONDS * 1_000 + 1);
@@ -143,7 +143,7 @@ describe("Postgres Derivative Job lifecycle", () => {
       start,
     );
     const row = await test.pool.query<{ retry_deadline_at: Date }>(
-      "select retry_deadline_at from derivative_jobs",
+      "select retry_deadline_at from preview_jobs",
     );
     expect(row.rows[0]?.retry_deadline_at).toEqual(
       new Date(start.getTime() + JOB_RETRY_WINDOW_SECONDS * 1_000),

@@ -1,4 +1,4 @@
-# V1 Derivative Job lifetime
+# V1 Preview Job lifetime
 
 - Source Capability lifetime: 24 hours from submission.
 - Minimum Source Locator validity: 24 hours and 5 minutes from submission.

@@ -7,7 +7,7 @@ export interface ImgproxyConfig {
   secret: string;
 }
 
-export interface ImgproxyDerivative {
+export interface ImgproxyOptimization {
   sourceUrl: string;
   width: number;
   quality: number;
@@ -35,7 +35,7 @@ function imgproxyOrigin(value: string): string {
   return url.origin;
 }
 
-function validateDerivative({ sourceUrl, width, quality }: ImgproxyDerivative): void {
+function validateOptimization({ sourceUrl, width, quality }: ImgproxyOptimization): void {
   const source = new URL(sourceUrl);
   if (
     source.protocol !== "https:" ||
@@ -52,14 +52,14 @@ function validateDerivative({ sourceUrl, width, quality }: ImgproxyDerivative): 
 }
 
 export function buildImgproxyRequest(
-  derivative: ImgproxyDerivative,
+  optimization: ImgproxyOptimization,
   config: ImgproxyConfig,
 ): { url: string; headers: Headers } {
-  validateDerivative(derivative);
+  validateOptimization(optimization);
   if (config.secret.length < 32) throw new Error("IMGPROXY_SECRET must be at least 32 characters");
 
-  const source = Buffer.from(derivative.sourceUrl, "utf8").toString("base64url");
-  const processingPath = `/rs:fit:${derivative.width}:0:0/q:${derivative.quality}/${source}.webp`;
+  const source = Buffer.from(optimization.sourceUrl, "utf8").toString("base64url");
+  const processingPath = `/rs:fit:${optimization.width}:0:0/q:${optimization.quality}/${source}.webp`;
   const signature = createHmac("sha256", decodeHex("IMGPROXY_KEY", config.key))
     .update(decodeHex("IMGPROXY_SALT", config.salt))
     .update(processingPath)

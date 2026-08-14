@@ -4,8 +4,8 @@
   "version": "7",
   "dialect": "postgresql",
   "tables": {
-    "public.derivative_jobs": {
-      "name": "derivative_jobs",
+    "public.preview_jobs": {
+      "name": "preview_jobs",
       "schema": "",
       "columns": {
         "space_id": {
@@ -134,8 +134,8 @@
         }
       },
       "indexes": {
-        "derivative_jobs_claim_idx": {
-          "name": "derivative_jobs_claim_idx",
+        "preview_jobs_claim_idx": {
+          "name": "preview_jobs_claim_idx",
           "columns": [
             {
               "expression": "kind",
@@ -164,25 +164,25 @@
       },
       "foreignKeys": {},
       "compositePrimaryKeys": {
-        "derivative_jobs_space_id_source_id_kind_pk": {
-          "name": "derivative_jobs_space_id_source_id_kind_pk",
+        "preview_jobs_space_id_source_id_kind_pk": {
+          "name": "preview_jobs_space_id_source_id_kind_pk",
           "columns": ["space_id", "source_id", "kind"]
         }
       },
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "derivative_jobs_kind_check": {
-          "name": "derivative_jobs_kind_check",
-          "value": "\"derivative_jobs\".\"kind\" in ('video', 'pdf')"
+        "preview_jobs_kind_check": {
+          "name": "preview_jobs_kind_check",
+          "value": "\"preview_jobs\".\"kind\" in ('video', 'pdf')"
         },
-        "derivative_jobs_status_check": {
-          "name": "derivative_jobs_status_check",
-          "value": "\"derivative_jobs\".\"status\" in ('pending', 'processing', 'ready', 'failed')"
+        "preview_jobs_status_check": {
+          "name": "preview_jobs_status_check",
+          "value": "\"preview_jobs\".\"status\" in ('pending', 'processing', 'ready', 'failed')"
         },
-        "derivative_jobs_counter_check": {
-          "name": "derivative_jobs_counter_check",
-          "value": "\"derivative_jobs\".\"execution_cycle\" >= 0 and \"derivative_jobs\".\"attempt_number\" >= 0"
+        "preview_jobs_counter_check": {
+          "name": "preview_jobs_counter_check",
+          "value": "\"preview_jobs\".\"execution_cycle\" >= 0 and \"preview_jobs\".\"attempt_number\" >= 0"
         }
       },
       "isRLSEnabled": false

@@ -1,4 +1,4 @@
-# V1 Derivative Policy
+# V1 Optimization Policy
 
 ## Canonical widths
 
@@ -57,4 +57,4 @@ quality.
 - R2 optimized-image cache: 30 days after object creation.
 - Public UploadThing resolver: no Source Capability.
 - Public presigned locator: capability excluded from the CDN cache key, so a
-  renewed locator reuses the existing public derivative.
+  renewed locator reuses the existing public optimized image.

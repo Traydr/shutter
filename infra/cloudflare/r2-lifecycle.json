@@ -1,7 +1,7 @@
 {
   "rules": [
     {
-      "id": "expire-disposable-derivatives-after-30-days",
+      "id": "expire-delivery-cache-after-30-days",
       "enabled": true,
       "conditions": {
         "prefix": "cache/"

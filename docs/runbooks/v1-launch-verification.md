@@ -39,8 +39,8 @@ and the repository.
   role-token references match Control.
 - Control and imgproxy share the signing key, salt, and bearer secret.
 - Edge declares `EDGE_CONFIG_TOKEN`, `ORIGIN_AUTH_TOKEN`, and `ORIGIN_BASE_URL`.
-  Its snapshot token matches Control, and `DERIVATIVE_STORE` binds to the
-  deployment's Derivative Store bucket.
+  Its snapshot token matches Control, and `MEDIA_STORE` binds to the
+  deployment's Media Store bucket.
 - The live imgproxy allowlist still needs the reviewed Railway IaC update that
   adds the exact R2 hostname before first-request Master Preview rendering.
 

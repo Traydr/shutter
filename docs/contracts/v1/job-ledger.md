@@ -1,6 +1,6 @@
-# V1 Derivative Job ledger
+# V1 Preview Job ledger
 
-`derivative_jobs` is the current-state job ledger. Drizzle migrations own its
+`preview_jobs` is the current-state job ledger. Drizzle migrations own its
 schema. Space Registry tables store policy and credentials separately. No
 Source, Asset, attempt-history, purge, or delivery-token tables exist in v1.
 

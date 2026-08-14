@@ -114,7 +114,7 @@ describe("edge app", () => {
       width: 640,
       quality: 75,
     };
-    await env.DERIVATIVE_STORE.put(await buildR2CacheKey(identity), "private-source-derivative", {
+    await env.MEDIA_STORE.put(await buildR2CacheKey(identity), "private-source-image", {
       httpMetadata: { contentType: "image/webp" },
     });
 
@@ -122,7 +122,7 @@ describe("edge app", () => {
       `https://edge.shutter.test/v1/private/example-private/source/${tamper(token)}?w=640&q=75`,
     );
     expect(tampered.status).toBe(403);
-    expect(await tampered.text()).not.toContain("private-source-derivative");
+    expect(await tampered.text()).not.toContain("private-source-image");
 
     const first = await SELF.fetch(
       `https://edge.shutter.test/v1/private/example-private/source/${token}?w=640&q=75`,
@@ -130,7 +130,7 @@ describe("edge app", () => {
     expect(first.status).toBe(200);
     expect(first.headers.get("cache-control")).toBe("private, no-store");
     expect(first.headers.get("x-shutter-cache")).toBe("r2-hit");
-    expect(new TextDecoder().decode(await first.arrayBuffer())).toBe("private-source-derivative");
+    expect(new TextDecoder().decode(await first.arrayBuffer())).toBe("private-source-image");
 
     const second = await SELF.fetch(
       `https://edge.shutter.test/v1/private/example-private/source/${token}?w=640&q=75`,
@@ -161,7 +161,7 @@ describe("edge app", () => {
       width: 640,
       quality: 75,
     };
-    await env.DERIVATIVE_STORE.put(await buildR2CacheKey(identity), "private-derivative", {
+    await env.MEDIA_STORE.put(await buildR2CacheKey(identity), "private-image", {
       httpMetadata: { contentType: "image/webp" },
     });
 
@@ -169,7 +169,7 @@ describe("edge app", () => {
       `https://edge.shutter.test/v1/private/example-private/master/${tamper(token)}?w=640&q=75`,
     );
     expect(tampered.status).toBe(403);
-    expect(await tampered.text()).not.toContain("private-derivative");
+    expect(await tampered.text()).not.toContain("private-image");
 
     const first = await SELF.fetch(
       `https://edge.shutter.test/v1/private/example-private/master/${token}?w=640&q=75`,
@@ -177,13 +177,13 @@ describe("edge app", () => {
     expect(first.status).toBe(200);
     expect(first.headers.get("cache-control")).toBe("private, no-store");
     expect(first.headers.get("x-shutter-cache")).toBe("r2-hit");
-    expect(new TextDecoder().decode(await first.arrayBuffer())).toBe("private-derivative");
+    expect(new TextDecoder().decode(await first.arrayBuffer())).toBe("private-image");
 
     const second = await SELF.fetch(
       `https://edge.shutter.test/v1/private/example-private/master/${token}?w=640&q=75`,
     );
     expect(second.headers.get("x-shutter-cache")).toBe("edge-hit");
-    expect(new TextDecoder().decode(await second.arrayBuffer())).toBe("private-derivative");
+    expect(new TextDecoder().decode(await second.arrayBuffer())).toBe("private-image");
   });
 
   it("renders a private master miss through the authenticated master bridge", async () => {
@@ -216,7 +216,7 @@ describe("edge app", () => {
     expect(await response.text()).toBe("rendered-private-master");
     expect(origin).toHaveBeenCalledOnce();
     expect(origin.mock.calls[0]?.[0].toString()).toBe(
-      "https://origin.shutter.test/internal/v1/master-derivative",
+      "https://origin.shutter.test/internal/v1/optimize-master",
     );
   });
 
@@ -230,7 +230,7 @@ describe("edge app", () => {
         width: 640,
         quality: 75,
       };
-      await env.DERIVATIVE_STORE.put(await buildR2CacheKey(identity), `${kind}-master`, {
+      await env.MEDIA_STORE.put(await buildR2CacheKey(identity), `${kind}-master`, {
         httpMetadata: { contentType: "image/webp" },
       });
       const first = await SELF.fetch(
@@ -298,7 +298,7 @@ describe("edge app", () => {
       width: 640,
       quality: 75,
     };
-    await env.DERIVATIVE_STORE.put(await buildR2CacheKey(identity), "public-derivative", {
+    await env.MEDIA_STORE.put(await buildR2CacheKey(identity), "public-image", {
       httpMetadata: { contentType: "image/webp" },
     });
 
@@ -309,7 +309,7 @@ describe("edge app", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("x-shutter-cache")).toBe("r2-hit");
     expect(response.headers.get("cache-control")).toBe("public, max-age=86400, s-maxage=2592000");
-    expect(new TextDecoder().decode(await response.arrayBuffer())).toBe("public-derivative");
+    expect(new TextDecoder().decode(await response.arrayBuffer())).toBe("public-image");
   });
 
   it("fails a public located-source miss closed before contacting the origin", async () => {
@@ -381,7 +381,7 @@ describe("edge app", () => {
       width: 640,
       quality: 75,
     };
-    await env.DERIVATIVE_STORE.put(await buildR2CacheKey(identity), "example-public-derivative", {
+    await env.MEDIA_STORE.put(await buildR2CacheKey(identity), "example-public-image", {
       httpMetadata: { contentType: "image/webp" },
     });
 
@@ -391,9 +391,7 @@ describe("edge app", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers.get("x-shutter-cache")).toBe("r2-hit");
-    expect(new TextDecoder().decode(await response.arrayBuffer())).toBe(
-      "example-public-derivative",
-    );
+    expect(new TextDecoder().decode(await response.arrayBuffer())).toBe("example-public-image");
   });
 
   it("normalizes public resolver parameters and rejects unallowlisted projects", async () => {

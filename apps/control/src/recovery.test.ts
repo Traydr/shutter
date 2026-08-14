@@ -1,14 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PostgresDerivativeJobLifecycle } from "./derivative-job-lifecycle.js";
 import type { ControlLogger } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
+import type { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
 import { runRecoverySweep } from "./recovery.js";
 
 const start = new Date("2026-07-12T00:00:00Z");
 const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
 
 async function submit(
-  lifecycle: PostgresDerivativeJobLifecycle,
+  lifecycle: PostgresPreviewJobLifecycle,
   sourceId: string,
   kind: "video" | "pdf",
 ) {
@@ -26,7 +26,7 @@ async function submit(
 
 describe("job recovery sweep", () => {
   let test: PostgresTestLifecycle;
-  let lifecycle: PostgresDerivativeJobLifecycle;
+  let lifecycle: PostgresPreviewJobLifecycle;
 
   beforeAll(async () => {
     test = await createPostgresTestLifecycle();
@@ -36,7 +36,7 @@ describe("job recovery sweep", () => {
   afterAll(async () => test.close());
 
   beforeEach(async () => {
-    await test.pool.query("truncate table derivative_jobs");
+    await test.pool.query("truncate table preview_jobs");
   });
 
   it("dispatches one wake for every runnable job and separates executor kinds", async () => {

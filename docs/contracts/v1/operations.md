@@ -20,7 +20,7 @@ behavior to avoid a plan limit.
 - Characteristic: client IP.
 - Initial rate: 300 requests per 10 seconds.
 - Cached requests count, because private and public located-source hits invoke
-  the Worker even when derivative bytes are cached.
+  the Worker even when optimized image bytes are cached.
 - Mitigation: block for the supported 10-second Free-plan window.
 
 The threshold is validated against representative public pages and large private galleries before production cutover. Cloudflare rate counters are not a

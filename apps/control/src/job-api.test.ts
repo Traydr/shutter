@@ -1,9 +1,9 @@
 import { issueSourceCapability } from "@shutter/protocol";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PostgresDerivativeJobLifecycle } from "./derivative-job-lifecycle.js";
 import { createJobApi } from "./job-api.js";
 import type { ControlLogger } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
+import type { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
 import { MemorySpaceRegistry } from "./spaces/memory-registry.js";
 
 const KEY = Uint8Array.from({ length: 32 }, (_, index) => index);
@@ -31,7 +31,7 @@ async function capability(): Promise<string> {
 }
 
 function runtime(
-  lifecycle: PostgresDerivativeJobLifecycle,
+  lifecycle: PostgresPreviewJobLifecycle,
   dispatch = vi.fn(async () => {}),
   sourcePurge?: { purge(source: { spaceId: string; sourceId: string }): Promise<void> },
   logger: ControlLogger = NOOP_LOGGER,
@@ -49,7 +49,7 @@ function runtime(
 
 describe("job API", () => {
   let test: PostgresTestLifecycle;
-  let lifecycle: PostgresDerivativeJobLifecycle;
+  let lifecycle: PostgresPreviewJobLifecycle;
 
   beforeAll(async () => {
     test = await createPostgresTestLifecycle();
@@ -57,7 +57,7 @@ describe("job API", () => {
   });
 
   beforeEach(async () => {
-    await test.pool.query("truncate table derivative_jobs");
+    await test.pool.query("truncate table preview_jobs");
     spaceRegistry = new MemorySpaceRegistry({
       now: () => NOW,
       spaces: [

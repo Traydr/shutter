@@ -13,8 +13,8 @@
   },
   "r2_buckets": [
     {
-      "binding": "DERIVATIVE_STORE",
-      "bucket_name": "shutter-derivatives-local"
+      "binding": "MEDIA_STORE",
+      "bucket_name": "shutter-media-local"
     }
   ],
   "secrets": {

@@ -7,7 +7,7 @@ provider evidence required to close Phase 2.
 
 ## Cloudflare
 
-1. Create the private Derivative Store R2 bucket selected in the local deployment input.
+1. Create the private Media Store R2 bucket selected in the local deployment input.
 2. Apply `infra/cloudflare/r2-lifecycle.json` with:
 
    ```sh
@@ -69,11 +69,11 @@ Cloudflare values only after the new snapshot path is stable.
 
 ## Live evidence
 
-- Direct requests to `/internal/v1/spike/derivative` without the Worker origin
+- Direct requests to `/internal/v1/optimize-source` without the Worker origin
   bearer return `401` and no bytes. imgproxy does the same without its separate
   bearer and rejects unsigned paths.
 - A private master request with a tampered, expired, wrong-Space, or
-  wrong-purpose capability returns no derivative bytes, including when its
+  wrong-purpose capability returns no image bytes, including when its
   canonical Cache API and R2 entries exist.
 - A valid private request reports `r2-hit` after Cache API eviction and
   `edge-hit` on the following request, while the browser response remains
@@ -109,7 +109,7 @@ the provider secret stores or the private operational record—not in this repo.
 - Purging that cache tag forced the next request back to `r2-hit`.
 - Deleting the synthetic R2 object before purging its tag prevented
   repopulation; the next invalid-capability request returned `403` with
-  `Cache-Control: private, no-store` and no derivative bytes.
+  `Cache-Control: private, no-store` and no image bytes.
 - Pending: valid private capability renewal/key-rotation evidence, a live
   Control-to-imgproxy source render, unsigned imgproxy rejection, and focused
   AES-GCM/private-cache-hit CPU measurements.
