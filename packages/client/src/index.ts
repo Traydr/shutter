@@ -59,15 +59,22 @@ export type PreviewJobResult =
 export class ShutterClientError extends Error {
   readonly status: number | undefined;
   readonly code: string | undefined;
+  /** Parsed Retry-After header when the failing response carried one. */
+  readonly retryAfterSeconds: number | undefined;
 
   constructor(
     message: string,
-    options?: { status?: number | undefined; code?: string | undefined },
+    options?: {
+      status?: number | undefined;
+      code?: string | undefined;
+      retryAfterSeconds?: number | undefined;
+    },
   ) {
     super(message);
     this.name = "ShutterClientError";
     this.status = options?.status;
     this.code = options?.code;
+    this.retryAfterSeconds = options?.retryAfterSeconds;
   }
 }
 
@@ -108,9 +115,11 @@ async function errorFromResponse(response: Response): Promise<ShutterClientError
   } catch {
     // Non-JSON error bodies keep the HTTP status as the only detail.
   }
+  const retryAfter = Number(response.headers.get("retry-after"));
   return new ShutterClientError(`Shutter responded ${response.status}`, {
     status: response.status,
     code,
+    retryAfterSeconds: Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter : undefined,
   });
 }
 
@@ -170,7 +179,9 @@ export class ShutterClient {
 
   constructor(config: ShutterClientConfig) {
     this.#config = config;
-    this.#fetch = config.fetch ?? globalThis.fetch.bind(globalThis);
+    // Late-bound so test harnesses that stub globalThis.fetch after
+    // construction are still observed.
+    this.#fetch = config.fetch ?? ((input, init) => globalThis.fetch(input, init));
   }
 
   // Capabilities
