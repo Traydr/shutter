@@ -90,6 +90,13 @@ The Edge deploy command regenerates the ignored Wrangler file from the same
 public input. The committed local config has no custom domain and uses a local
 R2 bucket name.
 
+Cloudflare Workers Builds runs `pnpm --filter @shutter/edge deploy:preview`,
+which performs the same regeneration first. CI has no checkout of the ignored
+input file, so set the public inputs from `.railway/deployment.env` as build
+environment variables on the Workers Builds settings page. They contain no
+secrets. Without them the deploy fails with "Missing .railway/deployment.env
+and no SHUTTER_* variables are set".
+
 ## Registry and route acceptance
 
 Open `https://CONTROL_DOMAIN/admin`. Create one public Space and one private

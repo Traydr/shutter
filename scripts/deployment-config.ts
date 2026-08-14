@@ -8,6 +8,7 @@ import {
   parseDeploymentEnvFile,
   parseDeploymentInput,
   parseRailwayTarget,
+  publicInputKeys,
 } from "../.railway/deployment-input.ts";
 
 const execFile = promisify(execFileCallback);
@@ -36,15 +37,29 @@ interface CurrentEnvironment {
 
 export async function loadDeploymentEnvironment(): Promise<Environment> {
   const source = await readFile(inputPath, "utf8").catch((error) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error(
-        "Missing .railway/deployment.env. Run scripts/bootstrap-deployment.sh first.",
-      );
-    }
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;
   });
-  const environment = parseDeploymentEnvFile(source);
+  const environment =
+    source === undefined ? deploymentEnvironmentFromProcess() : parseDeploymentEnvFile(source);
   parseCloudflareBootstrapState(environment);
+  return environment;
+}
+
+// CI (Cloudflare Workers Builds) has no checkout of the git-ignored input
+// file; it supplies the same public inputs as build environment variables.
+function deploymentEnvironmentFromProcess(): Environment {
+  const environment: Environment = {};
+  for (const key of publicInputKeys) {
+    const value = process.env[key];
+    if (value !== undefined && value !== "") environment[key] = value;
+  }
+  if (Object.keys(environment).length === 0) {
+    throw new Error(
+      "Missing .railway/deployment.env and no SHUTTER_* variables are set. " +
+        "Run scripts/bootstrap-deployment.sh, or export the public inputs in CI.",
+    );
+  }
   return environment;
 }
 
