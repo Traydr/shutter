@@ -80,9 +80,10 @@ Full wire behavior: [delivery URLs](./docs/contracts/v1/delivery-urls.md) ·
 
 ## Usage
 
-Your application mints capabilities and builds URLs with `@shutter/protocol`.
-Nothing about the source leaves your side except what a single capability
-authorizes.
+Your application mints capabilities and builds URLs with `@shutter/protocol`,
+or uses [`@shutter/client`](./packages/client/), which wraps every consumer
+endpoint behind one configured object. Nothing about the source leaves your
+side except what a single capability authorizes.
 
 ### Issue a capability
 
@@ -235,6 +236,7 @@ A few properties fall out of those decisions:
 | `apps/control` | Control plane: job API, ledger, purge, imgproxy signing |
 | `apps/executor-video`, `apps/executor-pdf` | Isolated Master Preview executors |
 | `packages/protocol` | Capability crypto, URL construction, cache identity |
+| `packages/client` | Server-side client for consuming applications: capabilities, delivery URLs, Preview Jobs, purge |
 | `packages/testkit` | Cross-consumer conformance fixtures |
 | `packages/executor-runtime` | Shared claim, heartbeat, upload, and cleanup work cycle |
 | `packages/observability-node` | Structured logging and OTLP export for Node services |
