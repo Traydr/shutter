@@ -1,7 +1,9 @@
 import {
   buildCanonicalCacheUrl,
+  buildOptimizeSourceQuery,
   buildR2CacheKey,
   buildSourceCacheTag,
+  CONTROL_HTTP_ROUTES,
   emitOperationalEvent,
   normalizeOptimizationQuery,
   type OptimizationCacheIdentity,
@@ -61,16 +63,16 @@ async function readR2Response(bucket: R2Bucket, key: string): Promise<Response |
 
 async function fetchOrigin(
   bindings: CloudflareBindings,
-  key: string,
+  identity: OptimizationCacheIdentity,
   sourceUrl: string,
-  width: number,
-  quality: number,
 ): Promise<Response> {
-  const originUrl = new URL("/internal/v1/optimize-source", bindings.ORIGIN_BASE_URL);
-  originUrl.searchParams.set("key", key);
-  originUrl.searchParams.set("source", sourceUrl);
-  originUrl.searchParams.set("w", String(width));
-  originUrl.searchParams.set("q", String(quality));
+  const originUrl = new URL(CONTROL_HTTP_ROUTES.optimizeSource, bindings.ORIGIN_BASE_URL);
+  originUrl.search = buildOptimizeSourceQuery({
+    spaceId: identity.spaceId,
+    sourceUrl,
+    width: identity.width,
+    quality: identity.quality,
+  }).toString();
   const response = await fetch(originUrl, {
     headers: { authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}` },
     redirect: "manual",
@@ -86,21 +88,24 @@ async function fetchMasterOrigin(
   identity: OptimizationCacheIdentity,
 ): Promise<Response> {
   if (identity.input.type !== "master") throw new Error("master input required");
-  const response = await fetch(new URL("/internal/v1/optimize-master", bindings.ORIGIN_BASE_URL), {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}`,
-      "content-type": "application/json",
+  const response = await fetch(
+    new URL(CONTROL_HTTP_ROUTES.optimizeMaster, bindings.ORIGIN_BASE_URL),
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        spaceId: identity.spaceId,
+        sourceId: identity.sourceId,
+        kind: identity.input.kind,
+        w: identity.width,
+        q: identity.quality,
+      }),
+      redirect: "manual",
     },
-    body: JSON.stringify({
-      spaceId: identity.spaceId,
-      sourceId: identity.sourceId,
-      kind: identity.input.kind,
-      w: identity.width,
-      q: identity.quality,
-    }),
-    redirect: "manual",
-  });
+  );
   if (!response.ok) throw new Error(`origin returned ${response.status}`);
   return response;
 }
@@ -115,7 +120,7 @@ async function populateCaches(
   const origin =
     sourceUrl === undefined
       ? await fetchMasterOrigin(bindings, identity)
-      : await fetchOrigin(bindings, key, sourceUrl, identity.width, identity.quality);
+      : await fetchOrigin(bindings, identity, sourceUrl);
   const bytes = await origin.arrayBuffer();
   const contentType = origin.headers.get("content-type") ?? "application/octet-stream";
   await bindings.MEDIA_STORE.put(key, bytes, {

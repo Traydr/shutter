@@ -78,7 +78,10 @@ that review:
 pnpm deployment:apply
 ```
 
-Render and deploy the Worker only after Control reports healthy:
+Render and deploy the Worker only after Control reports healthy. The Worker
+and Control share the internal optimize wire (`/internal/v1/optimize-source`
+and `/internal/v1/optimize-master`), so a change to either side of that wire
+deploys both in the same release: Control first, then the Worker.
 
 ```sh
 curl --fail --silent --show-error https://CONTROL_DOMAIN/healthz
@@ -124,6 +127,8 @@ private operational record, not in this repository.
 ## Rollback
 
 Keep the previous Worker version and previous application delivery path until
-the observation period ends. Roll back Edge independently if authorization,
-bytes, or cache behavior regresses. Do not weaken capability checks. Do not
-delete Postgres data or R2 objects while they are needed for diagnosis.
+the observation period ends. Roll back Edge alone only when the release did not
+change the internal optimize wire; when it did, roll Control and the Worker back
+together, in the same order they were deployed, because an old Worker sends a
+query the new Control rejects and vice versa. Do not weaken capability checks.
+Do not delete Postgres data or R2 objects while they are needed for diagnosis.

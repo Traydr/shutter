@@ -4,8 +4,10 @@ import {
   buildMasterPreviewKey,
   CONTROL_HTTP_ROUTES,
   type ControlHttpRoute,
+  type OptimizeSourceQuery,
   ProtocolError,
   parseEdgeConfigRefreshReport,
+  parseOptimizeSourceQuery,
   type SpacePolicy,
   serializeEdgeConfigSnapshot,
   validateSourceLocator,
@@ -68,41 +70,6 @@ function authorized(header: string | undefined, expectedToken: string | undefine
     credentialDigest(header.slice(prefix.length)),
     credentialDigest(expectedToken),
   );
-}
-
-function isCacheKey(value: string): boolean {
-  return (
-    value.startsWith("cache/v1/") &&
-    value.endsWith(".webp") &&
-    !value.includes("..") &&
-    !value.includes("\\")
-  );
-}
-
-function spaceIdFromCacheKey(key: string): string | undefined {
-  const segments = key.split("/");
-  // cache/v1/{routeClass}/{spaceId}/{fingerprint}/{input}/wN-qN.webp
-  if (segments.length < 6 || segments[0] !== "cache" || segments[1] !== "v1") return undefined;
-  const routeClass = segments[2];
-  const spaceId = segments[3];
-  if (
-    (routeClass !== "public" && routeClass !== "private") ||
-    spaceId === undefined ||
-    spaceId.length === 0
-  ) {
-    return undefined;
-  }
-  try {
-    return decodeURIComponent(spaceId);
-  } catch {
-    return undefined;
-  }
-}
-
-function strictPositiveInteger(value: string | null): number | undefined {
-  if (value === null || !/^[1-9]\d*$/u.test(value)) return undefined;
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 async function activeSpacePolicy(
@@ -252,36 +219,22 @@ export function createControlApp(
       });
     }
 
-    const query = new URL(context.req.url).searchParams;
-    const allowedKeys = new Set(["key", "source", "w", "q"]);
-    if (
-      [...query.keys()].some((key) => !allowedKeys.has(key)) ||
-      [...allowedKeys].some((key) => query.getAll(key).length !== 1)
-    ) {
+    let query: OptimizeSourceQuery;
+    try {
+      query = parseOptimizeSourceQuery(new URL(context.req.url).searchParams);
+    } catch (error) {
+      if (!(error instanceof ProtocolError)) throw error;
       return context.json({ error: { code: "request_invalid" } }, 400, {
         "cache-control": "private, no-store",
       });
     }
-    const key = query.get("key");
-    const source = query.get("source");
-    const width = strictPositiveInteger(query.get("w"));
-    const quality = strictPositiveInteger(query.get("q"));
     const imgproxy = runtime.imgproxyConfig();
-    const spaceId = key === null ? undefined : spaceIdFromCacheKey(key);
-    if (
-      key === null ||
-      !isCacheKey(key) ||
-      spaceId === undefined ||
-      source === null ||
-      width === undefined ||
-      quality === undefined ||
-      quality > 100 ||
-      imgproxy === undefined
-    ) {
+    if (imgproxy === undefined) {
       return context.json({ error: { code: "request_invalid" } }, 400, {
         "cache-control": "private, no-store",
       });
     }
+    const { spaceId, sourceUrl: source, width, quality } = query;
 
     let policy: SpacePolicy | undefined;
     try {
@@ -335,7 +288,6 @@ export function createControlApp(
       const headers = new Headers({
         "cache-control": "private, no-store",
         "content-type": response.headers.get("content-type") ?? "image/webp",
-        "x-shutter-cache-key": key,
       });
       return new Response(response.body, { status: 200, headers });
     } catch {

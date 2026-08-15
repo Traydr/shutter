@@ -369,6 +369,20 @@ describe("edge app", () => {
       "origin",
     ]);
     expect(origin).toHaveBeenCalledTimes(3);
+    const originUrls = origin.mock.calls.map(([input]) => new URL(input.toString()));
+    for (const url of originUrls) {
+      expect(url.pathname).toBe("/internal/v1/optimize-source");
+      expect(url.searchParams.has("key")).toBe(false);
+      expect([...url.searchParams.keys()].sort()).toEqual(["q", "source", "space", "w"]);
+    }
+    expect(originUrls.map((url) => url.searchParams.get("space"))).toEqual([
+      "example-private",
+      "example-public",
+      "example-public",
+    ]);
+    expect(originUrls[0]?.searchParams.get("source")).toBe(
+      "https://sources.example.com/private/originals/private-source-miss.webp",
+    );
   });
 
   it("serves an allowlisted UploadThing resolver reference from canonical public cache identity", async () => {

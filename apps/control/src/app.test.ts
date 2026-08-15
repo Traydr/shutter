@@ -1,4 +1,8 @@
-import { buildMasterPreviewKey, parseEdgeConfigSnapshot } from "@shutter/protocol";
+import {
+  buildMasterPreviewKey,
+  buildOptimizeSourceQuery,
+  parseEdgeConfigSnapshot,
+} from "@shutter/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { createControlApp } from "./app.js";
 import { EdgeRefreshTracker } from "./edge-refresh-status.js";
@@ -29,13 +33,12 @@ const SPACE_REGISTRY = new MemorySpaceRegistry({
 
 function spikeUrl(): string {
   const url = new URL("http://shutter.test/internal/v1/optimize-source");
-  url.searchParams.set(
-    "key",
-    "cache/v1/private/example-private/gMNnP86xbOKzyOCG34XyJJ5czSTAojiMAnH4AQSdh9s/source/w640-q75.webp",
-  );
-  url.searchParams.set("source", "https://sources.example.com/private/originals/test.jpg");
-  url.searchParams.set("w", "640");
-  url.searchParams.set("q", "75");
+  url.search = buildOptimizeSourceQuery({
+    spaceId: "example-private",
+    sourceUrl: "https://sources.example.com/private/originals/test.jpg",
+    width: 640,
+    quality: 75,
+  }).toString();
   return url.href;
 }
 
@@ -100,11 +103,20 @@ describe("control app", () => {
       fetch,
     });
     const missingSource = await control.request(
-      "http://shutter.test/internal/v1/optimize-source?key=cache/v1/private/example-private/fp/source/w640-q75.webp&w=640&q=75",
+      "http://shutter.test/internal/v1/optimize-source?space=example-private&w=640&q=75",
       { headers: { authorization: `Bearer ${TOKEN}` } },
     );
+    const missingSpace = await control.request(
+      "http://shutter.test/internal/v1/optimize-source?source=https://sources.example.com/private/originals/test.jpg&w=640&q=75",
+      { headers: { authorization: `Bearer ${TOKEN}` } },
+    );
+    const extraParameter = await control.request(`${spikeUrl()}&key=legacy-cache-key`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
 
     expect(missingSource.status).toBe(400);
+    expect(missingSpace.status).toBe(400);
+    expect(extraParameter.status).toBe(400);
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -412,13 +424,12 @@ describe("control app", () => {
     ).toBe(204);
 
     const deliveryUrl = new URL("https://shutter.test/internal/v1/optimize-source");
-    deliveryUrl.searchParams.set(
-      "key",
-      "cache/v1/public/admin-created/fingerprint/source/w640-q75.webp",
-    );
-    deliveryUrl.searchParams.set("source", "https://sources.example.com/media/image.jpg");
-    deliveryUrl.searchParams.set("w", "640");
-    deliveryUrl.searchParams.set("q", "75");
+    deliveryUrl.search = buildOptimizeSourceQuery({
+      spaceId: "admin-created",
+      sourceUrl: "https://sources.example.com/media/image.jpg",
+      width: 640,
+      quality: 75,
+    }).toString();
     const optimization = await control.request(deliveryUrl, {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
