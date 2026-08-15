@@ -138,6 +138,53 @@ async function insertPolicyChildren(
   }
 }
 
+/**
+ * Opens one Space's sealed Capability Keys. An undecryptable row is excluded
+ * and counted rather than thrown: capabilities signed with that key fail
+ * verification, which is the same outcome as excluding it, without failing
+ * every other key on the Space. Encryption being unconfigured is a different
+ * fault — the caller resolves it before reaching here so that stays
+ * fail-closed.
+ */
+function openSealedKeys(
+  encryption: CapabilityKeyEncryption,
+  publicSpaceId: string,
+  rows: readonly SealedCapabilityKeyRow[],
+): { keys: Map<string, Uint8Array>; undecryptable: number } {
+  const keys = new Map<string, Uint8Array>();
+  let undecryptable = 0;
+  for (const row of rows) {
+    try {
+      keys.set(
+        row.key_id,
+        encryption.open(publicSpaceId, row.key_id, {
+          nonce: row.sealed_nonce,
+          ciphertext: row.sealed_key,
+        }),
+      );
+    } catch {
+      undecryptable += 1;
+    }
+  }
+  return { keys, undecryptable };
+}
+
+/** Which registry read excluded undecryptable Capability Keys. */
+export type CapabilityKeyReadScope = "space_authorization" | "edge_snapshot";
+
+/**
+ * Receives the count of Capability Keys a read excluded because they could not
+ * be opened. The count and scope are the whole message: no identifiers leave
+ * the registry through this path.
+ */
+export type UndecryptableKeyReporter = (scope: CapabilityKeyReadScope, count: number) => void;
+
+const defaultUndecryptableKeyReporter: UndecryptableKeyReporter = (scope, count) => {
+  console.error(
+    `space registry: excluded ${count} undecryptable Capability Key(s) from ${scope.replace("_", " ")}`,
+  );
+};
+
 function mapConflict(error: unknown, message: string): never {
   if (
     typeof error === "object" &&
@@ -155,6 +202,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   readonly #encryption: CapabilityKeyEncryption | undefined;
   readonly #now: () => Date;
   readonly #transactionClient: PoolClient | undefined;
+  readonly #reportUndecryptableKeys: UndecryptableKeyReporter;
 
   constructor(
     pool: Pool,
@@ -162,12 +210,14 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
       encryption?: CapabilityKeyEncryption;
       now?: () => Date;
       transactionClient?: PoolClient;
+      onUndecryptableKeys?: UndecryptableKeyReporter;
     } = {},
   ) {
     this.#pool = pool;
     this.#encryption = options.encryption;
     this.#now = options.now ?? (() => new Date());
     this.#transactionClient = options.transactionClient;
+    this.#reportUndecryptableKeys = options.onUndecryptableKeys ?? defaultUndecryptableKeyReporter;
   }
 
   async withTransaction<T>(work: (registry: SpaceRegistryTransaction) => Promise<T>): Promise<T> {
@@ -178,9 +228,15 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
           ...(this.#encryption === undefined ? {} : { encryption: this.#encryption }),
           now: this.#now,
           transactionClient: client,
+          onUndecryptableKeys: this.#reportUndecryptableKeys,
         }),
       ),
     );
+  }
+
+  async getSpace(spaceId: string): Promise<SpaceRecord | undefined> {
+    const [record] = await this.#read((client) => loadSpaceRecords(client, { spaceId }));
+    return record?.value;
   }
 
   async getActiveSpacePolicy(spaceId: string): Promise<SpacePolicy | undefined> {
@@ -199,41 +255,11 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     return { generation: row.generation, updatedAt: row.updated_at };
   }
 
-  async getActiveSpaceAuthorization(
-    spaceId: string,
-  ): Promise<ActiveSpaceAuthorization | undefined> {
-    return this.#spaceAuthorization(spaceId, true);
-  }
-
   async getSpaceAuthorization(spaceId: string): Promise<ActiveSpaceAuthorization | undefined> {
-    return this.#spaceAuthorization(spaceId, false);
-  }
-
-  async #spaceAuthorization(
-    spaceId: string,
-    activeOnly: boolean,
-  ): Promise<ActiveSpaceAuthorization | undefined> {
     return this.#read(async (client) => {
-      const [record] = await loadSpaceRecords(client, { activeOnly, spaceId });
+      const [record] = await loadSpaceRecords(client, { spaceId });
       if (record === undefined) return undefined;
-      const encryption = this.#capabilityKeyEncryption();
-      const result = await client.query<SealedCapabilityKeyRow>(
-        `select key_id, sealed_nonce, sealed_key
-         from space_capability_keys
-         where space_id = $1 and disabled_at is null
-         order by id`,
-        [record.recordId],
-      );
-      const capabilityKeys = new Map<string, Uint8Array>();
-      for (const key of result.rows) {
-        capabilityKeys.set(
-          key.key_id,
-          encryption.open(spaceId, key.key_id, {
-            nonce: key.sealed_nonce,
-            ciphertext: key.sealed_key,
-          }),
-        );
-      }
+      const capabilityKeys = await this.#openCapabilityKeys(client, record.recordId, spaceId);
       return { policy: record.value.policy, capabilityKeys };
     });
   }
@@ -261,24 +287,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
         );
         const tokenId = match.rows[0]?.id;
         if (tokenId === undefined) return { outcome: "unauthorized" };
-        const encryption = this.#capabilityKeyEncryption();
-        const keys = await client.query<SealedCapabilityKeyRow>(
-          `select key_id, sealed_nonce, sealed_key
-           from space_capability_keys
-           where space_id = $1 and disabled_at is null
-           order by id`,
-          [record.recordId],
-        );
-        const capabilityKeys = new Map<string, Uint8Array>();
-        for (const key of keys.rows) {
-          capabilityKeys.set(
-            key.key_id,
-            encryption.open(spaceId, key.key_id, {
-              nonce: key.sealed_nonce,
-              ciphertext: key.sealed_key,
-            }),
-          );
-        }
+        const capabilityKeys = await this.#openCapabilityKeys(client, record.recordId, spaceId);
         return { outcome: "authorized", tokenId, policy: record.value.policy, capabilityKeys };
       },
     );
@@ -553,6 +562,30 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     });
   }
 
+  /**
+   * The one per-Space Capability Key read: the currently accepted (not
+   * disabled) keys of one Space, opened with `openSealedKeys` tolerance.
+   */
+  async #openCapabilityKeys(
+    client: PoolClient,
+    spaceRecordId: number,
+    publicSpaceId: string,
+  ): Promise<Map<string, Uint8Array>> {
+    const encryption = this.#capabilityKeyEncryption();
+    const result = await client.query<SealedCapabilityKeyRow>(
+      `select key_id, sealed_nonce, sealed_key
+       from space_capability_keys
+       where space_id = $1 and disabled_at is null
+       order by id`,
+      [spaceRecordId],
+    );
+    const opened = openSealedKeys(encryption, publicSpaceId, result.rows);
+    if (opened.undecryptable > 0) {
+      this.#reportUndecryptableKeys("space_authorization", opened.undecryptable);
+    }
+    return opened.keys;
+  }
+
   #capabilityKeyEncryption(): CapabilityKeyEncryption {
     if (this.#encryption === undefined) {
       throw new SpaceRegistryError("unavailable", "Capability Key encryption is not configured");
@@ -592,34 +625,26 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
        where spaces.status = 'active' and keys.disabled_at is null
        order by keys.id`,
     );
-    const capabilityKeys = new Map<string, Map<string, Uint8Array>>();
-    for (const record of records) capabilityKeys.set(record.value.policy.id, new Map());
-    let undecryptable = 0;
+    // One bulk query for every Space, grouped here so the snapshot stays a
+    // single repeatable-read pass; only the open-and-tolerate step is shared
+    // with the per-Space reads.
+    const sealedBySpace = new Map<string, SealedCapabilityKeyRow[]>();
+    for (const record of records) sealedBySpace.set(record.value.policy.id, []);
     for (const key of keys.rows) {
-      const spaceKeys = capabilityKeys.get(key.public_space_id);
+      const spaceKeys = sealedBySpace.get(key.public_space_id);
       if (spaceKeys === undefined) {
         throw new Error("a Capability Key references a Space missing from the snapshot");
       }
-      try {
-        spaceKeys.set(
-          key.key_id,
-          encryption.open(key.public_space_id, key.key_id, {
-            nonce: key.sealed_nonce,
-            ciphertext: key.sealed_key,
-          }),
-        );
-      } catch {
-        // One undecryptable row degrades that key alone: capabilities signed
-        // with it fail verification at the Edge, which is the same outcome as
-        // excluding it, without taking down every Space.
-        undecryptable += 1;
-      }
+      spaceKeys.push(key);
     }
-    if (undecryptable > 0) {
-      console.error(
-        `space registry: excluded ${undecryptable} undecryptable Capability Key(s) from the Edge snapshot`,
-      );
+    const capabilityKeys = new Map<string, Map<string, Uint8Array>>();
+    let undecryptable = 0;
+    for (const [publicSpaceId, rows] of sealedBySpace) {
+      const opened = openSealedKeys(encryption, publicSpaceId, rows);
+      capabilityKeys.set(publicSpaceId, opened.keys);
+      undecryptable += opened.undecryptable;
     }
+    if (undecryptable > 0) this.#reportUndecryptableKeys("edge_snapshot", undecryptable);
     return {
       schemaVersion: "v1",
       generation: generation.generation,

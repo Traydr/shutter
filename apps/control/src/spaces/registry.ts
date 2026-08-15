@@ -103,8 +103,14 @@ export interface SpaceRegistryTransaction {
 export interface SpaceRegistry extends SpaceRegistryTransaction {
   withTransaction<T>(work: (registry: SpaceRegistryTransaction) => Promise<T>): Promise<T>;
   getGeneration(): Promise<RegistryGeneration>;
+  /** The record for a Space of any status; `undefined` only for an unknown identifier. */
+  getSpace(spaceId: string): Promise<SpaceRecord | undefined>;
   getActiveSpacePolicy(spaceId: string): Promise<SpacePolicy | undefined>;
-  getActiveSpaceAuthorization(spaceId: string): Promise<ActiveSpaceAuthorization | undefined>;
+  /**
+   * Policy and accepted Capability Keys for a Space of any status. An Executor
+   * claim may complete work accepted before the Space was decommissioned
+   * (ADR 0022), so this read does not filter on status.
+   */
   getSpaceAuthorization(spaceId: string): Promise<ActiveSpaceAuthorization | undefined>;
   authorizeSpaceRequest(
     spaceId: string,

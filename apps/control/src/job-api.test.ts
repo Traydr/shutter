@@ -271,13 +271,37 @@ describe("job API", () => {
     expect(missing.status).toBe(404);
 
     const unavailable = vi
-      .spyOn(spaceRegistry, "getActiveSpacePolicy")
+      .spyOn(spaceRegistry, "authorizeSpaceRequest")
       .mockRejectedValue(new Error("database unavailable"));
     const failed = await app.request(
       "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video",
       { headers: { authorization: `Bearer ${SPACE_TOKEN}` } },
     );
     expect(failed.status).toBe(503);
+    unavailable.mockRestore();
+  });
+
+  it("answers an executor claim with 503 when the registry is unavailable", async () => {
+    const app = createJobApi(runtime(lifecycle));
+    const submitted = await app.request(
+      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video",
+      {
+        method: "PUT",
+        headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ sourceCapability: await capability() }),
+      },
+    );
+    expect(submitted.status).toBe(202);
+
+    const unavailable = vi
+      .spyOn(spaceRegistry, "getSpaceAuthorization")
+      .mockRejectedValue(new Error("database unavailable"));
+    const claim = await app.request("http://shutter.test/internal/v1/executors/video/claim", {
+      method: "POST",
+      headers: { authorization: `Bearer ${VIDEO_TOKEN}` },
+    });
+    expect(claim.status).toBe(503);
+    await expect(claim.json()).resolves.toEqual({ error: { code: "service_unavailable" } });
     unavailable.mockRestore();
   });
 });
