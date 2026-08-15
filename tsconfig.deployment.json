@@ -9,5 +9,5 @@
     "target": "ES2023",
     "types": ["node"]
   },
-  "include": [".railway/**/*.ts", "scripts/deployment-config.ts", "test/deployment-config.test.ts"]
+  "include": [".railway/**/*.ts", "test/deployment-config.test.ts"]
 }

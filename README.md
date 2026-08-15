@@ -299,11 +299,11 @@ tenant configuration. The [Space administration
 runbook](./docs/runbooks/space-administration.md) covers creation, policy
 changes, credential rotation, decommissioning, and imgproxy allowlist updates.
 
-Custom domains, regions, repository and storage names, the imgproxy source
-allowlist, and credentials are deployment inputs, never source. The
-[self-hosting runbook](./docs/runbooks/self-hosting.md) describes the public
-input file, fresh and imported Railway modes, reviewed plan, secret bootstrap,
-and live acceptance checks.
+Railway domains, regions, repository and storage names, and the imgproxy source
+allowlist are deployment inputs; the Worker's name, domain, and R2 binding are
+its committed `wrangler.jsonc`; credentials are never source. The
+[self-hosting runbook](./docs/runbooks/self-hosting.md) describes the input
+file, the reviewed plan, and live acceptance checks.
 
 </details>
 

@@ -99,9 +99,9 @@ behind the vite plugin and wrangler.
   if Worker code imports Node APIs. The Worker runs on Web standards only and
   must not enable `nodejs_compat`.
 - **Reviewed infrastructure.** Normal configuration tests guard the R2
-  lifecycle rule, both fresh and imported Railway graphs, the Worker's R2
-  binding, the pinned imgproxy image, and the imgproxy SSRF guards. Run the
-  [self-hosting wizard](./runbooks/self-hosting.md) to supply deployment values.
+  lifecycle rule, the seeded and unseeded Railway graphs, the Worker's R2
+  binding, the pinned imgproxy image, and the imgproxy SSRF guards. The
+  [self-hosting runbook](./runbooks/self-hosting.md) covers deployment values.
 - **Versioned protocol.** URLs and capabilities carry an explicit `v1`, so
   incompatible drift fails closed rather than degrading. Cross-consumer
   behavior is pinned by fixtures in `@shutter/testkit`.

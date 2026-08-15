@@ -20,9 +20,9 @@ rather than showing up in review.
 - The edge Worker runs on Web standards only. No Node imports, no
   `nodejs_compat` (`scripts/check-edge-boundary.mjs`).
 - Reviewed infrastructure in `.railway/railway.ts`, `apps/edge/wrangler.jsonc`,
-  and the R2 lifecycle rule is guarded by normal configuration tests.
-  Deployment-specific values stay in the ignored deployment input or use
-  `preserve()` for imported projects; they are never committed.
+  and the R2 lifecycle rule is guarded by normal configuration tests. Railway
+  values come from the ignored deployment input or `preserve()`; the Worker
+  config is committed as deployed. Credentials are never committed.
 - Control reads configuration only through `apps/control/src/env/server.ts`.
 - Protocol changes are fixture changes. Cross-consumer behavior is pinned in
   `@shutter/testkit`, and URLs and capabilities carry an explicit `v1`.
