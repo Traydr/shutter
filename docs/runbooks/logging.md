@@ -143,6 +143,15 @@ ORDER BY failures DESC;
 ```
 
 ```sql
+SELECT _timestamp, "shutter.count", "shutter.features"
+FROM "default"
+WHERE "service.name" = 'shutter-control'
+  AND "event.name" = 'control.service.features'
+ORDER BY _timestamp DESC
+LIMIT 1;
+```
+
+```sql
 SELECT "http.route",
        approx_percentile_cont("shutter.duration_ms", 0.95) AS p95_ms
 FROM "default"

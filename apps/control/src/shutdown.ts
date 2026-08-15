@@ -4,6 +4,8 @@ export interface ControlShutdownDependencies {
   logger: ControlLogger;
   stopRecovery(): void;
   closeServer(): Promise<void>;
+  /** Releases the runtime's connections after HTTP has drained. */
+  closeRuntime(): Promise<void>;
   setExitCode(code: number): void;
   closeBudgetMs?: number;
   flushBudgetMs?: number;
@@ -63,23 +65,37 @@ export function createControlShutdown(
         });
       }
 
+      const closeBudgetMs = dependencies.closeBudgetMs ?? CONTROL_CLOSE_BUDGET_MS;
       const close = operationResult(dependencies.closeServer());
-      const closeWithinBudget = await waitForBudget(
-        close,
-        dependencies.closeBudgetMs ?? CONTROL_CLOSE_BUDGET_MS,
-      );
-      if (closeWithinBudget.status === "completed" && !closeWithinBudget.value.ok) {
+      // The runtime's connections are released only once HTTP has drained,
+      // however long that takes: an in-flight request must never find a
+      // closed pool. If the drain outlives its budget the release simply
+      // follows it later, and a late failure still marks the exit code.
+      const release = close.then(() => operationResult(dependencies.closeRuntime()));
+      const failLate = (result: Promise<OperationResult>) => {
+        void result.then((outcome) => {
+          if (!outcome.ok) dependencies.setExitCode(1);
+        });
+      };
+      const failNow = (error: unknown) => {
         failed = true;
         dependencies.logger.emit("error", {
           event: "control.service.failed",
           outcome: "failed",
           failureCode: "service_unavailable",
-          errorType: operationalErrorType(closeWithinBudget.value.error),
+          errorType: operationalErrorType(error),
         });
-      } else if (closeWithinBudget.status === "timed_out") {
-        void close.then((result) => {
-          if (!result.ok) dependencies.setExitCode(1);
-        });
+      };
+
+      const closeWithinBudget = await waitForBudget(close, closeBudgetMs);
+      if (closeWithinBudget.status === "timed_out") {
+        failLate(close);
+        failLate(release);
+      } else {
+        if (!closeWithinBudget.value.ok) failNow(closeWithinBudget.value.error);
+        const releaseWithinBudget = await waitForBudget(release, closeBudgetMs);
+        if (releaseWithinBudget.status === "timed_out") failLate(release);
+        else if (!releaseWithinBudget.value.ok) failNow(releaseWithinBudget.value.error);
       }
 
       const flush = operationResult(dependencies.logger.shutdown());

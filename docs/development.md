@@ -29,7 +29,11 @@ load the root `.env` automatically in dev, and Wrangler loads `.dev.vars`.
 
 Services are **fail-closed**: a missing variable does not crash startup, but the
 affected route returns 401 or 503 until it is configured. You can bring the
-stack up one capability at a time.
+stack up one capability at a time. Control reports what it could not enable in
+one `control.service.features` event at startup, naming each disabled feature
+and the variables that would enable it; a variable that is set but malformed
+(such as a bad `SHUTTER_ENCRYPTION_KEY` or a non-Postgres `DATABASE_URL`) fails
+the boot instead.
 
 Control reads configuration only through `apps/control/src/env/server.ts`;
 production modules do not touch `process.env` directly.
@@ -63,7 +67,8 @@ is configured. Mint Source Capabilities with `issueSourceCapability` from
 target Space record.
 
 For local operator flows, set an `ADMIN_BOOTSTRAP_TOKEN` with at least 32
-characters and open `https://<control-origin>/admin`. The session cookie is
+characters alongside `DATABASE_URL` and `SHUTTER_ENCRYPTION_KEY`, then open
+`https://<control-origin>/admin`. The session cookie is
 always Secure, so use an HTTPS local proxy or exercise the interface through
 the tests. Set `IMGPROXY_ALLOWED_SOURCES` on Control to let the dashboard compare
 the deployed imgproxy guard with active Space origins.

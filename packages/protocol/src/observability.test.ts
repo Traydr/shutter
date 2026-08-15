@@ -46,6 +46,26 @@ describe("operational events", () => {
     });
   });
 
+  it("accepts a feature report only as identifiers", () => {
+    expect(
+      sanitizeOperationalEvent({
+        event: "control.service.features",
+        count: 2,
+        features: "sourcePurge=CLOUDFLARE_ZONE_ID,EDGE_BASE_URL imgproxy=IMGPROXY_KEY",
+      }),
+    ).toEqual({
+      event: "control.service.features",
+      count: 2,
+      features: "sourcePurge=CLOUDFLARE_ZONE_ID,EDGE_BASE_URL imgproxy=IMGPROXY_KEY",
+    });
+    expect(
+      sanitizeOperationalEvent({
+        event: "control.service.features",
+        features: "sourcePurge=CLOUDFLARE_ZONE_ID=secret-value",
+      }),
+    ).toEqual({ event: "control.service.features" });
+  });
+
   it("keeps Source Delivery measurements bounded and redacted", async () => {
     const event = await operationalEvent({
       event: "edge.source_delivery",

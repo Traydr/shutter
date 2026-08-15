@@ -1,14 +1,17 @@
+import { S3Client } from "@aws-sdk/client-s3";
 import { describe, expect, it } from "vitest";
 import { createMasterStore, MASTER_READ_EXPIRY_SECONDS } from "./master-store.js";
 
 describe("master store", () => {
   it("creates a bounded read-only presigned GET", async () => {
     const store = createMasterStore({
-      endpoint: "https://account.r2.cloudflarestorage.com",
-      region: "auto",
+      s3: new S3Client({
+        endpoint: "https://account.r2.cloudflarestorage.com",
+        region: "auto",
+        forcePathStyle: true,
+        credentials: { accessKeyId: "test-access-key", secretAccessKey: "test-secret-key" },
+      }),
       bucket: "shutter-media",
-      accessKeyId: "test-access-key",
-      secretAccessKey: "test-secret-key",
     });
     const signed = new URL(await store.presignGet("masters/v1/space/fingerprint/video.webp"));
     expect(signed.pathname).toBe("/shutter-media/masters/v1/space/fingerprint/video.webp");
