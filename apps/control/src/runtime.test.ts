@@ -116,6 +116,18 @@ describe("control runtime", () => {
     await runtime.close();
   });
 
+  it("authenticates an executor by its token even when Control cannot wake it", async () => {
+    // Executors poll Control for work; a token without a wake URL must still
+    // pass claim authentication, as it did before dispatch became a feature.
+    const runtime = build(without("PDF_EXECUTOR_BASE_URL"));
+    expect(runtime.features.executorDispatch).toEqual({ missing: ["PDF_EXECUTOR_BASE_URL"] });
+    expect(runtime.jobApiRuntime?.executorToken("pdf")).toBe(TOKEN);
+    await expect(runtime.jobApiRuntime?.dispatch("pdf")).rejects.toThrow(
+      "pdf executor dispatch is not configured",
+    );
+    await runtime.close();
+  });
+
   it("wakes a configured executor through the injected fetch", async () => {
     const fetch = vi.fn(async () => new Response(null, { status: 200 }));
     const runtime = buildControlRuntime(createServerEnv(FULL_ENVIRONMENT), {

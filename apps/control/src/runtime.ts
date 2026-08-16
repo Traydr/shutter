@@ -228,8 +228,14 @@ export function buildControlRuntime(
 
   // Wake endpoints resolve once here. A kind whose executor is not configured
   // still rejects at dispatch time so a submission is accepted durably and the
-  // failure is logged, rather than the whole Job API disappearing.
+  // failure is logged, rather than the whole Job API disappearing. The claim
+  // token stands alone: an Executor that polls Control (or is woken some other
+  // way) authenticates with its token whether or not Control can wake it.
   const executors = executorEndpoints(env);
+  const executorTokens: Record<PreviewKind, string | undefined> = {
+    video: env.VIDEO_EXECUTOR_TOKEN,
+    pdf: env.PDF_EXECUTOR_TOKEN,
+  };
   const dispatch = createSerializedExecutorDispatch(async (kind) => {
     const endpoint = executors[kind];
     if (endpoint === undefined) throw new Error(`${kind} executor dispatch is not configured`);
@@ -246,7 +252,7 @@ export function buildControlRuntime(
           lifecycle,
           now,
           spaceRegistry,
-          executorToken: (kind) => executors[kind]?.token,
+          executorToken: (kind) => executorTokens[kind],
           dispatch,
           ...(sourcePurge === undefined ? {} : { sourcePurge }),
         };

@@ -46,7 +46,10 @@ keeps declaring it.
 ## Edge
 
 Edit `apps/edge/wrangler.jsonc` for your account: `name`, the `routes` custom
-domain, and the `MEDIA_STORE` bucket. Set the three required secrets with
+domain, and the `MEDIA_STORE` bucket. `MEDIA_STORE` and the Railway input
+`SHUTTER_R2_BUCKET` (Control's `S3_BUCKET`) must name the same bucket: the
+Worker writes optimized objects there and Control's Source Purge deletes them
+from there. Set the three required secrets with
 `wrangler secret put` (`ORIGIN_BASE_URL` is Control's public HTTPS origin), then
 deploy the Worker only after Control reports healthy:
 
