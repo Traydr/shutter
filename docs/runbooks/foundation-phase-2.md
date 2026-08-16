@@ -29,13 +29,11 @@ provider evidence required to close Phase 2.
    UploadThing projects `demo-project-1` and `demo-project-2`, the private Space's origins
    `https://objects.example.com/demo-private-bucket/`, and the exact
    R2 S3 endpoint used for short-lived Master Preview reads.
-2. Run `scripts/bootstrap-deployment.sh`. The wizard separates a fresh project
-   from an imported project and produces `pnpm deployment:plan` before any
-   apply. Review every resource and variable change.
-3. Apply only through the explicit operator step. For a fresh project, the
-   wizard generates strong independent credentials after the first apply and
-   sends them directly to Railway and Wrangler. For an imported project, it
-   keeps the existing values and volume unchanged.
+2. Fill in `.railway/deployment.env`, source it, and run `pnpm deployment:plan`
+   before any apply. Review every resource and variable change.
+3. Apply only through the explicit operator step (`pnpm deployment:apply`).
+   Set credentials directly on the Railway services and the Worker; the plan
+   `preserve()`s them once `SHUTTER_SECRETS_SEEDED=true`.
 4. Give Control a public HTTPS origin and put that exact URL in the Worker's
    `ORIGIN_BASE_URL`. Keep imgproxy private-only.
 5. Run the Space Registry migrations. Create each Space, API token, and

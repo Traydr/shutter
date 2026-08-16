@@ -91,6 +91,23 @@ describe("edge app", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
 
+  it("verifies a private capability before redirecting a non-canonical URL", async () => {
+    // The private gate is `before`: a bad capability answers 403 even when the
+    // query would otherwise redirect, so the check cannot drift behind the 308.
+    const source = await SELF.fetch(
+      "https://edge.shutter.test/v1/private/example-private/source/not-a-capability?w=639",
+      { redirect: "manual" },
+    );
+    expect(source.status).toBe(403);
+    expect(source.headers.get("cache-control")).toBe("private, no-store");
+    const master = await SELF.fetch(
+      "https://edge.shutter.test/v1/private/example-private/master/not-a-capability?w=639",
+      { redirect: "manual" },
+    );
+    expect(master.status).toBe(403);
+    expect(master.headers.get("cache-control")).toBe("private, no-store");
+  });
+
   it("validates a private source capability before returning cached bytes", async () => {
     const now = Math.floor(Date.now() / 1000);
     const sourceId = "private-source";
@@ -369,6 +386,20 @@ describe("edge app", () => {
       "origin",
     ]);
     expect(origin).toHaveBeenCalledTimes(3);
+    const originUrls = origin.mock.calls.map(([input]) => new URL(input.toString()));
+    for (const url of originUrls) {
+      expect(url.pathname).toBe("/internal/v1/optimize-source");
+      expect(url.searchParams.has("key")).toBe(false);
+      expect([...url.searchParams.keys()].sort()).toEqual(["q", "source", "space", "w"]);
+    }
+    expect(originUrls.map((url) => url.searchParams.get("space"))).toEqual([
+      "example-private",
+      "example-public",
+      "example-public",
+    ]);
+    expect(originUrls[0]?.searchParams.get("source")).toBe(
+      "https://sources.example.com/private/originals/private-source-miss.webp",
+    );
   });
 
   it("serves an allowlisted UploadThing resolver reference from canonical public cache identity", async () => {

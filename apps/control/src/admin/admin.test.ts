@@ -16,9 +16,33 @@ class ReadFailsAfterIssueRegistry extends MemorySpaceRegistry {
     return issued;
   }
 
-  override async listSpaces() {
+  #readable(): void {
     if (this.#issued) throw new Error("read unavailable after commit");
+  }
+
+  override async getSpace(spaceId: string) {
+    this.#readable();
+    return super.getSpace(spaceId);
+  }
+
+  override async listSpaces() {
+    this.#readable();
     return super.listSpaces();
+  }
+
+  override async getGeneration() {
+    this.#readable();
+    return super.getGeneration();
+  }
+
+  override async listApiTokens(spaceId: string) {
+    this.#readable();
+    return super.listApiTokens(spaceId);
+  }
+
+  override async listCapabilityKeys(spaceId: string) {
+    this.#readable();
+    return super.listCapabilityKeys(spaceId);
   }
 }
 

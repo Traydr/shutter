@@ -103,6 +103,8 @@ The OTLP body is the stable event name. OpenObserve fields include:
 | `shutter.processing_token.hash` | Hashed processing token |
 | `shutter.outcome` | Accepted, ready, failed, idle, or busy |
 | `shutter.failure.code` | Allowlisted failure code |
+| `shutter.count` | Bounded count, such as excluded Capability Keys or disabled features |
+| `shutter.features` | Disabled features and the variables that would enable them, identifiers only |
 
 Capabilities, locators, presigned URLs, authorization values, cookies, request
 and response bodies, query strings, raw Source IDs, command lines, stderr, error
@@ -140,6 +142,15 @@ WHERE "event.name" IN (
 )
 GROUP BY "event.name"
 ORDER BY failures DESC;
+```
+
+```sql
+SELECT _timestamp, "shutter.count", "shutter.features"
+FROM "default"
+WHERE "service.name" = 'shutter-control'
+  AND "event.name" = 'control.service.features'
+ORDER BY _timestamp DESC
+LIMIT 1;
 ```
 
 ```sql

@@ -1,84 +1,57 @@
 # Self-host Shutter
 
-Shutter keeps deployment identity outside the repository. The committed Railway
-file describes service topology. The committed Wrangler file describes the
-local Worker runtime. A Git-ignored input file supplies account-specific names,
-regions, domains, and storage bindings.
+The committed Railway file (`.railway/railway.ts`) describes the service
+topology and reads account-specific names, regions, and domains from the
+environment. The committed Wrangler file (`apps/edge/wrangler.jsonc`) is the
+Worker as deployed: name, custom domain, and R2 binding. A fork edits that file
+for its own account like any other Worker project.
 
 ## Requirements
 
 - A public fork or repository that Railway can build.
 - A Railway account and workspace.
-- A Cloudflare zone for the Control and Edge custom domains.
+- A Cloudflare zone for the Control and Edge custom domains, and an R2 bucket
+  with the lifecycle rule in `infra/cloudflare/r2-lifecycle.json`.
 - Wrangler and Railway CLI sessions for the target accounts.
-- Node 22, pnpm 11.1, OpenSSL, and a running container runtime.
+- Node 22, pnpm 11.1, and a running container runtime.
 
-Run `pnpm check` before deployment. Then start the guided setup:
+Run `pnpm check` before deployment.
 
-```sh
-scripts/bootstrap-deployment.sh
-```
+## Railway
 
-The wizard has six stages: deployment identity, Cloudflare storage, the first
-Railway plan, an explicit apply pause, provider credentials, and final review.
-It writes only public values to `.railway/deployment.env` and generates
-`apps/edge/wrangler.deploy.jsonc`. Git ignores both files.
-The local input records the exact Railway project and environment IDs after
-the first read-only plan. Every later plan, apply, and variable write verifies
-or explicitly names that target. The generated Wrangler file names the exact
-Cloudflare account from the R2 endpoint.
+Copy `.railway/deployment.example.env` to `.railway/deployment.env` (Git
+ignores it) and fill in the public values: project name, repository, region,
+Control and Edge domains, the R2 bucket, endpoint, and region, the Cloudflare
+zone, and the imgproxy source allowlist. The parser rejects unknown or
+malformed values, and the file never holds a secret.
 
-## How the wizard tracks progress
-
-There is no fresh/imported mode. The wizard records two independent facts in
-the input file and derives everything from them and from live provider state:
-`SHUTTER_JOBS_VOLUME_NAME`, discovered from Railway itself once the Postgres
-volume exists, and `SHUTTER_SECRETS_SEEDED`, written once credential variables
-exist on the providers.
-
-For an empty Railway project, the first graph omits all credentials and lets
-`postgres()` create its initial volume. Review the output of
-`pnpm deployment:plan`. The wizard pauses while the operator runs
-`pnpm deployment:apply` in another terminal. It never performs that apply.
-After that apply, the wizard discovers and records the live volume name, so
-every later plan declares it and can never propose deleting database storage.
-For an existing live project, link it with `pnpm exec railway link` first; the
-wizard then discovers the same facts from the live project.
-
-The credential stage is idempotent. It reads Shutter-Control's live variables
-first and reuses every value that already exists — it never regenerates a live
-credential, so re-running the wizard cannot rotate `SHUTTER_ENCRYPTION_KEY` or
-any other secret. Only absent values are generated (independent 32-byte
-credentials from OpenSSL) or prompted for (provider-issued R2 and Cache Purge
-credentials, read without echo). Values reach Railway and Wrangler over
-standard input. The wizard does not write a credential to the input file or
-print a value in a plan. It then asks before redeploying all four Railway
-application services so their running processes receive the values.
-
-`pnpm deployment:apply` refuses to run while live credentials exist but the
-input does not yet record `SHUTTER_SECRETS_SEEDED=true`, so a plan built from
-stale input cannot propose deleting them.
-
-The input shape is documented in
-[`.railway/deployment.example.env`](../../.railway/deployment.example.env). Do
-not add secrets to this file. The parser rejects unknown keys.
-
-## Review and deploy
-
-Run a Railway plan whenever an input changes:
+Plan whenever an input changes, read every resource, domain, region, variable,
+and deletion, and apply only after that review:
 
 ```sh
+set -a; source .railway/deployment.env; set +a
 pnpm deployment:plan
-```
-
-Read every resource, domain, region, variable, and deletion. Apply only after
-that review:
-
-```sh
 pnpm deployment:apply
 ```
 
-Render and deploy the Worker only after Control reports healthy:
+Credentials (`SHUTTER_ENCRYPTION_KEY`, `ADMIN_BOOTSTRAP_TOKEN`,
+`ORIGIN_AUTH_TOKEN`, `EDGE_CONFIG_TOKEN`, the executor tokens, imgproxy
+key/salt/secret, S3 keys, the Cloudflare purge token, and OTLP settings) are set
+directly on the Railway services and never enter this repository. Once they
+exist, set `SHUTTER_SECRETS_SEEDED=true` in the input so later plans
+`preserve()` them instead of proposing their removal, and record the Postgres
+volume name as `SHUTTER_JOBS_VOLUME_NAME` after the first apply so the plan
+keeps declaring it.
+
+## Edge
+
+Edit `apps/edge/wrangler.jsonc` for your account: `name`, the `routes` custom
+domain, and the `MEDIA_STORE` bucket. `MEDIA_STORE` and the Railway input
+`SHUTTER_R2_BUCKET` (Control's `S3_BUCKET`) must name the same bucket: the
+Worker writes optimized objects there and Control's Source Purge deletes them
+from there. Set the three required secrets with
+`wrangler secret put` (`ORIGIN_BASE_URL` is Control's public HTTPS origin), then
+deploy the Worker only after Control reports healthy:
 
 ```sh
 curl --fail --silent --show-error https://CONTROL_DOMAIN/healthz
@@ -86,17 +59,14 @@ pnpm deploy:edge
 curl --fail --silent --show-error https://EDGE_DOMAIN/healthz
 ```
 
-The Edge deploy command regenerates the ignored Wrangler file from the same
-public input. The committed local config has no custom domain and uses a local
-R2 bucket name.
+The Worker and Control share the internal optimize wire
+(`/internal/v1/optimize-source` and `/internal/v1/optimize-master`), so a change
+to either side of that wire deploys both in the same release: Control first,
+then the Worker.
 
-Cloudflare Workers Builds runs `pnpm --filter @shutter/edge deploy:preview`,
-which performs the same regeneration first. CI has no checkout of the ignored
-input file and needs only the two values a version upload bakes into the
-version: set `SHUTTER_EDGE_WORKER_NAME` and `SHUTTER_R2_BUCKET` as build
-environment variables on the Workers Builds settings page. Neither is a
-secret. Workers Builds injects the account and credentials itself, and a
-version upload never applies routes, so no other input is required.
+Cloudflare Workers Builds needs no build variables: its non-production command
+is `pnpm --filter @shutter/edge deploy:preview` (`wrangler versions upload`)
+and its production command is `pnpm --filter @shutter/edge deploy`.
 
 ## Registry and route acceptance
 
@@ -124,6 +94,8 @@ private operational record, not in this repository.
 ## Rollback
 
 Keep the previous Worker version and previous application delivery path until
-the observation period ends. Roll back Edge independently if authorization,
-bytes, or cache behavior regresses. Do not weaken capability checks. Do not
-delete Postgres data or R2 objects while they are needed for diagnosis.
+the observation period ends. Roll back Edge alone only when the release did not
+change the internal optimize wire; when it did, roll Control and the Worker back
+together, in the same order they were deployed, because an old Worker sends a
+query the new Control rejects and vice versa. Do not weaken capability checks.
+Do not delete Postgres data or R2 objects while they are needed for diagnosis.

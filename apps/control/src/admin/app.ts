@@ -66,7 +66,7 @@ function publicMessage(error: unknown): string {
 }
 
 async function currentSpace(registry: SpaceRegistry, spaceId: string): Promise<SpaceRecord> {
-  const space = (await registry.listSpaces()).find((candidate) => candidate.policy.id === spaceId);
+  const space = await registry.getSpace(spaceId);
   if (space === undefined) throw new SpaceRegistryError("not_found", "The Space does not exist.");
   return space;
 }

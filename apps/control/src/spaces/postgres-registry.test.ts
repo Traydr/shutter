@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import type { SpacePolicy } from "@shutter/protocol";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSpaceRegistryContract } from "../../test/space-registry-contract.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "../postgres-test.js";
 import { CapabilityKeyEncryption } from "./encryption.js";
@@ -189,15 +189,54 @@ describe("PostgresSpaceRegistry", () => {
   it("fails Capability Key reads and writes when encryption is not configured", async () => {
     const unconfigured = new PostgresSpaceRegistry(test.pool, { now: () => now });
     await unconfigured.createSpace(privatePolicy);
+    const token = await unconfigured.issueApiToken(privatePolicy.id, "application");
     await expect(unconfigured.loadEdgeSnapshot()).rejects.toEqual(
       new SpaceRegistryError("unavailable", "Capability Key encryption is not configured"),
     );
     await expect(unconfigured.addCapabilityKey(privatePolicy.id, "key-1")).rejects.toMatchObject({
       code: "unavailable",
     });
+    await expect(unconfigured.getSpaceAuthorization(privatePolicy.id)).rejects.toMatchObject({
+      code: "unavailable",
+    });
+    await expect(
+      unconfigured.authorizeSpaceRequest(privatePolicy.id, token.value.token),
+    ).rejects.toMatchObject({ code: "unavailable" });
     await expect(unconfigured.getActiveSpacePolicy(privatePolicy.id)).resolves.toEqual(
       privatePolicy,
     );
+    await expect(unconfigured.getSpace(privatePolicy.id)).resolves.toMatchObject({
+      policy: privatePolicy,
+    });
+  });
+
+  it("excludes an undecryptable Capability Key instead of failing the Space", async () => {
+    const reported = vi.fn<(scope: string, count: number) => void>();
+    const tolerant = new PostgresSpaceRegistry(test.pool, {
+      encryption: new CapabilityKeyEncryption(randomBytes(32).toString("hex")),
+      now: () => now,
+      onUndecryptableKeys: reported,
+    });
+    await tolerant.createSpace(privatePolicy);
+    const token = await tolerant.issueApiToken(privatePolicy.id, "application");
+    await tolerant.addCapabilityKey(privatePolicy.id, "key-1");
+    await tolerant.addCapabilityKey(privatePolicy.id, "key-2");
+    await test.pool.query(
+      `update space_capability_keys set sealed_key = 'AAAA' where key_id = 'key-1'`,
+    );
+
+    const authorized = await tolerant.authorizeSpaceRequest(privatePolicy.id, token.value.token);
+    if (authorized.outcome !== "authorized") throw new Error("expected authorization");
+    expect([...authorized.capabilityKeys.keys()]).toEqual(["key-2"]);
+    const claim = await tolerant.getSpaceAuthorization(privatePolicy.id);
+    expect([...(claim?.capabilityKeys.keys() ?? [])]).toEqual(["key-2"]);
+    const snapshot = await tolerant.loadEdgeSnapshot();
+    expect([...(snapshot.capabilityKeys.get(privatePolicy.id)?.keys() ?? [])]).toEqual(["key-2"]);
+    expect(reported.mock.calls).toEqual([
+      ["space_authorization", 1],
+      ["space_authorization", 1],
+      ["edge_snapshot", 1],
+    ]);
   });
 
   it("rolls back the complete cutover import when one credential conflicts", async () => {

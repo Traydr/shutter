@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "shutter-edge-local",
+  "name": "shutter-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-10",
   "observability": {
@@ -11,10 +11,16 @@
       "invocation_logs": true
     }
   },
+  "routes": [
+    {
+      "pattern": "shutter-edge.traydr.dev",
+      "custom_domain": true
+    }
+  ],
   "r2_buckets": [
     {
       "binding": "MEDIA_STORE",
-      "bucket_name": "shutter-media-local"
+      "bucket_name": "shutter-renditions"
     }
   ],
   "secrets": {

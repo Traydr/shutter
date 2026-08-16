@@ -82,6 +82,7 @@ const EVENT_FIELD_PROJECTIONS = {
   httpRoute: "http.route",
   httpStatusCode: "http.response.status_code",
   errorType: "error.type",
+  features: "shutter.features",
 } satisfies Record<OptionalOperationalEventField, string>;
 
 function projectEvent(event: OperationalEvent): {

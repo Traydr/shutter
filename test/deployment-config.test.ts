@@ -1,22 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { projectDefinitionToGraph } from "railway/iac";
 import { describe, expect, it } from "vitest";
-import {
-  parseBootstrapState,
-  parseCloudflareBootstrapState,
-  parseDeploymentEnvFile,
-  parseDeploymentInput,
-  parseRailwayTarget,
-} from "../.railway/deployment-input.ts";
+import { parseDeploymentInput } from "../.railway/deployment-input.ts";
 import { buildRailwayProject } from "../.railway/railway.ts";
-import { createEdgeDeploymentConfig } from "../scripts/deployment-config.ts";
 
 const commonEnvironment = {
   SHUTTER_PROJECT_NAME: "example-shutter",
   SHUTTER_GITHUB_REPOSITORY: "example/shutter",
   SHUTTER_RAILWAY_REGION: "us-west2",
   SHUTTER_CONTROL_DOMAIN: "control.example.com",
-  SHUTTER_EDGE_WORKER_NAME: "example-shutter-edge",
   SHUTTER_EDGE_DOMAIN: "media.example.com",
   SHUTTER_R2_BUCKET: "example-media",
   SHUTTER_R2_ENDPOINT: "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.r2.cloudflarestorage.com",
@@ -143,107 +135,19 @@ describe("deployment configuration", () => {
     ).toThrow("3-63 lowercase");
   });
 
-  it("keeps secret-looking and unknown values out of the public input file", () => {
-    expect(() => parseDeploymentEnvFile("ADMIN_BOOTSTRAP_TOKEN=secret\n")).toThrow(
-      "Unsupported key",
-    );
-    expect(() => parseDeploymentEnvFile("SHUTTER_PROJECT_NAME=a value\n")).toThrow(
-      "must not contain spaces",
-    );
-    expect(() => parseDeploymentEnvFile("SHUTTER_FRESH_TOPOLOGY_APPLIED=1\n")).toThrow(
-      "Unsupported key",
-    );
-    expect(() => parseDeploymentEnvFile("SHUTTER_DEPLOYMENT_MODE=fresh\n")).toThrow(
-      "Unsupported key",
-    );
-  });
-
-  it("renders a preview-uploadable config from the two CI inputs alone", async () => {
-    const base = JSON.parse(await readFile("apps/edge/wrangler.jsonc", "utf8"));
-    const deployed = createEdgeDeploymentConfig(base, {
-      SHUTTER_EDGE_WORKER_NAME: "example-shutter-edge",
-      SHUTTER_R2_BUCKET: "example-media",
-    });
-
-    expect(deployed.name).toBe("example-shutter-edge");
-    expect(deployed.r2_buckets).toEqual([{ binding: "MEDIA_STORE", bucket_name: "example-media" }]);
-    expect(deployed.account_id).toBeUndefined();
-    expect(deployed.routes).toBeUndefined();
-  });
-
-  it("renders owner-specific Worker values only into the ignored deployment config", async () => {
-    const base = JSON.parse(await readFile("apps/edge/wrangler.jsonc", "utf8"));
-    const deployed = createEdgeDeploymentConfig(base, { ...commonEnvironment });
-
-    expect(base.name).toBe("shutter-edge-local");
-    expect(base.routes).toBeUndefined();
-    expect(deployed.name).toBe("example-shutter-edge");
-    expect(deployed.account_id).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    expect(deployed.routes).toEqual([{ pattern: "media.example.com", custom_domain: true }]);
-    expect(deployed.r2_buckets).toEqual([{ binding: "MEDIA_STORE", bucket_name: "example-media" }]);
-    expect(deployed.compatibility_flags).toBeUndefined();
-  });
-
-  it("models the bootstrap phases", () => {
-    const target = {
-      SHUTTER_RAILWAY_PROJECT_ID: "3c9a6c56-1119-4167-9e3b-bc7eaee0a8c0",
-      SHUTTER_RAILWAY_ENVIRONMENT_ID: "8fdf159b-2d2b-4a7e-83c5-045b5a89dd5d",
-    };
-    expect(parseBootstrapState({ ...commonEnvironment })).toEqual({ phase: "unlinked" });
-    expect(parseBootstrapState({ ...commonEnvironment, ...target })).toEqual({
-      phase: "linked",
-      ...parseRailwayTarget(target),
-    });
-    expect(
-      parseBootstrapState({
-        ...commonEnvironment,
-        SHUTTER_JOBS_VOLUME_NAME: "jobs-volume",
-        ...target,
-      }),
-    ).toEqual({
-      phase: "provisioned",
-      jobsVolumeName: "jobs-volume",
-      ...parseRailwayTarget(target),
-    });
-  });
-
-  it("rejects partial or unbound bootstrap state", () => {
-    expect(() =>
-      parseBootstrapState({
-        ...commonEnvironment,
-        SHUTTER_RAILWAY_PROJECT_ID: "3c9a6c56-1119-4167-9e3b-bc7eaee0a8c0",
-      }),
-    ).toThrow("incomplete");
-    expect(() =>
-      parseBootstrapState({
-        ...commonEnvironment,
-        SHUTTER_JOBS_VOLUME_NAME: "unbound-volume",
-      }),
-    ).toThrow("no Railway target");
-  });
-
-  it("models Cloudflare progress separately from Railway progress", () => {
-    expect(parseCloudflareBootstrapState(commonEnvironment)).toEqual({ phase: "pending" });
-    expect(
-      parseCloudflareBootstrapState({
-        ...commonEnvironment,
-        SHUTTER_R2_READY_ACCOUNT_ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        SHUTTER_R2_READY_BUCKET: "example-media",
-      }),
-    ).toEqual({ phase: "ready" });
-    expect(
-      parseCloudflareBootstrapState({
-        ...commonEnvironment,
-        SHUTTER_R2_READY_ACCOUNT_ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        SHUTTER_R2_READY_BUCKET: "old-media",
-      }),
-    ).toEqual({ phase: "changed" });
-    expect(() =>
-      parseCloudflareBootstrapState({
-        ...commonEnvironment,
-        SHUTTER_R2_READY_ACCOUNT_ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      }),
-    ).toThrow("incomplete");
+  it("binds the Worker to the Media Store on Web standards only", async () => {
+    const wrangler = JSON.parse(await readFile("apps/edge/wrangler.jsonc", "utf8"));
+    expect(wrangler.name).toBe("shutter-edge");
+    expect(wrangler.compatibility_flags).toBeUndefined();
+    expect(wrangler.r2_buckets).toEqual([
+      { binding: "MEDIA_STORE", bucket_name: "shutter-renditions" },
+    ]);
+    expect(wrangler.routes).toEqual([{ pattern: "shutter-edge.traydr.dev", custom_domain: true }]);
+    expect(wrangler.secrets.required).toEqual([
+      "EDGE_CONFIG_TOKEN",
+      "ORIGIN_AUTH_TOKEN",
+      "ORIGIN_BASE_URL",
+    ]);
   });
 
   it("retains the R2 lifecycle and imgproxy network guards", async () => {

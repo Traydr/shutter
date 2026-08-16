@@ -124,6 +124,11 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     }
   }
 
+  async getSpace(spaceId: string): Promise<SpaceRecord | undefined> {
+    const record = this.#spaces.get(spaceId);
+    return record === undefined ? undefined : copySpace(record);
+  }
+
   async getActiveSpacePolicy(spaceId: string): Promise<SpacePolicy | undefined> {
     const record = this.#spaces.get(spaceId);
     return record?.status === "active" ? parseSpacePolicy(record.policy) : undefined;
@@ -133,41 +138,30 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     return { generation: this.#generation, updatedAt: new Date(this.#generatedAt) };
   }
 
-  async getActiveSpaceAuthorization(
-    spaceId: string,
-  ): Promise<ActiveSpaceAuthorization | undefined> {
-    const policy = await this.getActiveSpacePolicy(spaceId);
-    if (policy === undefined) return undefined;
-    return { policy, capabilityKeys: this.#activeCapabilityKeys(spaceId) };
-  }
-
   async getSpaceAuthorization(spaceId: string): Promise<ActiveSpaceAuthorization | undefined> {
     const record = this.#spaces.get(spaceId);
-    if (record === undefined) return undefined;
-    return {
-      policy: parseSpacePolicy(record.policy),
-      capabilityKeys: this.#activeCapabilityKeys(spaceId),
-    };
-  }
-
-  #activeCapabilityKeys(spaceId: string): ReadonlyMap<string, Uint8Array> {
-    const capabilityKeys = new Map<string, Uint8Array>();
-    for (const key of this.#keys.get(spaceId) ?? []) {
-      if (key.disabledAt === undefined) capabilityKeys.set(key.keyId, Uint8Array.from(key.key));
-    }
-    return capabilityKeys;
+    return record === undefined ? undefined : this.#authorization(record);
   }
 
   async authorizeSpaceRequest(
     spaceId: string,
     token: string | undefined,
   ): Promise<SpaceRequestAuthorization> {
-    const authorization = await this.getActiveSpaceAuthorization(spaceId);
-    if (authorization === undefined) return { outcome: "missing" };
+    const record = this.#spaces.get(spaceId);
+    if (record === undefined || record.status !== "active") return { outcome: "missing" };
     if (token === undefined || !(await this.verifyApiToken(spaceId, token))) {
       return { outcome: "unauthorized" };
     }
-    return { outcome: "authorized", ...authorization };
+    return { outcome: "authorized", ...this.#authorization(record) };
+  }
+
+  /** The one projection of a Space record onto policy plus accepted Capability Keys. */
+  #authorization(record: SpaceRecord): ActiveSpaceAuthorization {
+    const capabilityKeys = new Map<string, Uint8Array>();
+    for (const key of this.#keys.get(record.policy.id) ?? []) {
+      if (key.disabledAt === undefined) capabilityKeys.set(key.keyId, Uint8Array.from(key.key));
+    }
+    return { policy: parseSpacePolicy(record.policy), capabilityKeys };
   }
 
   async listSpaces(): Promise<readonly SpaceRecord[]> {

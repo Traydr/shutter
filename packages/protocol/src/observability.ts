@@ -20,10 +20,12 @@ export const OPERATIONAL_EVENT_NAMES = [
   "control.purge.failed",
   "control.recovery.completed",
   "control.recovery.failed",
+  "control.registry.keys_excluded",
   "control.http.completed",
   "control.optimize.failed",
   "control.optimize.delegated",
   "control.service.started",
+  "control.service.features",
   "control.service.stopping",
   "control.service.failed",
   "control.telemetry.configuration_failed",
@@ -61,6 +63,12 @@ export interface OperationalEventFields {
   httpRoute?: ControlHttpRoute | "<unmatched>";
   httpStatusCode?: number;
   errorType?: string;
+  /**
+   * Optional features a service could not enable at boot, as
+   * `feature=VAR,VAR feature=VAR`: each entry names one feature and the
+   * environment variables that would enable it. Only identifiers, never values.
+   */
+  features?: string;
 }
 
 export interface OperationalEvent extends OperationalEventFields {
@@ -79,6 +87,8 @@ const ERROR_TYPE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u;
 const HASH = /^[A-Za-z0-9_-]{43}$/u;
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const HTTP_METHOD = /^[A-Z]{1,16}$/u;
+const FEATURE_ENTRY = "[A-Za-z][A-Za-z0-9]{0,63}=[A-Z][A-Z0-9_]{0,63}(?:,[A-Z][A-Z0-9_]{0,63})*";
+const FEATURES = new RegExp(`^${FEATURE_ENTRY}(?: ${FEATURE_ENTRY}){0,31}$`, "u");
 const CONTROL_HTTP_ROUTE_TEMPLATES = new Set<string>(Object.values(CONTROL_HTTP_ROUTES));
 
 type OptionalOperationalEventField = Exclude<keyof OperationalEvent, "event">;
@@ -151,6 +161,7 @@ const FIELD_SANITIZERS = {
       ? value
       : undefined,
   errorType: matching(ERROR_TYPE),
+  features: matching(FEATURES),
 } satisfies FieldSanitizers;
 
 export function operationalErrorType(error: unknown): string {

@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "deploy": "wrangler deploy --config wrangler.deploy.jsonc",
-    "deploy:preview": "node --experimental-strip-types ../../scripts/deployment-config.ts render-edge && wrangler versions upload --config wrangler.deploy.jsonc",
+    "deploy": "wrangler deploy",
+    "deploy:preview": "wrangler versions upload",
     "dev": "vite dev",
     "generate-types": "wrangler types --env-interface CloudflareBindings",
     "test": "vitest run",
