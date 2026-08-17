@@ -8,7 +8,7 @@ import {
 } from "./edge-config.js";
 import { parseSpacePolicy } from "./space-policy.js";
 
-function snapshot(): Record<string, unknown> {
+function snapshot() {
   return {
     schemaVersion: "v1",
     generation: 2,
@@ -40,11 +40,10 @@ describe("Edge configuration contract", () => {
   });
 
   it("serializes the producer shape with the same contract", () => {
-    const policy = parseSpacePolicy((snapshot().spaces as unknown[])[0]);
     const wire = serializeEdgeConfigSnapshot(
       {
         generation: 2,
-        spaces: [policy],
+        spaces: snapshot().spaces.map(parseSpacePolicy),
         capabilityKeys: new Map([
           [
             "example-private",
@@ -54,7 +53,8 @@ describe("Edge configuration contract", () => {
       },
       new Date("2026-08-11T10:00:00.000Z"),
     );
-    expect(parseEdgeConfigSnapshot(wire).policyFor("example-private")).toBeDefined();
+    const received = JSON.parse(JSON.stringify(wire));
+    expect(parseEdgeConfigSnapshot(received).policyFor("example-private")).toBeDefined();
   });
 
   it("rejects unknown fields, unknown Spaces, and malformed keys", () => {
@@ -76,7 +76,8 @@ describe("Edge configuration contract", () => {
   });
 
   it("pins the Edge refresh report producer and consumer", () => {
-    expect(parseEdgeConfigRefreshReport(serializeEdgeConfigRefreshReport(2))).toEqual({
+    const report = JSON.parse(JSON.stringify(serializeEdgeConfigRefreshReport(2)));
+    expect(parseEdgeConfigRefreshReport(report)).toEqual({
       generation: 2,
     });
     expect(() => parseEdgeConfigRefreshReport({ generation: 2, extra: true })).toThrow(

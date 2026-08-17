@@ -93,8 +93,9 @@ describe("source capabilities", () => {
   });
 
   it("rejects unexpected claim fields", async () => {
-    await expect(
-      tokenFor({ ...claims, extra: true } as unknown as ImageSourceClaims),
-    ).rejects.toMatchObject({ code: "claims_invalid" });
+    const claimsWithExtraField = { ...claims, extra: true };
+    await expect(tokenFor(claimsWithExtraField)).rejects.toMatchObject({
+      code: "claims_invalid",
+    });
   });
 });

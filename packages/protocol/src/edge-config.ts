@@ -1,5 +1,7 @@
+import { z } from "zod";
+import type { JsonValue } from "./json.js";
 import { decodeCapabilityKey, encodeCapabilityKey } from "./key-material.js";
-import { parseSpacePolicy, SpacePolicyValidationError } from "./space-policy.js";
+import { SPACE_POLICY_SCHEMA } from "./space-policy.js";
 import type { SpacePolicy } from "./types.js";
 
 export interface EdgeConfigSnapshotWire {
@@ -35,23 +37,62 @@ export class EdgeConfigValidationError extends Error {
   }
 }
 
-function object(value: unknown, name: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new EdgeConfigValidationError(`${name} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const KEY_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/u;
 
-function exactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-  name: string,
-): void {
-  const actual = Object.keys(value).sort();
-  const wanted = [...expected].sort();
-  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
-    throw new EdgeConfigValidationError(`${name} contains missing or unknown fields`);
-  }
+const generationSchema = z
+  .int({ error: "generation must be a non-negative safe integer" })
+  .nonnegative({ error: "generation must be a non-negative safe integer" });
+
+const generatedAtSchema = z
+  .string({ error: "generatedAt must be an ISO timestamp" })
+  .transform((value, context) => {
+    const generatedAt = Date.parse(value);
+    if (!Number.isFinite(generatedAt) || new Date(generatedAt).toISOString() !== value) {
+      context.addIssue("generatedAt must be an ISO timestamp");
+      return z.NEVER;
+    }
+    return generatedAt;
+  });
+
+const capabilityKeyEntrySchema = z
+  .string({ error: "a Capability Key entry is invalid" })
+  .transform((encoded, context) => {
+    try {
+      return decodeCapabilityKey(encoded);
+    } catch {
+      context.addIssue("a Capability Key entry is invalid");
+      return z.NEVER;
+    }
+  });
+
+const capabilityKeyRegistrySchema = z.record(
+  z.string(),
+  z.record(
+    z.string().regex(KEY_ID_PATTERN, { error: "a Capability Key entry is invalid" }),
+    capabilityKeyEntrySchema,
+    { error: "capabilityKeys must map each Space to its Capability Keys" },
+  ),
+  { error: "capabilityKeys must be an object" },
+);
+
+const refreshReportSchema = z.strictObject(
+  { generation: generationSchema },
+  { error: "Edge configuration refresh report contains missing or unknown fields" },
+);
+
+const snapshotSchema = z.strictObject(
+  {
+    schemaVersion: z.literal("v1", { error: "schemaVersion must be v1" }),
+    generation: generationSchema,
+    generatedAt: generatedAtSchema,
+    spaces: z.array(SPACE_POLICY_SCHEMA, { error: "spaces must be an array" }),
+    capabilityKeys: capabilityKeyRegistrySchema,
+  },
+  { error: "Edge configuration snapshot contains missing or unknown fields" },
+);
+
+function firstIssueMessage(error: z.ZodError, fallback: string): string {
+  return error.issues[0]?.message ?? fallback;
 }
 
 export function serializeEdgeConfigSnapshot(
@@ -82,74 +123,43 @@ export function serializeEdgeConfigRefreshReport(generation: number): EdgeConfig
   return { generation };
 }
 
-export function parseEdgeConfigRefreshReport(value: unknown): EdgeConfigRefreshReportWire {
-  const input = object(value, "Edge configuration refresh report");
-  exactKeys(input, ["generation"], "Edge configuration refresh report");
-  return serializeEdgeConfigRefreshReport(input.generation as number);
+export function parseEdgeConfigRefreshReport(value: JsonValue): EdgeConfigRefreshReportWire {
+  const result = refreshReportSchema.safeParse(value);
+  if (!result.success) {
+    throw new EdgeConfigValidationError(
+      firstIssueMessage(result.error, "Edge configuration refresh report is invalid"),
+    );
+  }
+  return result.data;
 }
 
-export function parseEdgeConfigSnapshot(value: unknown): ParsedEdgeConfigSnapshot {
-  const input = object(value, "Edge configuration snapshot");
-  exactKeys(
-    input,
-    ["schemaVersion", "generation", "generatedAt", "spaces", "capabilityKeys"],
-    "Edge configuration snapshot",
-  );
-  if (input.schemaVersion !== "v1") {
-    throw new EdgeConfigValidationError("schemaVersion must be v1");
+export function parseEdgeConfigSnapshot(value: JsonValue): ParsedEdgeConfigSnapshot {
+  const result = snapshotSchema.safeParse(value);
+  if (!result.success) {
+    const message = firstIssueMessage(result.error, "Edge configuration snapshot is invalid");
+    // Space policy issues are reported by SPACE_POLICY_SCHEMA under the "spaces" path.
+    const policyInvalid = result.error.issues[0]?.path[0] === "spaces";
+    throw new EdgeConfigValidationError(policyInvalid ? "a Space policy is invalid" : message);
   }
-  if (!Number.isSafeInteger(input.generation) || (input.generation as number) < 0) {
-    throw new EdgeConfigValidationError("generation must be a non-negative safe integer");
-  }
-  if (typeof input.generatedAt !== "string") {
-    throw new EdgeConfigValidationError("generatedAt must be an ISO timestamp");
-  }
-  const generatedAt = Date.parse(input.generatedAt);
-  if (!Number.isFinite(generatedAt) || new Date(generatedAt).toISOString() !== input.generatedAt) {
-    throw new EdgeConfigValidationError("generatedAt must be an ISO timestamp");
-  }
-  if (!Array.isArray(input.spaces)) {
-    throw new EdgeConfigValidationError("spaces must be an array");
-  }
+  const wire = result.data;
   const spaces = new Map<string, SpacePolicy>();
-  try {
-    for (const rawPolicy of input.spaces) {
-      const policy = parseSpacePolicy(rawPolicy);
-      if (spaces.has(policy.id)) throw new EdgeConfigValidationError("Space IDs must be unique");
-      spaces.set(policy.id, policy);
-    }
-  } catch (error) {
-    if (error instanceof SpacePolicyValidationError) {
-      throw new EdgeConfigValidationError("a Space policy is invalid");
-    }
-    throw error;
+  for (const policy of wire.spaces) {
+    if (spaces.has(policy.id)) throw new EdgeConfigValidationError("Space IDs must be unique");
+    spaces.set(policy.id, policy);
   }
-  const rawRegistry = object(input.capabilityKeys, "capabilityKeys");
   const capabilityKeys = new Map<string, ReadonlyMap<string, Uint8Array>>();
-  for (const [spaceId, rawKeys] of Object.entries(rawRegistry)) {
+  for (const [spaceId, keys] of Object.entries(wire.capabilityKeys)) {
     if (!spaces.has(spaceId)) {
       throw new EdgeConfigValidationError("capabilityKeys contains an unknown Space");
     }
-    const keyRecord = object(rawKeys, `capabilityKeys.${spaceId}`);
-    const keys = new Map<string, Uint8Array>();
-    for (const [keyId, encoded] of Object.entries(keyRecord)) {
-      if (!/^[a-zA-Z0-9_-]{1,64}$/u.test(keyId) || typeof encoded !== "string") {
-        throw new EdgeConfigValidationError("a Capability Key entry is invalid");
-      }
-      try {
-        keys.set(keyId, decodeCapabilityKey(encoded));
-      } catch {
-        throw new EdgeConfigValidationError("a Capability Key entry is invalid");
-      }
-    }
-    capabilityKeys.set(spaceId, keys);
+    capabilityKeys.set(spaceId, new Map(Object.entries(keys)));
   }
   for (const spaceId of spaces.keys())
     capabilityKeys.set(spaceId, capabilityKeys.get(spaceId) ?? new Map());
   return Object.freeze({
     schemaVersion: "v1",
-    generation: input.generation as number,
-    generatedAt,
+    generation: wire.generation,
+    generatedAt: wire.generatedAt,
     policyFor: (spaceId: string) => spaces.get(spaceId),
     keysFor: (spaceId: string) =>
       new Map(
