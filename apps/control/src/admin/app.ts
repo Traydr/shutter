@@ -4,9 +4,17 @@ import { bodyLimit } from "hono/body-limit";
 import type { EdgeRefreshStatus } from "../edge-refresh-status.js";
 import { type SpaceRecord, type SpaceRegistry, SpaceRegistryError } from "../spaces/registry.js";
 import { deploymentCoverage } from "./deployment-coverage.js";
-import { AdminInputError, parseCreateSpaceForm, parseEditSpaceForm } from "./input.js";
+import { AdminInputError, formText, parseCreateSpaceForm, parseEditSpaceForm } from "./input.js";
 import { type AdminSession, AdminSessionManager } from "./session.js";
-import { errorView, loginView, overviewView, spaceView, unavailableView } from "./view.js";
+import {
+  type AdminOverview,
+  errorView,
+  loginView,
+  overviewView,
+  type SpaceDetail,
+  spaceView,
+  unavailableView,
+} from "./view.js";
 
 export interface AdminRuntime {
   bootstrapToken(): string | undefined;
@@ -48,20 +56,20 @@ function redirect(location: string, headers: HeadersInit = {}): Response {
   });
 }
 
-function statusFor(error: unknown): number {
-  if (error instanceof AdminInputError || error instanceof SpacePolicyValidationError) return 400;
-  if (error instanceof SpaceRegistryError) {
-    if (error.code === "not_found") return 404;
-    if (error.code === "unavailable") return 503;
+function statusFor(cause: unknown): number {
+  if (cause instanceof AdminInputError || cause instanceof SpacePolicyValidationError) return 400;
+  if (cause instanceof SpaceRegistryError) {
+    if (cause.code === "not_found") return 404;
+    if (cause.code === "unavailable") return 503;
     return 400;
   }
   return 503;
 }
 
-function publicMessage(error: unknown): string {
-  if (error instanceof SpaceRegistryError) return error.message;
-  if (error instanceof SpacePolicyValidationError) return error.message;
-  if (error instanceof AdminInputError) return "The submitted values are not valid.";
+function publicMessage(cause: unknown): string {
+  if (cause instanceof SpaceRegistryError) return cause.message;
+  if (cause instanceof SpacePolicyValidationError) return cause.message;
+  if (cause instanceof AdminInputError) return "The submitted values are not valid.";
   return "The Space Registry is unavailable.";
 }
 
@@ -165,8 +173,8 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
     } catch {
       return html(loginView("The token was not accepted."), 401);
     }
-    const token = form.get("token");
-    if (typeof token !== "string" || !sessions.verifyBootstrapToken(token)) {
+    const token = formText(form, "token");
+    if (token === undefined || !sessions.verifyBootstrapToken(token)) {
       failedLogins.count += 1;
       if (failedLogins.count >= LOGIN_LOCKOUT_THRESHOLD) {
         failedLogins.count = 0;
@@ -190,17 +198,16 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
     ]);
     const requested = new URL(context.req.url).searchParams.get("generation");
     const notice = generationNotice(requested, generation.generation);
+    const overview: AdminOverview = {
+      csrfToken: session.csrfToken,
+      generation: generation.generation,
+      spaces,
+      coverage: deploymentCoverage(spaces, runtime.imgproxyAllowedSources()),
+    };
     const edgeRefresh = runtime.edgeRefreshStatus();
-    return html(
-      overviewView({
-        csrfToken: session.csrfToken,
-        generation: generation.generation,
-        spaces,
-        coverage: deploymentCoverage(spaces, runtime.imgproxyAllowedSources()),
-        ...(edgeRefresh === undefined ? {} : { edgeRefresh }),
-        ...(notice === undefined ? {} : { notice }),
-      }),
-    );
+    if (edgeRefresh !== undefined) overview.edgeRefresh = edgeRefresh;
+    if (notice !== undefined) overview.notice = notice;
+    return html(overviewView(overview));
   });
 
   // Everything after this point holds a verified session.
@@ -225,7 +232,7 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
     } catch {
       return html(errorView(session.csrfToken, 400, "The submitted form is invalid."), 400);
     }
-    if (!sessions.verifyCsrf(context.req.raw, session, form.get("csrf"))) {
+    if (!sessions.verifyCsrf(context.req.raw, session, formText(form, "csrf"))) {
       return html(errorView(session.csrfToken, 403, "The request could not be verified."), 403);
     }
     context.set("form", form);
@@ -248,13 +255,9 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
     const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
     const requested = new URL(context.req.url).searchParams.get("generation");
     const notice = generationNotice(requested, detail.generation);
-    return html(
-      spaceView({
-        csrfToken: session.csrfToken,
-        ...detail,
-        ...(notice === undefined ? {} : { notice }),
-      }),
-    );
+    const model: SpaceDetail = { csrfToken: session.csrfToken, ...detail };
+    if (notice !== undefined) model.notice = notice;
+    return html(spaceView(model));
   });
 
   admin.post("/spaces/:spaceId/policy", async (context) => {
@@ -281,8 +284,8 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
   // in admin.test.ts). Do not "simplify" this into mutate-then-re-read.
   admin.post("/spaces/:spaceId/api-tokens", async (context) => {
     const session = context.get("session");
-    const label = context.get("form").get("label");
-    if (typeof label !== "string") throw new AdminInputError();
+    const label = formText(context.get("form"), "label");
+    if (label === undefined) throw new AdminInputError();
     const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
     const issued = await registry.issueApiToken(context.req.param("spaceId"), label);
     const { token, ...summary } = issued.value;
@@ -310,8 +313,8 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
 
   admin.post("/spaces/:spaceId/capability-keys", async (context) => {
     const session = context.get("session");
-    const keyId = context.get("form").get("keyId");
-    if (typeof keyId !== "string") throw new AdminInputError();
+    const keyId = formText(context.get("form"), "keyId");
+    if (keyId === undefined) throw new AdminInputError();
     const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
     const issued = await registry.addCapabilityKey(context.req.param("spaceId"), keyId);
     const { key, ...summary } = issued.value;

@@ -36,35 +36,38 @@ interface StoredCapabilityKey extends CapabilityKeySummary {
 }
 
 function copySpace(record: SpaceRecord): SpaceRecord {
-  return {
+  const copy: SpaceRecord = {
     ...record,
     policy: parseSpacePolicy(record.policy),
     createdAt: new Date(record.createdAt),
     updatedAt: new Date(record.updatedAt),
-    ...(record.decommissionedAt === undefined
-      ? {}
-      : { decommissionedAt: new Date(record.decommissionedAt) }),
   };
+  if (record.decommissionedAt !== undefined) {
+    copy.decommissionedAt = new Date(record.decommissionedAt);
+  }
+  return copy;
 }
 
 function apiSummary(value: StoredApiToken): ApiTokenSummary {
-  return {
+  const summary: ApiTokenSummary = {
     id: value.id,
     label: value.label,
     displayPrefix: value.displayPrefix,
     createdAt: new Date(value.createdAt),
-    ...(value.lastUsedAt === undefined ? {} : { lastUsedAt: new Date(value.lastUsedAt) }),
-    ...(value.revokedAt === undefined ? {} : { revokedAt: new Date(value.revokedAt) }),
   };
+  if (value.lastUsedAt !== undefined) summary.lastUsedAt = new Date(value.lastUsedAt);
+  if (value.revokedAt !== undefined) summary.revokedAt = new Date(value.revokedAt);
+  return summary;
 }
 
 function keySummary(value: StoredCapabilityKey): CapabilityKeySummary {
-  return {
+  const summary: CapabilityKeySummary = {
     id: value.id,
     keyId: value.keyId,
     acceptedAt: new Date(value.acceptedAt),
-    ...(value.disabledAt === undefined ? {} : { disabledAt: new Date(value.disabledAt) }),
   };
+  if (value.disabledAt !== undefined) summary.disabledAt = new Date(value.disabledAt);
+  return summary;
 }
 
 export class MemorySpaceRegistry implements SpaceRegistry {

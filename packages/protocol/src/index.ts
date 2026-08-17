@@ -12,6 +12,7 @@ export * from "./control-routes.js";
 export * from "./edge-config.js";
 export * from "./errors.js";
 export * from "./jobs.js";
+export * from "./json.js";
 export * from "./key-material.js";
 export * from "./normalization.js";
 export * from "./observability.js";

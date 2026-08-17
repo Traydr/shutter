@@ -51,10 +51,15 @@ function validateOptimization({ sourceUrl, width, quality }: ImgproxyOptimizatio
   }
 }
 
+export interface ImgproxyRequest {
+  url: string;
+  headers: Headers;
+}
+
 export function buildImgproxyRequest(
   optimization: ImgproxyOptimization,
   config: ImgproxyConfig,
-): { url: string; headers: Headers } {
+): ImgproxyRequest {
   validateOptimization(optimization);
   if (config.secret.length < 32) throw new Error("IMGPROXY_SECRET must be at least 32 characters");
 

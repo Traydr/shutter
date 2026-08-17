@@ -29,7 +29,7 @@ describe("Source Purge", () => {
     return createSourcePurge({
       logger: NOOP_LOGGER,
       lifecycle,
-      s3: { send } as unknown as S3Client,
+      s3: { send },
       bucket: "shutter-media",
       cloudflareZoneId: "zone-id",
       cloudflareApiToken: "token",

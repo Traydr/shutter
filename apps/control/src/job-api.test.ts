@@ -1,9 +1,10 @@
-import { issueSourceCapability } from "@shutter/protocol";
+import { issueSourceCapability, type JsonObject } from "@shutter/protocol";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createJobApi } from "./job-api.js";
+import { createJobApi, type JobApiRuntime } from "./job-api.js";
 import type { ControlLogger } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import type { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
+import type { SourcePurge } from "./source-purge.js";
 import { MemorySpaceRegistry } from "./spaces/memory-registry.js";
 
 const KEY = Uint8Array.from({ length: 32 }, (_, index) => index);
@@ -33,18 +34,19 @@ async function capability(): Promise<string> {
 function runtime(
   lifecycle: PostgresPreviewJobLifecycle,
   dispatch = vi.fn(async () => {}),
-  sourcePurge?: { purge(source: { spaceId: string; sourceId: string }): Promise<void> },
+  sourcePurge?: SourcePurge,
   logger: ControlLogger = NOOP_LOGGER,
-) {
-  return {
+): JobApiRuntime {
+  const api: JobApiRuntime = {
     logger,
     lifecycle,
     now: () => NOW,
     spaceRegistry,
-    executorToken: (kind: "video" | "pdf") => (kind === "video" ? VIDEO_TOKEN : undefined),
+    executorToken: (kind) => (kind === "video" ? VIDEO_TOKEN : undefined),
     dispatch,
-    ...(sourcePurge === undefined ? {} : { sourcePurge }),
   };
+  if (sourcePurge !== undefined) api.sourcePurge = sourcePurge;
+  return api;
 }
 
 describe("job API", () => {
@@ -105,7 +107,7 @@ describe("job API", () => {
       headers: { authorization: `Bearer ${VIDEO_TOKEN}` },
     });
     expect(claim.status).toBe(200);
-    const work = await claim.json<Record<string, unknown>>();
+    const work: JsonObject = await claim.json();
     expect(work).not.toHaveProperty("sourceCapability");
     expect(work.locator).toBe("https://sources.example.com/private/originals/source-1.mp4");
     expect(work.allowedSourceOrigins).toEqual([

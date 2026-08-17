@@ -3,6 +3,11 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 const COOKIE_NAME = "shutter_admin_session";
 const SESSION_TTL_SECONDS = 15 * 60;
 
+export interface CreatedAdminSession {
+  session: AdminSession;
+  setCookie: string;
+}
+
 export interface AdminSession {
   csrfToken: string;
   expiresAt: number;
@@ -45,8 +50,8 @@ export class AdminSessionManager {
     return this.isConfigured() && equal(candidate, this.#bootstrapToken);
   }
 
-  create(): { session: AdminSession; setCookie: string } {
-    const session = {
+  create(): CreatedAdminSession {
+    const session: AdminSession = {
       csrfToken: randomBytes(24).toString("base64url"),
       expiresAt: Math.floor(this.#now() / 1_000) + SESSION_TTL_SECONDS,
     };
@@ -90,11 +95,7 @@ export class AdminSessionManager {
     return { expiresAt, csrfToken };
   }
 
-  verifyCsrf(
-    request: Request,
-    session: AdminSession,
-    submitted: FormDataEntryValue | null,
-  ): boolean {
+  verifyCsrf(request: Request, session: AdminSession, submitted: string | undefined): boolean {
     const origin = request.headers.get("origin");
     let samePublicOrigin = false;
     try {
@@ -107,7 +108,7 @@ export class AdminSessionManager {
     } catch {
       samePublicOrigin = false;
     }
-    return samePublicOrigin && typeof submitted === "string" && equal(submitted, session.csrfToken);
+    return samePublicOrigin && submitted !== undefined && equal(submitted, session.csrfToken);
   }
 
   clearCookie(): string {

@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import {
   CONTROL_HTTP_ROUTES,
   type ControlHttpRoute,
+  type JsonValue,
   parseEdgeConfigRefreshReport,
   serializeEdgeConfigSnapshot,
 } from "@shutter/protocol";
 import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
-import { createAdminApp } from "./admin/app.js";
+import { type AdminRuntime, createAdminApp } from "./admin/app.js";
 import type { EdgeRefreshTracker } from "./edge-refresh-status.js";
 import type { ImgproxyConfig } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
@@ -130,7 +131,7 @@ export function createControlApp(
       });
     }
     if (runtime.edgeRefreshTracker === undefined) return unavailable();
-    let body: unknown;
+    let body: JsonValue;
     try {
       if (!context.req.header("content-type")?.toLowerCase().startsWith("application/json")) {
         throw new Error("invalid content type");
@@ -152,15 +153,13 @@ export function createControlApp(
     runtime.edgeRefreshTracker.report(report.generation);
     return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
   });
-  control.route(
-    "/admin",
-    createAdminApp({
-      bootstrapToken: () => runtime.adminBootstrapToken?.(),
-      imgproxyAllowedSources: () => runtime.imgproxyAllowedSources?.(),
-      edgeRefreshStatus: () => runtime.edgeRefreshTracker?.latest(),
-      ...(runtime.spaceRegistry === undefined ? {} : { registry: runtime.spaceRegistry }),
-    }),
-  );
+  const adminOptions: AdminRuntime = {
+    bootstrapToken: () => runtime.adminBootstrapToken?.(),
+    imgproxyAllowedSources: () => runtime.imgproxyAllowedSources?.(),
+    edgeRefreshStatus: () => runtime.edgeRefreshTracker?.latest(),
+  };
+  if (runtime.spaceRegistry !== undefined) adminOptions.registry = runtime.spaceRegistry;
+  control.route("/admin", createAdminApp(adminOptions));
   if (runtime.jobApiRuntime !== undefined) {
     control.route("/", createJobApi(runtime.jobApiRuntime));
   } else {

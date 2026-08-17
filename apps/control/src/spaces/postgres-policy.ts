@@ -90,12 +90,10 @@ export async function loadSpaceRecords(
       routeClass: row.route_class,
       qualities: row.qualities,
       defaultQuality: row.default_quality,
+      // parseSpacePolicy canonicalizes the root prefix "/" by omitting it.
       allowedSourceOrigins: origins.rows
         .filter((origin) => origin.space_id === row.id)
-        .map((origin) => ({
-          origin: origin.origin,
-          ...(origin.path_prefix === "/" ? {} : { pathPrefix: origin.path_prefix }),
-        })),
+        .map((origin) => ({ origin: origin.origin, pathPrefix: origin.path_prefix })),
       resolvers: resolvers.rows
         .filter((resolver) => resolver.space_id === row.id)
         .map((resolver) => ({
@@ -104,15 +102,13 @@ export async function loadSpaceRecords(
           allowedProjectIds: resolver.allowed_project_ids,
         })),
     });
-    return {
-      recordId: row.id,
-      value: {
-        policy,
-        status: row.status,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-        ...(row.decommissioned_at === null ? {} : { decommissionedAt: row.decommissioned_at }),
-      },
+    const value: SpaceRecord = {
+      policy,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
     };
+    if (row.decommissioned_at !== null) value.decommissionedAt = row.decommissioned_at;
+    return { recordId: row.id, value };
   });
 }

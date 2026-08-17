@@ -22,7 +22,7 @@ export interface SpaceDetail {
   secret?: { label: string; value: string };
 }
 
-function htmlEscape(value: unknown): string {
+function htmlEscape(value: string | number): string {
   return String(value)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")

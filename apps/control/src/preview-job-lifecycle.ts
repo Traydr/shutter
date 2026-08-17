@@ -77,6 +77,11 @@ export interface SubmissionResult {
 
 export type AttemptMutationResult = { outcome: "accepted" } | { outcome: "stale_attempt" };
 
+export interface AttemptFailure {
+  retryable: boolean;
+  code?: JobFailureCode;
+}
+
 export type FailureResult =
   | { outcome: "retry_scheduled" }
   | { outcome: "terminal" }
@@ -106,7 +111,7 @@ export interface PreviewJobLifecycle {
   fail(
     identity: JobIdentity,
     processingToken: string,
-    failure: { retryable: boolean; code?: JobFailureCode },
+    failure: AttemptFailure,
     now: Date,
   ): Promise<FailureResult>;
   maintain(now: Date, limit: number): Promise<MaintenanceResult>;
@@ -184,17 +189,17 @@ function fromRow(row: JobRow): JobRecord {
     executionCycle: row.execution_cycle,
     attemptNumber: row.attempt_number,
     retryDeadlineAt: row.retry_deadline_at,
-    ...(row.source_capability === null ? {} : { sourceCapability: row.source_capability }),
-    ...(row.next_attempt_at === null ? {} : { nextAttemptAt: row.next_attempt_at }),
-    ...(row.processing_token === null ? {} : { processingToken: row.processing_token }),
-    ...(row.lease_expires_at === null ? {} : { leaseExpiresAt: row.lease_expires_at }),
-    ...(row.heartbeat_at === null ? {} : { heartbeatAt: row.heartbeat_at }),
-    ...(row.master_key === null ? {} : { masterKey: row.master_key }),
-    ...(row.master_width === null ? {} : { masterWidth: row.master_width }),
-    ...(row.master_height === null ? {} : { masterHeight: row.master_height }),
-    ...(row.master_format === null ? {} : { masterFormat: row.master_format }),
-    ...(row.object_etag === null ? {} : { objectEtag: row.object_etag }),
-    ...(row.failure_code === null ? {} : { failureCode: row.failure_code }),
+    sourceCapability: row.source_capability ?? undefined,
+    nextAttemptAt: row.next_attempt_at ?? undefined,
+    processingToken: row.processing_token ?? undefined,
+    leaseExpiresAt: row.lease_expires_at ?? undefined,
+    heartbeatAt: row.heartbeat_at ?? undefined,
+    masterKey: row.master_key ?? undefined,
+    masterWidth: row.master_width ?? undefined,
+    masterHeight: row.master_height ?? undefined,
+    masterFormat: row.master_format ?? undefined,
+    objectEtag: row.object_etag ?? undefined,
+    failureCode: row.failure_code ?? undefined,
   };
 }
 
@@ -257,10 +262,9 @@ export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
          where space_id = $1 and source_id = $2 and kind = $3 returning *`,
         [input.spaceId, input.sourceId, input.kind, input.sourceCapability, deadline, now],
       );
-      return {
-        disposition: "reactivated",
-        job: jobView(fromRow(reactivated.rows[0] as JobRow)),
-      };
+      const reactivatedRow = reactivated.rows[0];
+      if (reactivatedRow === undefined) throw new Error("job disappeared during reactivation");
+      return { disposition: "reactivated", job: jobView(fromRow(reactivatedRow)) };
     });
   }
 
@@ -362,7 +366,7 @@ export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
   async fail(
     identity: JobIdentity,
     processingToken: string,
-    failure: { retryable: boolean; code?: JobFailureCode },
+    failure: AttemptFailure,
     now: Date,
   ): Promise<FailureResult> {
     return transaction(this.#pool, async (client) => {

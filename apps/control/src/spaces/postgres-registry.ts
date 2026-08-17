@@ -4,6 +4,7 @@ import {
   type SpacePolicy,
 } from "@shutter/protocol";
 import type { Pool, PoolClient } from "pg";
+import { z } from "zod";
 import { transaction } from "../db/transaction.js";
 import {
   apiTokenDisplayPrefix,
@@ -65,23 +66,25 @@ const API_TOKEN_COLUMNS = "id, label, display_prefix, created_at, last_used_at, 
 const CAPABILITY_KEY_COLUMNS = "id, key_id, accepted_at, disabled_at";
 
 function apiTokenSummary(row: ApiTokenRow): ApiTokenSummary {
-  return {
+  const summary: ApiTokenSummary = {
     id: row.id,
     label: row.label,
     displayPrefix: row.display_prefix,
     createdAt: row.created_at,
-    ...(row.last_used_at === null ? {} : { lastUsedAt: row.last_used_at }),
-    ...(row.revoked_at === null ? {} : { revokedAt: row.revoked_at }),
   };
+  if (row.last_used_at !== null) summary.lastUsedAt = row.last_used_at;
+  if (row.revoked_at !== null) summary.revokedAt = row.revoked_at;
+  return summary;
 }
 
 function capabilityKeySummary(row: CapabilityKeyRow): CapabilityKeySummary {
-  return {
+  const summary: CapabilityKeySummary = {
     id: row.id,
     keyId: row.key_id,
     acceptedAt: row.accepted_at,
-    ...(row.disabled_at === null ? {} : { disabledAt: row.disabled_at }),
   };
+  if (row.disabled_at !== null) summary.disabledAt = row.disabled_at;
+  return summary;
 }
 
 async function bumpGeneration(client: PoolClient, now: Date): Promise<number> {
@@ -146,11 +149,17 @@ async function insertPolicyChildren(
  * fault — the caller resolves it before reaching here so that stays
  * fail-closed.
  */
+interface OpenedCapabilityKeys {
+  keys: Map<string, Uint8Array>;
+  /** Rows that were excluded because they could not be opened. */
+  undecryptable: number;
+}
+
 function openSealedKeys(
   encryption: CapabilityKeyEncryption,
   publicSpaceId: string,
   rows: readonly SealedCapabilityKeyRow[],
-): { keys: Map<string, Uint8Array>; undecryptable: number } {
+): OpenedCapabilityKeys {
   const keys = new Map<string, Uint8Array>();
   let undecryptable = 0;
   for (const row of rows) {
@@ -185,16 +194,21 @@ const defaultUndecryptableKeyReporter: UndecryptableKeyReporter = (scope, count)
   );
 };
 
-function mapConflict(error: unknown, message: string): never {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "23505"
-  ) {
+/** The one Postgres error field a conflict is recognised by: SQLSTATE 23505, unique_violation. */
+const uniqueViolationSchema = z.object({ code: z.literal("23505") });
+
+function mapConflict(cause: unknown, message: string): never {
+  if (uniqueViolationSchema.safeParse(cause).success) {
     throw new SpaceRegistryError("conflict", message);
   }
-  throw error;
+  throw cause;
+}
+
+export interface PostgresSpaceRegistryOptions {
+  encryption?: CapabilityKeyEncryption;
+  now?: () => Date;
+  transactionClient?: PoolClient;
+  onUndecryptableKeys?: UndecryptableKeyReporter;
 }
 
 export class PostgresSpaceRegistry implements SpaceRegistry {
@@ -204,15 +218,7 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   readonly #transactionClient: PoolClient | undefined;
   readonly #reportUndecryptableKeys: UndecryptableKeyReporter;
 
-  constructor(
-    pool: Pool,
-    options: {
-      encryption?: CapabilityKeyEncryption;
-      now?: () => Date;
-      transactionClient?: PoolClient;
-      onUndecryptableKeys?: UndecryptableKeyReporter;
-    } = {},
-  ) {
+  constructor(pool: Pool, options: PostgresSpaceRegistryOptions = {}) {
     this.#pool = pool;
     this.#encryption = options.encryption;
     this.#now = options.now ?? (() => new Date());
@@ -222,16 +228,15 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
 
   async withTransaction<T>(work: (registry: SpaceRegistryTransaction) => Promise<T>): Promise<T> {
     if (this.#transactionClient !== undefined) return work(this);
-    return transaction(this.#pool, (client) =>
-      work(
-        new PostgresSpaceRegistry(this.#pool, {
-          ...(this.#encryption === undefined ? {} : { encryption: this.#encryption }),
-          now: this.#now,
-          transactionClient: client,
-          onUndecryptableKeys: this.#reportUndecryptableKeys,
-        }),
-      ),
-    );
+    return transaction(this.#pool, (client) => {
+      const options: PostgresSpaceRegistryOptions = {
+        now: this.#now,
+        transactionClient: client,
+        onUndecryptableKeys: this.#reportUndecryptableKeys,
+      };
+      if (this.#encryption !== undefined) options.encryption = this.#encryption;
+      return work(new PostgresSpaceRegistry(this.#pool, options));
+    });
   }
 
   async getSpace(spaceId: string): Promise<SpaceRecord | undefined> {

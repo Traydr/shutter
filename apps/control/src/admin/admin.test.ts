@@ -50,13 +50,14 @@ function runtime(
   registry = new MemorySpaceRegistry(),
   options: { now?: () => number; allowedSources?: string; refresh?: EdgeRefreshTracker } = {},
 ): AdminRuntime {
-  return {
+  const admin: AdminRuntime = {
     bootstrapToken: () => BOOTSTRAP_TOKEN,
     imgproxyAllowedSources: () => options.allowedSources,
     edgeRefreshStatus: () => options.refresh?.latest(),
     registry,
-    ...(options.now === undefined ? {} : { now: options.now }),
   };
+  if (options.now !== undefined) admin.now = options.now;
+  return admin;
 }
 
 async function login(app: ReturnType<typeof createAdminApp>): Promise<{
@@ -176,7 +177,7 @@ describe("Control admin surface", () => {
     ).toBe(403);
     await expect(registry.listSpaces()).resolves.toEqual([]);
 
-    const proxyShaped = await app.request("http://control.example.test/spaces", {
+    const throughProxy = await app.request("http://control.example.test/spaces", {
       method: "POST",
       headers: {
         cookie,
@@ -185,7 +186,7 @@ describe("Control admin surface", () => {
       },
       body: new URLSearchParams(values),
     });
-    expect(proxyShaped.status).toBe(303);
+    expect(throughProxy.status).toBe(303);
   });
 
   it("rejects an oversized unauthenticated login body", async () => {
