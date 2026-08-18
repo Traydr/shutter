@@ -105,4 +105,10 @@ behind the vite plugin and wrangler.
 - **Versioned protocol.** URLs and capabilities carry an explicit `v1`, so
   incompatible drift fails closed rather than degrading. Cross-consumer
   behavior is pinned by fixtures in `@shutter/testkit`.
-- **Formatting and linting** are Biome (`pnpm format`).
+- **Formatting and linting** are Biome (`pnpm format`) plus Oxlint running the
+  local anti-slop plugin (`tools/oxlint/anti-slop/`, configured in
+  `.oxlintrc.json`). The plugin rejects unparsed `unknown` inputs, `typeof`
+  narrowing, undocumented type assertions, and conditional `{}` spreads: decode
+  external values with a zod schema at the boundary, build optional properties
+  in statements, and give any unavoidable assertion a `SAFETY:` comment stating
+  the invariant.
