@@ -8,6 +8,7 @@ import {
   type ExecutorClaim,
   emitOperationalEvent,
   type JobFailureCode,
+  type OperationalEventFields,
   operationalEvent,
   type PreviewKind,
   parseExecutorClaim,
@@ -24,11 +25,14 @@ export {
   runCommand,
 } from "./media.js";
 
+/** The part of the S3 client the executor depends on: sending put and delete commands. */
+export type MediaStoreClient = Pick<S3Client, "send">;
+
 export interface ExecutorConfig {
   controlBaseUrl: string;
   roleToken: string;
   bucket: string;
-  s3: S3Client;
+  s3: MediaStoreClient;
   fetch: typeof globalThis.fetch;
 }
 
@@ -36,6 +40,12 @@ export interface ProcessedMasterPreview {
   bytes: Uint8Array;
   width: number;
   height: number;
+}
+
+/** How a processing failure is reported to Control: whether to retry, and the code when known. */
+export interface ExecutorFailure {
+  retryable: boolean;
+  code?: JobFailureCode;
 }
 
 export interface ExecutorProcessor {
@@ -46,7 +56,8 @@ export interface ExecutorProcessor {
     fetch: typeof globalThis.fetch,
     allowedSourceOrigins: readonly SourceOriginRule[],
   ): Promise<ProcessedMasterPreview>;
-  failure(error: unknown): { retryable: boolean; code?: JobFailureCode };
+  /** Classifies whatever `process` threw. */
+  failure(cause: unknown): ExecutorFailure;
 }
 
 async function control(config: ExecutorConfig, path: string, init: RequestInit): Promise<Response> {
@@ -183,6 +194,14 @@ async function emit(
   startedAt: number,
   failureCode?: JobFailureCode | "stale_attempt",
 ) {
+  const fields: OperationalEventFields = {
+    kind: claim.kind,
+    executionCycle: claim.executionCycle,
+    attemptNumber: claim.attemptNumber,
+    durationMs: Date.now() - startedAt,
+    outcome: event === "executor.completed" ? "ready" : "failed",
+  };
+  if (failureCode !== undefined) fields.failureCode = failureCode;
   emitOperationalEvent(
     level,
     await operationalEvent({
@@ -190,14 +209,7 @@ async function emit(
       spaceId: claim.spaceId,
       sourceId: claim.sourceId,
       processingToken: claim.processingToken,
-      fields: {
-        kind: claim.kind,
-        executionCycle: claim.executionCycle,
-        attemptNumber: claim.attemptNumber,
-        durationMs: Date.now() - startedAt,
-        outcome: event === "executor.completed" ? "ready" : "failed",
-        ...(failureCode === undefined ? {} : { failureCode }),
-      },
+      fields,
     }),
   );
 }
@@ -252,28 +264,34 @@ export function createExecutorApp(
 }
 
 export function createExecutorConfigFromEnv(): ExecutorConfig | undefined {
-  const required = [
-    "CONTROL_BASE_URL",
-    "EXECUTOR_ROLE_TOKEN",
-    "S3_ENDPOINT",
-    "S3_ACCESS_KEY_ID",
-    "S3_SECRET_ACCESS_KEY",
-    "S3_BUCKET",
-  ] as const;
-  if (!required.every((name) => process.env[name] !== undefined)) return undefined;
+  const {
+    CONTROL_BASE_URL: controlBaseUrl,
+    EXECUTOR_ROLE_TOKEN: roleToken,
+    S3_ENDPOINT: endpoint,
+    S3_ACCESS_KEY_ID: accessKeyId,
+    S3_SECRET_ACCESS_KEY: secretAccessKey,
+    S3_BUCKET: bucket,
+  } = process.env;
+  if (
+    controlBaseUrl === undefined ||
+    roleToken === undefined ||
+    endpoint === undefined ||
+    accessKeyId === undefined ||
+    secretAccessKey === undefined ||
+    bucket === undefined
+  ) {
+    return undefined;
+  }
   return {
-    controlBaseUrl: process.env.CONTROL_BASE_URL as string,
-    roleToken: process.env.EXECUTOR_ROLE_TOKEN as string,
-    bucket: process.env.S3_BUCKET as string,
+    controlBaseUrl,
+    roleToken,
+    bucket,
     fetch: globalThis.fetch,
     s3: new S3Client({
       region: process.env.S3_REGION ?? "auto",
-      endpoint: process.env.S3_ENDPOINT as string,
+      endpoint,
       forcePathStyle: true,
-      credentials: {
-        accessKeyId: process.env.S3_ACCESS_KEY_ID as string,
-        secretAccessKey: process.env.S3_SECRET_ACCESS_KEY as string,
-      },
+      credentials: { accessKeyId, secretAccessKey },
     }),
   };
 }

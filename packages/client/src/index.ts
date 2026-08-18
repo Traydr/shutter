@@ -12,10 +12,13 @@ import {
   type CapabilityKeyMaterial,
   decodeCapabilityKey,
   issueSourceCapability,
+  type JsonValue,
   type MasterPreviewDescriptor,
   type PreviewKind,
+  SHUTTER_FORMAT,
   type SourceCapabilityClaims,
 } from "@shutter/protocol";
+import { z } from "zod";
 
 export type { MasterPreviewDescriptor, PreviewKind };
 
@@ -107,11 +110,35 @@ function retryAfterSeconds(response: Response): number {
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : 5;
 }
 
+/** The one field of a Shutter error body the client surfaces: `{ error: { code } }`. */
+const errorBodySchema = z.object({ error: z.object({ code: z.string() }) });
+
+const masterPreviewSchema = z.object({
+  sourceId: z.string(),
+  kind: z.enum(["video", "pdf"]),
+  width: z.number(),
+  height: z.number(),
+  format: z.literal(SHUTTER_FORMAT),
+});
+
+/**
+ * The Preview Job representation as Control serves it. Fields the client does
+ * not read are ignored so a newer Control can add to the representation.
+ */
+const jobRepresentationSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.enum(["pending", "processing"]) }),
+  z.object({ status: z.literal("ready"), master: masterPreviewSchema }),
+  z.object({
+    status: z.literal("failed"),
+    failure: z.object({ code: z.string(), action: z.string() }),
+  }),
+]);
+
 async function errorFromResponse(response: Response): Promise<ShutterClientError> {
   let code: string | undefined;
   try {
-    const body = (await response.json()) as { error?: { code?: unknown } };
-    if (typeof body.error?.code === "string") code = body.error.code;
+    const body = errorBodySchema.safeParse(await response.json());
+    if (body.success) code = body.data.error.code;
   } catch {
     // Non-JSON error bodies keep the HTTP status as the only detail.
   }
@@ -123,40 +150,33 @@ async function errorFromResponse(response: Response): Promise<ShutterClientError
   });
 }
 
-function parseJobBody(body: unknown, response: Response): PreviewJobResult {
-  if (typeof body !== "object" || body === null) {
+function parseJobBody(body: JsonValue, response: Response): PreviewJobResult {
+  const parsed = jobRepresentationSchema.safeParse(body);
+  if (!parsed.success) {
     throw new ShutterClientError("Shutter returned a malformed job representation", {
       status: response.status,
     });
   }
-  const record = body as {
-    status?: unknown;
-    master?: MasterPreviewDescriptor;
-    failure?: { code?: unknown; action?: unknown };
-  };
-  if (record.status === "pending" || record.status === "processing") {
-    return {
-      status: record.status,
-      retryAfterSeconds: retryAfterSeconds(response),
-      location: response.headers.get("location") ?? undefined,
-    };
+  const record = parsed.data;
+  switch (record.status) {
+    case "pending":
+    case "processing":
+      return {
+        status: record.status,
+        retryAfterSeconds: retryAfterSeconds(response),
+        location: response.headers.get("location") ?? undefined,
+      };
+    case "ready":
+      return { status: "ready", master: record.master };
+    case "failed":
+      return { status: "failed", failure: record.failure };
   }
-  if (record.status === "ready" && record.master !== undefined) {
-    return { status: "ready", master: record.master };
-  }
-  if (
-    record.status === "failed" &&
-    typeof record.failure?.code === "string" &&
-    typeof record.failure.action === "string"
-  ) {
-    return {
-      status: "failed",
-      failure: { code: record.failure.code, action: record.failure.action },
-    };
-  }
-  throw new ShutterClientError("Shutter returned a malformed job representation", {
-    status: response.status,
-  });
+}
+
+/** Configuration accepts raw key material or its base64url string form. */
+function keyMaterial(key: CapabilityKeyMaterial | string): CapabilityKeyMaterial {
+  if (ArrayBuffer.isView(key) || key instanceof CryptoKey) return key;
+  return decodeCapabilityKey(key);
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -193,14 +213,18 @@ export class ShutterClient {
     },
   ): Promise<string> {
     const keyConfig = requireConfig(this.#config.capabilityKey, "capabilityKey");
-    const key =
-      typeof keyConfig.key === "string" ? decodeCapabilityKey(keyConfig.key) : keyConfig.key;
+    const key = keyMaterial(keyConfig.key);
     const iat = claims.iat ?? Math.floor(Date.now() / 1000);
     const exp = claims.exp ?? iat + (this.#config.capabilityLifetimeSeconds ?? 300);
-    return issueSourceCapability(
-      { ...claims, space_id: this.#config.spaceId, iat, exp } as SourceCapabilityClaims,
-      { kid: keyConfig.kid, key },
-    );
+    // SAFETY: `claims` is one member of the union minus the fields restored
+    // here; TypeScript cannot re-attach the shared fields to a distributed Omit.
+    const fullClaims = {
+      ...claims,
+      space_id: this.#config.spaceId,
+      iat,
+      exp,
+    } as SourceCapabilityClaims;
+    return issueSourceCapability(fullClaims, { kid: keyConfig.kid, key });
   }
 
   // Delivery URLs

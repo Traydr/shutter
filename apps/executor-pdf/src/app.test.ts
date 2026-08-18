@@ -9,7 +9,7 @@ function config() {
     controlBaseUrl: "http://control.test",
     roleToken: TOKEN,
     bucket: "test",
-    s3: {} as S3Client,
+    s3: { send: vi.fn<S3Client["send"]>() },
     fetch: vi.fn<typeof fetch>(),
   };
 }

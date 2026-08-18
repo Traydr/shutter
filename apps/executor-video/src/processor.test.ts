@@ -21,15 +21,18 @@ async function paths(): Promise<{ input: string; output: string }> {
 describe("video preview processor", () => {
   it("downloads over HTTPS, renders a bounded WebP, and reports dimensions", async () => {
     const { input, output } = await paths();
-    const fetch_ = vi.fn(
+    const fetch_ = vi.fn<typeof fetch>(
       async () =>
         new Response(new Uint8Array([1, 2, 3]), {
           headers: { "content-length": "3" },
         }),
-    ) as unknown as typeof fetch;
+    );
     const run = vi.fn(async (command: string, arguments_: readonly string[]) => {
-      if (command === "ffmpeg")
-        await writeFile(arguments_.at(-1) as string, new Uint8Array([4, 5]));
+      if (command === "ffmpeg") {
+        const outputPath = arguments_.at(-1);
+        if (outputPath === undefined) throw new Error("ffmpeg was run without an output path");
+        await writeFile(outputPath, new Uint8Array([4, 5]));
+      }
       return command === "ffprobe"
         ? JSON.stringify({ streams: [{ width: 640, height: 360 }] })
         : "";
@@ -51,13 +54,13 @@ describe("video preview processor", () => {
 
   it("rejects a redirect that downgrades to HTTP before fetching it", async () => {
     const { input, output } = await paths();
-    const fetch_ = vi.fn(
+    const fetch_ = vi.fn<typeof fetch>(
       async () =>
         new Response(null, {
           status: 302,
           headers: { location: "http://media.example/video.mp4" },
         }),
-    ) as unknown as typeof fetch;
+    );
 
     await expect(
       processVideoPreview("https://media.example/start", input, output, {
@@ -74,13 +77,13 @@ describe("video preview processor", () => {
 
   it("rejects a redirect off the Space allowlist", async () => {
     const { input, output } = await paths();
-    const fetch_ = vi.fn(
+    const fetch_ = vi.fn<typeof fetch>(
       async () =>
         new Response(null, {
           status: 302,
           headers: { location: "https://evil.example/video.mp4" },
         }),
-    ) as unknown as typeof fetch;
+    );
 
     await expect(
       processVideoPreview("https://media.example/start", input, output, {

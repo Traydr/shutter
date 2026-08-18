@@ -25,13 +25,14 @@ async function paths(): Promise<{ input: string; prefix: string; output: string 
 describe("PDF preview processor", () => {
   it("renders page one to a bounded WebP and reports dimensions", async () => {
     const { input, prefix, output } = await paths();
-    const fetch_ = vi.fn(
-      async () => new Response(new Uint8Array([1, 2, 3])),
-    ) as unknown as typeof fetch;
+    const fetch_ = vi.fn<typeof fetch>(async () => new Response(new Uint8Array([1, 2, 3])));
     const run = vi.fn(async (command: string, arguments_: readonly string[]) => {
       if (command === "pdfinfo") return "Pages: 2\nEncrypted: no\n";
-      if (command === "ffmpeg")
-        await writeFile(arguments_.at(-1) as string, new Uint8Array([6, 7]));
+      if (command === "ffmpeg") {
+        const outputPath = arguments_.at(-1);
+        if (outputPath === undefined) throw new Error("ffmpeg was run without an output path");
+        await writeFile(outputPath, new Uint8Array([6, 7]));
+      }
       return command === "ffprobe"
         ? JSON.stringify({ streams: [{ width: 800, height: 1200 }] })
         : "";
@@ -58,7 +59,7 @@ describe("PDF preview processor", () => {
 
   it("returns the stable password-protected failure before rendering", async () => {
     const { input, prefix, output } = await paths();
-    const fetch_ = vi.fn(async () => new Response(new Uint8Array([1]))) as unknown as typeof fetch;
+    const fetch_ = vi.fn(async () => new Response(new Uint8Array([1])));
 
     await expect(
       processPdfPreview("https://media.example/file.pdf", input, prefix, output, {

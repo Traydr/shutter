@@ -4,9 +4,11 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
   type JobFailureCode,
+  type JsonValue,
   type SourceOriginRule,
   validateSourceLocator,
 } from "@shutter/protocol";
+import { z } from "zod";
 
 export class ProcessingFailure extends Error {
   readonly code: JobFailureCode;
@@ -99,34 +101,42 @@ export async function downloadSource(options: {
         );
       },
     });
-    await pipeline(
-      Readable.fromWeb(response.body as never),
-      limit,
-      createWriteStream(options.destination),
-    );
+    // SAFETY: at runtime this body is Node's own web ReadableStream (undici);
+    // only the DOM lib types it as the browser interface, which fromWeb rejects.
+    const source = Readable.fromWeb(response.body as never);
+    await pipeline(source, limit, createWriteStream(options.destination));
     return;
   }
 }
 
-export function parseFfprobeDimensions(
-  value: string,
-  missingMessage: string,
-): { width: number; height: number } {
-  const parsed = JSON.parse(value) as { streams?: Array<{ width?: number; height?: number }> };
-  const stream = parsed.streams?.[0];
-  const width = stream?.width;
-  const height = stream?.height;
-  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)) {
+export interface MediaDimensions {
+  width: number;
+  height: number;
+}
+
+/** The part of ffprobe's JSON output the executors read: the first stream's dimensions. */
+const ffprobeDimensionsSchema = z.object({
+  streams: z.tuple([z.object({ width: z.int(), height: z.int() })]).rest(z.unknown()),
+});
+
+export function parseFfprobeDimensions(value: string, missingMessage: string): MediaDimensions {
+  let output: JsonValue;
+  try {
+    output = JSON.parse(value);
+  } catch {
     throw new ProcessingFailure("source_corrupt", missingMessage);
   }
-  return { width: width as number, height: height as number };
+  const parsed = ffprobeDimensionsSchema.safeParse(output);
+  if (!parsed.success) throw new ProcessingFailure("source_corrupt", missingMessage);
+  const [{ width, height }] = parsed.data.streams;
+  return { width, height };
 }
 
 export async function probeWebpDimensions(
   run: CommandRunner,
   path: string,
   missingMessage: string,
-): Promise<{ width: number; height: number }> {
+): Promise<MediaDimensions> {
   const probe = await run(
     "ffprobe",
     [
