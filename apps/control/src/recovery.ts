@@ -46,7 +46,7 @@ async function dispatchKind(
 export async function runRecoverySweep(runtime: RecoveryRuntime): Promise<RecoveryResult> {
   const now = runtime.now();
   const maintenance = await runtime.lifecycle.maintain(now, RECOVERY_BATCH_SIZE);
-  const counts: Record<PreviewKind, number> = { video: 0, pdf: 0 };
+  const counts = { video: 0, pdf: 0 };
   for (const kind of maintenance.runnableKinds) counts[kind] += 1;
 
   const [video, pdf] = await Promise.all([

@@ -1,10 +1,16 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { Writable } from "node:stream";
+import type { OperationalEvent } from "@shutter/protocol";
 import { describe, expect, it } from "vitest";
 import { createControlLogger, operationalErrorType } from "./logging.js";
 
-function capturingStdout(): { stdout: Writable; read: () => string } {
+interface CapturedStdout {
+  stdout: Writable;
+  read: () => string;
+}
+
+function capturingStdout(): CapturedStdout {
   let output = "";
   return {
     stdout: new Writable({
@@ -29,6 +35,7 @@ describe("ControlLogger", () => {
       });
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    // SAFETY: listen(0, host) resolved, so the server is bound to a TCP address.
     const { port } = server.address() as AddressInfo;
     const endpoint = `http://127.0.0.1:${port}/v1/logs`;
     const { stdout, read } = capturingStdout();
@@ -42,13 +49,17 @@ describe("ControlLogger", () => {
     );
 
     try {
-      logger.emit("info", {
+      // Junk reaches a logger through untyped merges at runtime; the allowlist must drop it.
+      const leakyEvent: OperationalEvent = {
         event: "control.job.completed",
         kind: "video",
         outcome: "ready",
+      };
+      Object.assign(leakyEvent, {
         locator: "https://secret.example/source?token=value",
         authorization: "Bearer secret",
-      } as never);
+      });
+      logger.emit("info", leakyEvent);
       await logger.shutdown();
     } finally {
       await new Promise<void>((resolve, reject) =>

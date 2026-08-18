@@ -1,5 +1,4 @@
 import { S3Client } from "@aws-sdk/client-s3";
-import type { PreviewKind } from "@shutter/protocol";
 import { Pool } from "pg";
 import type { ControlRuntimeConfig } from "./app.js";
 import { EdgeRefreshTracker } from "./edge-refresh-status.js";
@@ -82,6 +81,11 @@ const FEATURE_INPUTS = {
 
 type Inputs<Names extends readonly EnvName[]> = { [Name in Names[number]]: string };
 
+interface ReadInputs<Names extends readonly EnvName[]> {
+  missing: readonly string[];
+  values: Inputs<Names> | undefined;
+}
+
 /**
  * Reads a set of environment names as strings. `values` is populated only when
  * every name is present, so a caller checks `missing` first and then reads
@@ -90,20 +94,24 @@ type Inputs<Names extends readonly EnvName[]> = { [Name in Names[number]]: strin
 function readInputs<const Names extends readonly EnvName[]>(
   env: ServerEnv,
   names: Names,
-): { missing: readonly string[]; values: Inputs<Names> | undefined } {
+): ReadInputs<Names> {
   const missing = names.filter((name) => env[name] === undefined || env[name] === "");
   if (missing.length > 0) return { missing, values: undefined };
-  const values = Object.fromEntries(names.map((name) => [name, String(env[name])]));
-  return { missing, values: values as Inputs<Names> };
+  // SAFETY: `names` is exactly the key set of Inputs<Names>, and the filter
+  // above proved every one of them is present and non-empty in `env`.
+  const values = Object.fromEntries(
+    names.map((name) => [name, String(env[name])]),
+  ) as Inputs<Names>;
+  return { missing, values };
 }
 
 function statusOf(missing: readonly string[]): ControlFeatureStatus {
   return missing.length === 0 ? "ready" : { missing };
 }
 
-function malformed(name: EnvName, error: unknown): Error {
+function malformed(name: EnvName, cause: unknown): Error {
   return new Error(
-    `${name} is set but not usable: ${error instanceof Error ? error.message : "unknown error"}`,
+    `${name} is set but not usable: ${cause instanceof Error ? cause.message : "unknown error"}`,
   );
 }
 
@@ -135,8 +143,11 @@ interface ExecutorEndpoint {
   token: string;
 }
 
-function executorEndpoints(env: ServerEnv): Record<PreviewKind, ExecutorEndpoint | undefined> {
-  const endpoint = (baseUrl: string | undefined, token: string | undefined) =>
+function executorEndpoints(env: ServerEnv) {
+  const endpoint = (
+    baseUrl: string | undefined,
+    token: string | undefined,
+  ): ExecutorEndpoint | undefined =>
     baseUrl === undefined || token === undefined ? undefined : { baseUrl, token };
   return {
     video: endpoint(env.VIDEO_EXECUTOR_BASE_URL, env.VIDEO_EXECUTOR_TOKEN),
@@ -232,10 +243,7 @@ export function buildControlRuntime(
   // token stands alone: an Executor that polls Control (or is woken some other
   // way) authenticates with its token whether or not Control can wake it.
   const executors = executorEndpoints(env);
-  const executorTokens: Record<PreviewKind, string | undefined> = {
-    video: env.VIDEO_EXECUTOR_TOKEN,
-    pdf: env.PDF_EXECUTOR_TOKEN,
-  };
+  const executorTokens = { video: env.VIDEO_EXECUTOR_TOKEN, pdf: env.PDF_EXECUTOR_TOKEN };
   const dispatch = createSerializedExecutorDispatch(async (kind) => {
     const endpoint = executors[kind];
     if (endpoint === undefined) throw new Error(`${kind} executor dispatch is not configured`);
@@ -244,20 +252,20 @@ export function buildControlRuntime(
     logger.emit("info", { event: "control.executor.delegated", kind, outcome: "ready" });
   });
 
-  const jobApiRuntime: JobApiRuntime | undefined =
-    lifecycle === undefined || spaceRegistry === undefined
-      ? undefined
-      : {
-          logger,
-          lifecycle,
-          now,
-          spaceRegistry,
-          executorToken: (kind) => executorTokens[kind],
-          dispatch,
-          ...(sourcePurge === undefined ? {} : { sourcePurge }),
-        };
+  let jobApiRuntime: JobApiRuntime | undefined;
+  if (lifecycle !== undefined && spaceRegistry !== undefined) {
+    jobApiRuntime = {
+      logger,
+      lifecycle,
+      now,
+      spaceRegistry,
+      executorToken: (kind) => executorTokens[kind],
+      dispatch,
+    };
+    if (sourcePurge !== undefined) jobApiRuntime.sourcePurge = sourcePurge;
+  }
 
-  const features: ControlFeatures = {
+  const features = {
     spaceRegistry: statusOf(registryInputs.missing),
     jobApi: statusOf(registryInputs.missing),
     edgeConfig: statusOf(readInputs(env, FEATURE_INPUTS.edgeConfig).missing),
@@ -266,7 +274,7 @@ export function buildControlRuntime(
     sourcePurge: statusOf(purgeInputs.missing),
     imgproxy: statusOf(imgproxyInputs.missing),
     executorDispatch: statusOf(readInputs(env, FEATURE_INPUTS.executorDispatch).missing),
-  };
+  } satisfies ControlFeatures;
 
   const config: ControlRuntimeConfig = {
     logger,
@@ -277,10 +285,10 @@ export function buildControlRuntime(
     imgproxyConfig: () => imgproxyConfig,
     fetch,
     edgeRefreshTracker: new EdgeRefreshTracker(now),
-    ...(masterStore === undefined ? {} : { masterStore }),
-    ...(jobApiRuntime === undefined ? {} : { jobApiRuntime }),
-    ...(spaceRegistry === undefined ? {} : { spaceRegistry }),
   };
+  if (masterStore !== undefined) config.masterStore = masterStore;
+  if (jobApiRuntime !== undefined) config.jobApiRuntime = jobApiRuntime;
+  if (spaceRegistry !== undefined) config.spaceRegistry = spaceRegistry;
 
   return {
     config,

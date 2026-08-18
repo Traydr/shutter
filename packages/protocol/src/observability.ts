@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { sourceFingerprint } from "./cache-identity.js";
 import { CONTROL_HTTP_ROUTES, type ControlHttpRoute } from "./control-routes.js";
 import {
@@ -77,7 +78,7 @@ export interface OperationalEvent extends OperationalEventFields {
   processingTokenHash?: string;
 }
 
-const EVENT_NAMES = new Set<string>(OPERATIONAL_EVENT_NAMES);
+const EVENT_NAME_SCHEMA = z.enum(OPERATIONAL_EVENT_NAMES);
 const FAILURE_CODES = new Set<string>([
   ...Object.keys(FAILURE_ACTIONS),
   "service_unavailable",
@@ -92,49 +93,28 @@ const FEATURES = new RegExp(`^${FEATURE_ENTRY}(?: ${FEATURE_ENTRY}){0,31}$`, "u"
 const CONTROL_HTTP_ROUTE_TEMPLATES = new Set<string>(Object.values(CONTROL_HTTP_ROUTES));
 
 type OptionalOperationalEventField = Exclude<keyof OperationalEvent, "event">;
-type FieldSanitizers = {
-  [Field in OptionalOperationalEventField]-?: (
-    value: unknown,
-  ) => OperationalEvent[Field] | undefined;
+type FieldSchemas = {
+  [Field in OptionalOperationalEventField]-?: z.ZodType<NonNullable<OperationalEvent[Field]>>;
 };
 
-function oneOf<const Values extends readonly string[]>(
-  ...values: Values
-): (value: unknown) => Values[number] | undefined {
-  const allowed = new Set<string>(values);
-  return (value) =>
-    typeof value === "string" && allowed.has(value) ? (value as Values[number]) : undefined;
-}
+type FailureCodeField = NonNullable<OperationalEventFields["failureCode"]>;
+type HttpRouteField = NonNullable<OperationalEventFields["httpRoute"]>;
 
-function matching(pattern: RegExp): (value: unknown) => string | undefined {
-  return (value) => (typeof value === "string" && pattern.test(value) ? value : undefined);
-}
+const nonNegativeInteger = z.int().nonnegative();
 
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isNonNegativeNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-function isControlHttpRoute(value: string): value is ControlHttpRoute {
-  return CONTROL_HTTP_ROUTE_TEMPLATES.has(value);
-}
-
-function safeHttpRoute(value: unknown): ControlHttpRoute | "<unmatched>" | undefined {
-  if (value === "<unmatched>") return value;
-  return typeof value === "string" && isControlHttpRoute(value) ? value : undefined;
-}
-
-const FIELD_SANITIZERS = {
-  sourceHash: matching(HASH),
-  processingTokenHash: matching(HASH),
-  routeClass: oneOf("public", "private"),
-  cacheOutcome: oneOf("edge-hit", "r2-hit", "origin"),
-  mediaClass: oneOf("image", "video", "pdf"),
-  byteRangeOutcome: oneOf("none", "edge-hit", "origin", "unsatisfied"),
-  originFetchResult: oneOf(
+/**
+ * One schema per allowlisted field. `sanitizeOperationalEvent` keeps a field
+ * only when its value parses, so a malformed or unexpected value is dropped
+ * rather than logged.
+ */
+const FIELD_SCHEMAS = {
+  sourceHash: z.string().regex(HASH),
+  processingTokenHash: z.string().regex(HASH),
+  routeClass: z.enum(["public", "private"]),
+  cacheOutcome: z.enum(["edge-hit", "r2-hit", "origin"]),
+  mediaClass: z.enum(["image", "video", "pdf"]),
+  byteRangeOutcome: z.enum(["none", "edge-hit", "origin", "unsatisfied"]),
+  originFetchResult: z.enum([
     "not-requested",
     "complete",
     "partial",
@@ -142,48 +122,44 @@ const FIELD_SANITIZERS = {
     "unsatisfied",
     "rejected",
     "failed",
-  ),
-  kind: oneOf("video", "pdf"),
-  executionCycle: (value) => (isNonNegativeInteger(value) ? value : undefined),
-  attemptNumber: (value) => (isNonNegativeInteger(value) ? value : undefined),
-  durationMs: (value) => (isNonNegativeNumber(value) ? value : undefined),
-  outcome: oneOf("accepted", "ready", "failed", "idle", "busy"),
-  failureCode: (value) =>
-    typeof value === "string" && FAILURE_CODES.has(value)
-      ? (value as NonNullable<OperationalEventFields["failureCode"]>)
-      : undefined,
-  count: (value) => (isNonNegativeInteger(value) ? value : undefined),
-  requestId: matching(REQUEST_ID),
-  httpMethod: matching(HTTP_METHOD),
-  httpRoute: safeHttpRoute,
-  httpStatusCode: (value) =>
-    typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599
-      ? value
-      : undefined,
-  errorType: matching(ERROR_TYPE),
-  features: matching(FEATURES),
-} satisfies FieldSanitizers;
+  ]),
+  kind: z.enum(["video", "pdf"]),
+  executionCycle: nonNegativeInteger,
+  attemptNumber: nonNegativeInteger,
+  durationMs: z.number().nonnegative(),
+  outcome: z.enum(["accepted", "ready", "failed", "idle", "busy"]),
+  failureCode: z.string().refine((value): value is FailureCodeField => FAILURE_CODES.has(value)),
+  count: nonNegativeInteger,
+  requestId: z.string().regex(REQUEST_ID),
+  httpMethod: z.string().regex(HTTP_METHOD),
+  httpRoute: z
+    .string()
+    .refine(
+      (value): value is HttpRouteField =>
+        value === "<unmatched>" || CONTROL_HTTP_ROUTE_TEMPLATES.has(value),
+    ),
+  httpStatusCode: z.int().min(100).max(599),
+  errorType: z.string().regex(ERROR_TYPE),
+  features: z.string().regex(FEATURES),
+} satisfies FieldSchemas;
 
-export function operationalErrorType(error: unknown): string {
-  if (!(error instanceof Error)) return "NonErrorThrown";
-  return ERROR_TYPE.test(error.name) ? error.name : "Error";
+function isOptionalEventField(field: string): field is OptionalOperationalEventField {
+  return Object.hasOwn(FIELD_SCHEMAS, field);
 }
 
-function setSanitizedField<Field extends OptionalOperationalEventField>(
-  event: OperationalEvent,
-  field: Field,
-  value: NonNullable<OperationalEvent[Field]>,
-): void {
-  Object.assign(event, { [field]: value });
+export function operationalErrorType(cause: unknown): string {
+  if (!(cause instanceof Error)) return "NonErrorThrown";
+  return ERROR_TYPE.test(cause.name) ? cause.name : "Error";
 }
 
-export function sanitizeOperationalEvent(event: unknown): OperationalEvent {
-  const candidate =
-    typeof event === "object" && event !== null && !Array.isArray(event)
-      ? (event as Record<string, unknown>)
-      : {};
-  const eventName = candidate.event;
-  if (typeof eventName !== "string" || !EVENT_NAMES.has(eventName)) {
+/**
+ * Reduce an event to its allowlisted, well-formed fields. The parameter is
+ * typed, but every value is re-checked at runtime so a field that carries an
+ * unexpected value never reaches a log sink.
+ */
+export function sanitizeOperationalEvent(event: OperationalEvent): OperationalEvent {
+  const eventName = EVENT_NAME_SCHEMA.safeParse(event.event);
+  if (!eventName.success) {
     return {
       event: "control.service.failed",
       outcome: "failed",
@@ -192,12 +168,11 @@ export function sanitizeOperationalEvent(event: unknown): OperationalEvent {
     };
   }
 
-  const sanitizedEvent: OperationalEvent = {
-    event: eventName as OperationalEventName,
-  };
-  for (const field of Object.keys(FIELD_SANITIZERS) as OptionalOperationalEventField[]) {
-    const sanitized = FIELD_SANITIZERS[field](candidate[field]);
-    if (sanitized !== undefined) setSanitizedField(sanitizedEvent, field, sanitized);
+  const sanitizedEvent: OperationalEvent = { event: eventName.data };
+  for (const [field, candidate] of Object.entries(event)) {
+    if (!isOptionalEventField(field)) continue;
+    const value = FIELD_SCHEMAS[field].safeParse(candidate);
+    if (value.success) Object.assign(sanitizedEvent, { [field]: value.data });
   }
   return sanitizedEvent;
 }
@@ -209,18 +184,14 @@ export async function operationalEvent(input: {
   processingToken?: string;
   fields?: OperationalEventFields;
 }): Promise<OperationalEvent> {
-  return sanitizeOperationalEvent({
-    event: input.event,
-    ...(input.spaceId === undefined || input.sourceId === undefined
-      ? {}
-      : { sourceHash: await sourceFingerprint(input.spaceId, input.sourceId) }),
-    ...(input.processingToken === undefined
-      ? {}
-      : {
-          processingTokenHash: await sourceFingerprint("processing-token", input.processingToken),
-        }),
-    ...input.fields,
-  });
+  const event: OperationalEvent = { ...input.fields, event: input.event };
+  if (input.spaceId !== undefined && input.sourceId !== undefined) {
+    event.sourceHash = await sourceFingerprint(input.spaceId, input.sourceId);
+  }
+  if (input.processingToken !== undefined) {
+    event.processingTokenHash = await sourceFingerprint("processing-token", input.processingToken);
+  }
+  return sanitizeOperationalEvent(event);
 }
 
 export function emitOperationalEvent(level: "info" | "error", event: OperationalEvent): void {

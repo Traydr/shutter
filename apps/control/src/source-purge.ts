@@ -3,19 +3,27 @@ import {
   buildMasterPurgePrefix,
   buildR2CachePurgePrefix,
   buildSourceCacheTag,
+  type JsonValue,
   operationalEvent,
 } from "@shutter/protocol";
+import { z } from "zod";
 import type { ControlLogger } from "./logging.js";
 import type { PreviewJobLifecycle, SourceIdentity } from "./preview-job-lifecycle.js";
+
+/** The one field of a Cloudflare purge response that decides success. */
+const purgeSucceededSchema = z.object({ success: z.literal(true) });
 
 export interface SourcePurge {
   purge(source: SourceIdentity): Promise<void>;
 }
 
+/** The part of the S3 client the purge depends on: sending list and delete commands. */
+export type MediaStoreClient = Pick<S3Client, "send">;
+
 export interface SourcePurgeConfig {
   logger: ControlLogger;
   lifecycle: PreviewJobLifecycle;
-  s3: S3Client;
+  s3: MediaStoreClient;
   bucket: string;
   cloudflareZoneId: string;
   cloudflareApiToken: string;
@@ -24,14 +32,14 @@ export interface SourcePurgeConfig {
   fetch: typeof globalThis.fetch;
 }
 
-async function deletePrefix(s3: S3Client, bucket: string, prefix: string): Promise<void> {
+async function deletePrefix(s3: MediaStoreClient, bucket: string, prefix: string): Promise<void> {
   let continuationToken: string | undefined;
   do {
     const page = await s3.send(
       new ListObjectsV2Command({
         Bucket: bucket,
         Prefix: prefix,
-        ...(continuationToken === undefined ? {} : { ContinuationToken: continuationToken }),
+        ContinuationToken: continuationToken,
       }),
     );
     const objects = (page.Contents ?? []).flatMap((object) =>
@@ -87,18 +95,13 @@ export function createSourcePurge(config: SourcePurgeConfig): SourcePurge {
             },
           );
           if (!response.ok) throw new Error("cache tag purge failed");
-          let result: unknown;
+          let result: JsonValue;
           try {
             result = await response.json();
           } catch {
             throw new Error("cache tag purge failed");
           }
-          if (
-            typeof result !== "object" ||
-            result === null ||
-            !("success" in result) ||
-            result.success !== true
-          ) {
+          if (!purgeSucceededSchema.safeParse(result).success) {
             throw new Error("cache tag purge failed");
           }
         });

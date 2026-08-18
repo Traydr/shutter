@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { decodeBase64Url, encodeBase64Url } from "./base64url.js";
 import { copyBytes, encodeUtf8, frameStrings } from "./binary.js";
 import {
@@ -11,6 +12,7 @@ import {
   SOURCE_LOCATOR_MAX_BYTES,
 } from "./constants.js";
 import { ProtocolError } from "./errors.js";
+import type { JsonValue } from "./json.js";
 import { normalizeSourceOriginPathPrefix } from "./space-policy.js";
 import type { CapabilityPurpose, SourceCapabilityClaims, SourceOriginRule } from "./types.js";
 
@@ -65,24 +67,24 @@ function validateKid(kid: string): void {
   }
 }
 
-const PURPOSE_CLAIM_SHAPES = {
+const PURPOSE_CLAIM_FIELDS = {
   image_source: { locator: true, kind: false },
   source_delivery: { locator: true, kind: false },
   master_preview: { locator: false, kind: true },
   preview_job: { locator: true, kind: true },
 } as const satisfies Record<CapabilityPurpose, { locator: boolean; kind: boolean }>;
 
-function claimShape(purpose: CapabilityPurpose) {
-  return PURPOSE_CLAIM_SHAPES[purpose];
+function purposeClaimFields(purpose: CapabilityPurpose) {
+  return PURPOSE_CLAIM_FIELDS[purpose];
 }
 
 function expectedClaimKeys(purpose: CapabilityPurpose): readonly string[] {
-  const shape = claimShape(purpose);
+  const fields = purposeClaimFields(purpose);
   return [
     "exp",
     "iat",
-    ...(shape.kind ? ["kind"] : []),
-    ...(shape.locator ? ["locator"] : []),
+    ...(fields.kind ? ["kind"] : []),
+    ...(fields.locator ? ["locator"] : []),
     "purpose",
     "source_id",
     "space_id",
@@ -130,14 +132,40 @@ function validateLocator(locator: string, rules: readonly SourceOriginRule[]): v
   if (!allowed) throw new ProtocolError("locator_not_allowed", "source locator is not allowlisted");
 }
 
+/**
+ * The claim fields as they appear in decrypted capability plaintext, before the
+ * per-purpose field set, lifetime, and locator rules have been enforced.
+ */
+const claimsCandidateSchema = z.strictObject(
+  {
+    space_id: z.string({ error: "Space ID must be a string" }),
+    source_id: z.string({ error: "source ID must be a non-empty string" }),
+    purpose: z.string({ error: "purpose must be a string" }),
+    iat: z.int({ error: "capability times must be integer Unix seconds" }),
+    exp: z.int({ error: "capability times must be integer Unix seconds" }),
+    locator: z.string({ error: "locator must be a string" }).optional(),
+    kind: z.string({ error: "preview kind must be video or pdf" }).optional(),
+  },
+  { error: "capability claims must be a JSON object with only the v1 claim fields" },
+);
+
+type CapabilityClaimsCandidate = z.output<typeof claimsCandidateSchema>;
+
+function parseClaimsCandidate(
+  input: JsonValue | SourceCapabilityClaims,
+): CapabilityClaimsCandidate {
+  const parsed = claimsCandidateSchema.safeParse(input);
+  if (parsed.success) return parsed.data;
+  throw new ProtocolError(
+    "claims_invalid",
+    parsed.error.issues[0]?.message ?? "capability claims are invalid",
+  );
+}
+
 function validateClaims(
-  input: unknown,
+  record: CapabilityClaimsCandidate,
   options: VerifyCapabilityOptions<CapabilityPurpose>,
 ): SourceCapabilityClaims {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    throw new ProtocolError("claims_invalid", "capability claims must be a JSON object");
-  }
-  const record = input as Record<string, unknown>;
   const actualKeys = Object.keys(record).sort();
   const expectedKeys = [...expectedClaimKeys(options.expectedPurpose)].sort();
   if (
@@ -156,7 +184,7 @@ function validateClaims(
   if (record.purpose !== options.expectedPurpose) {
     throw new ProtocolError("purpose_mismatch", "capability purpose does not match the route");
   }
-  if (typeof record.source_id !== "string" || record.source_id.length === 0) {
+  if (record.source_id.length === 0) {
     throw new ProtocolError("claims_invalid", "source ID must be a non-empty string");
   }
   if (encodeUtf8(record.source_id).byteLength > SOURCE_ID_MAX_BYTES) {
@@ -165,12 +193,9 @@ function validateClaims(
   if (options.expectedSourceId !== undefined && record.source_id !== options.expectedSourceId) {
     throw new ProtocolError("source_mismatch", "capability Source ID does not match the route");
   }
-  if (!Number.isSafeInteger(record.iat) || !Number.isSafeInteger(record.exp)) {
-    throw new ProtocolError("claims_invalid", "capability times must be integer Unix seconds");
-  }
 
-  const issuedAt = record.iat as number;
-  const expiresAt = record.exp as number;
+  const issuedAt = record.iat;
+  const expiresAt = record.exp;
   if (issuedAt > options.now) {
     throw new ProtocolError("capability_not_yet_valid", "capability was issued in the future");
   }
@@ -181,24 +206,40 @@ function validateClaims(
     throw new ProtocolError("claims_invalid", "capability lifetime is invalid");
   }
 
-  const shape = claimShape(options.expectedPurpose);
-  if (shape.locator) {
-    if (typeof record.locator !== "string") {
-      throw new ProtocolError("claims_invalid", "this capability purpose requires a locator");
-    }
-    validateLocator(record.locator, options.allowedSourceOrigins ?? []);
-  }
+  const common = {
+    space_id: record.space_id,
+    source_id: record.source_id,
+    iat: issuedAt,
+    exp: expiresAt,
+  };
 
-  if (shape.kind) {
-    if (record.kind !== "video" && record.kind !== "pdf") {
+  const locator = record.locator;
+  if (locator !== undefined) validateLocator(locator, options.allowedSourceOrigins ?? []);
+  const kind = record.kind;
+  if (kind !== undefined) {
+    if (kind !== "video" && kind !== "pdf") {
       throw new ProtocolError("claims_invalid", "preview kind must be video or pdf");
     }
-    if (options.expectedKind !== undefined && record.kind !== options.expectedKind) {
+    if (options.expectedKind !== undefined && kind !== options.expectedKind) {
       throw new ProtocolError("kind_mismatch", "capability kind does not match the route");
     }
   }
 
-  return record as unknown as SourceCapabilityClaims;
+  // The exact-key check above guarantees each purpose carries precisely the
+  // fields its representation requires; the branches below re-establish that
+  // for the type system without asserting.
+  const purpose = options.expectedPurpose;
+  if (purpose === "image_source" || purpose === "source_delivery") {
+    if (locator === undefined)
+      throw new ProtocolError("claims_invalid", "purpose requires locator");
+    return { ...common, purpose, locator };
+  }
+  if (kind !== "video" && kind !== "pdf") {
+    throw new ProtocolError("claims_invalid", "purpose requires kind");
+  }
+  if (purpose === "master_preview") return { ...common, purpose, kind };
+  if (locator === undefined) throw new ProtocolError("claims_invalid", "purpose requires locator");
+  return { ...common, purpose, kind, locator };
 }
 
 function canonicalClaimsJson(claims: SourceCapabilityClaims): string {
@@ -209,19 +250,15 @@ function canonicalClaimsJson(claims: SourceCapabilityClaims): string {
     iat: claims.iat,
     exp: claims.exp,
   };
-  const shape = claimShape(claims.purpose);
-  const purposeClaims: { kind?: "video" | "pdf"; locator?: string } = {};
-  if (shape.kind) {
-    if (!("kind" in claims)) throw new ProtocolError("claims_invalid", "purpose requires kind");
-    purposeClaims.kind = claims.kind;
+  switch (claims.purpose) {
+    case "image_source":
+    case "source_delivery":
+      return JSON.stringify({ ...common, locator: claims.locator });
+    case "master_preview":
+      return JSON.stringify({ ...common, kind: claims.kind });
+    case "preview_job":
+      return JSON.stringify({ ...common, kind: claims.kind, locator: claims.locator });
   }
-  if (shape.locator) {
-    if (!("locator" in claims)) {
-      throw new ProtocolError("claims_invalid", "purpose requires locator");
-    }
-    purposeClaims.locator = claims.locator;
-  }
-  return JSON.stringify({ ...common, ...purposeClaims });
 }
 
 export async function issueSourceCapability(
@@ -242,22 +279,22 @@ export async function issueSourceCapabilityWithIvInternal(
     throw new ProtocolError("claims_invalid", "AES-GCM IV must be 96 bits");
   }
 
-  // Issuance applies the same strict shape, lifetime, and locator checks as verification.
-  const shape = claimShape(claims.purpose);
+  // Issuance applies the same strict field, lifetime, and locator checks as verification.
+  const fields = purposeClaimFields(claims.purpose);
   let issuanceOrigin = "https://invalid.shutter.invalid";
-  if (shape.locator && "locator" in claims) {
+  if ("locator" in claims) {
     try {
       issuanceOrigin = new URL(claims.locator).origin;
     } catch {
       // validateClaims returns the stable protocol error for malformed locators.
     }
   }
-  validateClaims(claims, {
+  validateClaims(parseClaimsCandidate(claims), {
     spaceId: claims.space_id,
     expectedPurpose: claims.purpose,
     keys: new Map(),
     now: claims.iat,
-    allowedSourceOrigins: shape.locator ? [{ origin: issuanceOrigin }] : [],
+    allowedSourceOrigins: fields.locator ? [{ origin: issuanceOrigin }] : [],
   });
 
   const key = await importKey(options.key, "encrypt");
@@ -294,6 +331,7 @@ export async function verifySourceCapability<Purpose extends CapabilityPurpose>(
       "capability envelope must contain four segments",
     );
   }
+  // SAFETY: the length check above proves the split produced exactly four segments.
   const [version, kid, ivValue, ciphertextValue] = parts as [string, string, string, string];
   if (version !== PROTOCOL_VERSION) {
     throw new ProtocolError("unknown_version", "capability version is not supported");
@@ -326,12 +364,14 @@ export async function verifySourceCapability<Purpose extends CapabilityPurpose>(
     throw new ProtocolError("authentication_failed", "capability authentication failed");
   }
 
-  let parsed: unknown;
+  let parsed: JsonValue;
   try {
     parsed = JSON.parse(textDecoder.decode(plaintext));
   } catch {
     throw new ProtocolError("claims_invalid", "capability plaintext is not valid UTF-8 JSON");
   }
 
-  return validateClaims(parsed, options) as ClaimsForPurpose<Purpose>;
+  // SAFETY: validateClaims rejects any claims whose purpose differs from
+  // options.expectedPurpose, so the returned member is the one for Purpose.
+  return validateClaims(parseClaimsCandidate(parsed), options) as ClaimsForPurpose<Purpose>;
 }

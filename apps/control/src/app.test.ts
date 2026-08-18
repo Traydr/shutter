@@ -1,4 +1,8 @@
-import { buildOptimizeSourceQuery, parseEdgeConfigSnapshot } from "@shutter/protocol";
+import {
+  buildOptimizeSourceQuery,
+  type EdgeConfigSnapshotWire,
+  parseEdgeConfigSnapshot,
+} from "@shutter/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { createControlApp } from "./app.js";
 import { EdgeRefreshTracker } from "./edge-refresh-status.js";
@@ -109,7 +113,7 @@ describe("control app", () => {
     const response = await control.request(url, {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
-    const snapshot = await response.json<Record<string, unknown>>();
+    const snapshot: EdgeConfigSnapshotWire = await response.json();
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");

@@ -139,16 +139,9 @@ export interface CapabilityConformanceAdapter {
   ): Promise<SourceCapabilityClaims>;
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
+/** Claims are flat, so a key-sorted replacer list yields one canonical spelling. */
+function canonicalClaims(claims: SourceCapabilityClaims): string {
+  return JSON.stringify(claims, Object.keys(claims).sort());
 }
 
 export async function runCapabilityConformance(
@@ -168,18 +161,17 @@ export async function runCapabilityConformance(
       );
     }
 
-    const verified = await adapter.verify(token, {
+    const verification: VerifyCapabilityOptions<SourceCapabilityClaims["purpose"]> = {
       spaceId: fixture.claims.space_id,
       expectedPurpose: fixture.claims.purpose,
       expectedSourceId: fixture.claims.source_id,
-      ...(fixture.claims.purpose === "master_preview" || fixture.claims.purpose === "preview_job"
-        ? { expectedKind: fixture.claims.kind }
-        : {}),
       keys,
       now: TEST_CAPABILITY_NOW,
       allowedSourceOrigins: TEST_SOURCE_ORIGINS,
-    });
-    if (canonicalJson(verified) !== canonicalJson(fixture.claims)) {
+    };
+    if ("kind" in fixture.claims) verification.expectedKind = fixture.claims.kind;
+    const verified = await adapter.verify(token, verification);
+    if (canonicalClaims(verified) !== canonicalClaims(fixture.claims)) {
       throw new Error(`${fixture.name}: decoded claims drifted`);
     }
   }

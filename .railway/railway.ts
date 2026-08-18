@@ -8,6 +8,7 @@ import {
   preserve,
   project,
   ref,
+  type ServiceConfigInput,
   service,
   type VariableValue,
   volume,
@@ -23,7 +24,11 @@ const executorWatchPatterns = [
   ...workspaceWatchPatterns,
 ];
 
+/** The variables of one service as the Railway SDK accepts them. */
+type ServiceEnv = NonNullable<ServiceConfigInput["env"]>;
+
 function preserved<K extends string>(names: readonly K[]): Record<K, VariableValue> {
+  // SAFETY: `names` is exactly the key set K, and every entry maps to a preserve() value.
   return Object.fromEntries(names.map((name) => [name, preserve()] as const)) as Record<
     K,
     VariableValue
@@ -37,7 +42,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
   // the deployment input, so changing the input actually changes the plan.
   const seeded = input.secretsSeeded;
   const repository = github(input.repository);
-  const s3PublicEnv: Record<string, string> = {
+  const s3PublicEnv = {
     S3_BUCKET: input.r2Bucket,
     S3_ENDPOINT: input.r2Endpoint,
     S3_REGION: input.r2Region,
@@ -123,7 +128,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
       }
     : {};
 
-  const controlEnv: Record<string, string | VariableValue> = {
+  const controlEnv: ServiceEnv = {
     CLOUDFLARE_ZONE_ID: input.cloudflareZoneId,
     DATABASE_URL: Jobs.env.DATABASE_URL,
     EDGE_BASE_URL: `https://${input.edgeDomain}`,
@@ -158,7 +163,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
   });
 
   const executorEnvironment = (roleToken: "PDF_EXECUTOR_TOKEN" | "VIDEO_EXECUTOR_TOKEN") => {
-    const values: Record<string, string | VariableValue> = {
+    const values: ServiceEnv = {
       CONTROL_BASE_URL: `http://\${{Shutter-Control.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
       NODE_ENV: "production",
       PORT: String(nodePort),

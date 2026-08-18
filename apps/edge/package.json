@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@shutter/protocol": "workspace:*",
-    "hono": "4.12.28"
+    "hono": "4.12.28",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.43.0",

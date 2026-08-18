@@ -1,4 +1,4 @@
-import { DeleteObjectCommand, PutObjectCommand, type S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { describe, expect, it, vi } from "vitest";
 import { type ExecutorConfig, type ExecutorProcessor, runExecutorOnce } from "./index.js";
 
@@ -49,7 +49,7 @@ function setup(options?: {
     controlBaseUrl: "https://control.test",
     roleToken: "r".repeat(32),
     bucket: "media",
-    s3: { send } as unknown as S3Client,
+    s3: { send },
     fetch,
   };
   const processor: ExecutorProcessor = {
@@ -85,10 +85,9 @@ describe("Executor work cycle", () => {
       PutObjectCommand,
       DeleteObjectCommand,
     ]);
-    expect((send.mock.calls[1]?.[0] as DeleteObjectCommand).input).toMatchObject({
-      Key: "masters/source-1.webp",
-      IfMatch: '"etag-1"',
-    });
+    const [deletion] = send.mock.calls[1] ?? [];
+    expect(deletion).toBeInstanceOf(DeleteObjectCommand);
+    expect(deletion?.input).toMatchObject({ Key: "masters/source-1.webp", IfMatch: '"etag-1"' });
   });
 
   it("does not delete when fail reports the attempt is already gone", async () => {

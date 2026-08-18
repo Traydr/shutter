@@ -1,5 +1,6 @@
 import {
   CONTROL_HTTP_ROUTES,
+  type JsonValue,
   type ParsedEdgeConfigSnapshot,
   parseEdgeConfigSnapshot,
   serializeEdgeConfigRefreshReport,
@@ -19,9 +20,13 @@ interface CachedSnapshot {
   fetchedAt: number;
 }
 
-interface WaitUntilContext {
+/** The part of the Worker's ExecutionContext the snapshot needs: deferring a background refresh. */
+export interface WaitUntilContext {
   waitUntil(promise: Promise<unknown>): void;
 }
+
+/** The bindings the snapshot reads: where Control lives and how to authenticate to it. */
+export type EdgeConfigBindings = Pick<CloudflareBindings, "ORIGIN_BASE_URL" | "EDGE_CONFIG_TOKEN">;
 
 let cached: CachedSnapshot | undefined;
 let refreshInFlight: Promise<CachedSnapshot> | undefined;
@@ -33,7 +38,7 @@ export class EdgeConfigUnavailableError extends Error {
   }
 }
 
-async function readLimitedJson(response: Response): Promise<unknown> {
+async function readLimitedJson(response: Response): Promise<JsonValue> {
   if (response.body === null) throw new EdgeConfigUnavailableError();
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -63,7 +68,7 @@ async function readLimitedJson(response: Response): Promise<unknown> {
   }
 }
 
-async function fetchSnapshot(bindings: CloudflareBindings): Promise<CachedSnapshot> {
+async function fetchSnapshot(bindings: EdgeConfigBindings): Promise<CachedSnapshot> {
   const url = new URL(CONTROL_HTTP_ROUTES.edgeConfig, bindings.ORIGIN_BASE_URL);
   // HTTPS only, with one exemption so local development can read config from
   // a Control process on the same machine.
@@ -104,7 +109,7 @@ async function fetchSnapshot(bindings: CloudflareBindings): Promise<CachedSnapsh
 }
 
 function refresh(
-  bindings: CloudflareBindings,
+  bindings: EdgeConfigBindings,
   executionContext: WaitUntilContext,
 ): Promise<CachedSnapshot> {
   if (refreshInFlight !== undefined) return refreshInFlight;
@@ -123,7 +128,7 @@ function refresh(
   return pending;
 }
 
-async function reportRefresh(bindings: CloudflareBindings, generation: number): Promise<void> {
+async function reportRefresh(bindings: EdgeConfigBindings, generation: number): Promise<void> {
   const url = new URL(CONTROL_HTTP_ROUTES.edgeConfigRefresh, bindings.ORIGIN_BASE_URL);
   if (url.protocol !== "https:") return;
   const controller = new AbortController();
@@ -152,7 +157,7 @@ function withinFailureGrace(snapshot: CachedSnapshot, now: number): boolean {
 }
 
 export async function getEdgeConfig(
-  bindings: CloudflareBindings,
+  bindings: EdgeConfigBindings,
   executionContext: WaitUntilContext,
 ): Promise<ParsedEdgeConfigSnapshot> {
   const now = Date.now();

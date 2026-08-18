@@ -1,6 +1,7 @@
 import {
   buildMasterPreviewKey,
   CONTROL_HTTP_ROUTES,
+  type JsonValue,
   type OptimizeSourceQuery,
   type PreviewKind,
   ProtocolError,
@@ -9,6 +10,7 @@ import {
   validateSourceLocator,
 } from "@shutter/protocol";
 import type { Hono } from "hono";
+import { z } from "zod";
 import type { ControlRuntimeConfig } from "./app.js";
 import { buildImgproxyRequest } from "./imgproxy.js";
 import { bearerAuthorized } from "./origin-auth.js";
@@ -105,40 +107,31 @@ async function delegateOptimization(
   }
 }
 
-interface OptimizeMasterBody {
-  spaceId: string;
-  sourceId: string;
-  kind: PreviewKind;
-  width: number;
-  quality: number;
-}
-
 /**
  * The master route's body validation stays local until a second consumer
  * appears; the source route's query already parses through the protocol.
  */
-function parseOptimizeMasterBody(body: unknown): OptimizeMasterBody | undefined {
-  if (typeof body !== "object" || body === null || Array.isArray(body)) return undefined;
-  const value = body as Record<string, unknown>;
-  const allowed = new Set(["spaceId", "sourceId", "kind", "w", "q"]);
-  const width = typeof value.w === "number" ? value.w : undefined;
-  const quality = typeof value.q === "number" ? value.q : undefined;
-  if (
-    Object.keys(value).some((key) => !allowed.has(key)) ||
-    typeof value.spaceId !== "string" ||
-    typeof value.sourceId !== "string" ||
-    (value.kind !== "video" && value.kind !== "pdf") ||
-    width === undefined ||
-    !Number.isSafeInteger(width) ||
-    width <= 0 ||
-    quality === undefined ||
-    !Number.isSafeInteger(quality) ||
-    quality <= 0 ||
-    quality > 100
-  ) {
-    return undefined;
-  }
-  return { spaceId: value.spaceId, sourceId: value.sourceId, kind: value.kind, width, quality };
+const optimizeMasterBodySchema = z
+  .strictObject({
+    spaceId: z.string(),
+    sourceId: z.string(),
+    kind: z.enum(["video", "pdf"]),
+    w: z.int().positive(),
+    q: z.int().min(1).max(100),
+  })
+  .transform((body) => ({
+    spaceId: body.spaceId,
+    sourceId: body.sourceId,
+    kind: body.kind,
+    width: body.w,
+    quality: body.q,
+  }));
+
+type OptimizeMasterBody = z.output<typeof optimizeMasterBodySchema>;
+
+function parseOptimizeMasterBody(body: JsonValue): OptimizeMasterBody | undefined {
+  const parsed = optimizeMasterBodySchema.safeParse(body);
+  return parsed.success ? parsed.data : undefined;
 }
 
 export function registerOptimizeRoutes(app: ControlApp, runtime: ControlRuntimeConfig): void {
@@ -172,7 +165,7 @@ export function registerOptimizeRoutes(app: ControlApp, runtime: ControlRuntimeC
 
   app.post(CONTROL_HTTP_ROUTES.optimizeMaster, async (context) => {
     if (!authorizedOrigin(context.req.header("authorization"))) return unauthorized();
-    let body: unknown;
+    let body: JsonValue;
     try {
       if (!context.req.header("content-type")?.toLowerCase().startsWith("application/json")) {
         throw new Error("invalid content type");

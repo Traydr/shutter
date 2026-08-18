@@ -5,6 +5,7 @@ import {
   type SourceResolverPolicy,
   type SpacePolicy,
 } from "@shutter/protocol";
+import { z } from "zod";
 import type { SpacePolicyUpdate } from "../spaces/registry.js";
 
 export class AdminInputError extends Error {
@@ -14,12 +15,18 @@ export class AdminInputError extends Error {
   }
 }
 
+const textField = z.string();
+
+/** The text value of one form field, or undefined when it is absent or a file part. */
+export function formText(form: FormData, name: string): string | undefined {
+  const value = textField.safeParse(form.get(name));
+  return value.success ? value.data : undefined;
+}
+
 function required(form: FormData, name: string): string {
-  const value = form.get(name);
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new AdminInputError();
-  }
-  return value.trim();
+  const value = formText(form, name)?.trim();
+  if (value === undefined || value.length === 0) throw new AdminInputError();
+  return value;
 }
 
 function qualities(form: FormData): readonly number[] {
@@ -37,13 +44,15 @@ function origins(form: FormData): readonly SourceOriginRule[] {
       const url = new URL(line);
       if (url.search !== "" || url.hash !== "") throw new AdminInputError();
       const pathPrefix = normalizeSourceOriginPathPrefix(url.pathname);
-      return { origin: url.origin, ...(pathPrefix === "/" ? {} : { pathPrefix }) };
+      const rule: SourceOriginRule = { origin: url.origin };
+      if (pathPrefix !== "/") rule.pathPrefix = pathPrefix;
+      return rule;
     });
 }
 
 function resolvers(form: FormData): readonly SourceResolverPolicy[] {
-  const input = form.get("resolvers");
-  if (typeof input !== "string" || input.trim().length === 0) return [];
+  const input = formText(form, "resolvers");
+  if (input === undefined || input.trim().length === 0) return [];
   return input
     .split(/\r?\n/u)
     .map((line) => line.trim())

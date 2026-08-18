@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type {
   PrivateSpacePolicy,
   PublicSpacePolicy,
@@ -29,47 +30,21 @@ export function normalizeSourceOriginPathPrefix(pathPrefix: string | undefined):
   return trimmed === "" ? "/" : trimmed;
 }
 
-function record(value: unknown, name: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new SpacePolicyValidationError(`${name} must be an object`);
-  }
-  return value as Record<string, unknown>;
+function identifier(name: string) {
+  const error = `${name} must be a lowercase identifier`;
+  return z.string({ error }).regex(IDENTIFIER_PATTERN, { error });
 }
 
-function exactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-  name: string,
-): void {
-  const actual = Object.keys(value).sort();
-  const wanted = [...expected].sort();
-  if (actual.length !== wanted.length || actual.some((key, index) => key !== wanted[index])) {
-    throw new SpacePolicyValidationError(`${name} contains missing or unknown fields`);
-  }
+function unique<Item>(items: readonly Item[], identity: (item: Item) => string): boolean {
+  return new Set(items.map(identity)).size === items.length;
 }
 
-function identifier(value: unknown, name: string): string {
-  if (typeof value !== "string" || !IDENTIFIER_PATTERN.test(value)) {
-    throw new SpacePolicyValidationError(`${name} must be a lowercase identifier`);
-  }
-  return value;
-}
-
-function sourceOrigin(value: unknown, index: number): SourceOriginRule {
-  const name = `allowedSourceOrigins[${index}]`;
-  const input = record(value, name);
-  const keys = Object.keys(input);
-  if (!keys.includes("origin") || keys.some((key) => key !== "origin" && key !== "pathPrefix")) {
-    throw new SpacePolicyValidationError(`${name} contains missing or unknown fields`);
-  }
-  if (typeof input.origin !== "string") {
-    throw new SpacePolicyValidationError(`${name}.origin must be a string`);
-  }
+function parseHttpsOrigin(origin: string): URL | undefined {
   let url: URL;
   try {
-    url = new URL(input.origin);
+    url = new URL(origin);
   } catch {
-    throw new SpacePolicyValidationError(`${name}.origin must be an absolute URL`);
+    return undefined;
   }
   if (
     url.protocol !== "https:" ||
@@ -79,114 +54,129 @@ function sourceOrigin(value: unknown, index: number): SourceOriginRule {
     url.search !== "" ||
     url.hash !== ""
   ) {
-    throw new SpacePolicyValidationError(
-      `${name}.origin must be an HTTPS origin without credentials, a path, a query, or a fragment`,
-    );
+    return undefined;
   }
-  if (input.pathPrefix === undefined) return Object.freeze({ origin: url.origin });
-  if (
-    typeof input.pathPrefix !== "string" ||
-    !input.pathPrefix.startsWith("/") ||
-    input.pathPrefix.includes("?") ||
-    input.pathPrefix.includes("#") ||
-    input.pathPrefix.includes(",")
-  ) {
-    throw new SpacePolicyValidationError(`${name}.pathPrefix must be an absolute URL path`);
-  }
-  const pathPrefix = normalizeSourceOriginPathPrefix(input.pathPrefix);
-  if (pathPrefix === "/") return Object.freeze({ origin: url.origin });
-  return Object.freeze({ origin: url.origin, pathPrefix });
+  return url;
 }
 
-export function parseSourceOriginRules(value: unknown): readonly SourceOriginRule[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new SpacePolicyValidationError("allowedSourceOrigins must not be empty");
-  }
-  const parsed = Object.freeze(value.map(sourceOrigin));
-  const identities = parsed.map((rule) => `${rule.origin}${rule.pathPrefix ?? "/"}`);
-  if (new Set(identities).size !== identities.length) {
-    throw new SpacePolicyValidationError("allowedSourceOrigins must be unique");
-  }
-  return parsed;
-}
-
-function resolver(value: unknown, index: number): SourceResolverPolicy {
-  const name = `resolvers[${index}]`;
-  const input = record(value, name);
-  exactKeys(input, ["id", "type", "allowedProjectIds"], name);
-  const id = identifier(input.id, `${name}.id`);
-  if (input.type !== "uploadthing") {
-    throw new SpacePolicyValidationError(`${name}.type is not supported`);
-  }
-  if (!Array.isArray(input.allowedProjectIds) || input.allowedProjectIds.length === 0) {
-    throw new SpacePolicyValidationError(`${name}.allowedProjectIds must not be empty`);
-  }
-  const allowedProjectIds = input.allowedProjectIds.map((projectId, projectIndex) => {
-    if (typeof projectId !== "string" || !PROJECT_ID_PATTERN.test(projectId)) {
-      throw new SpacePolicyValidationError(
-        `${name}.allowedProjectIds[${projectIndex}] is not valid`,
+const sourceOriginRuleSchema = z
+  .strictObject(
+    {
+      origin: z.string({ error: "allowedSourceOrigins[].origin must be a string" }),
+      pathPrefix: z
+        .string({ error: "allowedSourceOrigins[].pathPrefix must be an absolute URL path" })
+        .optional(),
+    },
+    { error: "allowedSourceOrigins[] contains missing or unknown fields" },
+  )
+  .transform((input, context): SourceOriginRule => {
+    const url = parseHttpsOrigin(input.origin);
+    if (url === undefined) {
+      context.addIssue(
+        "allowedSourceOrigins[].origin must be an HTTPS origin without credentials, a path, a query, or a fragment",
       );
+      return z.NEVER;
     }
-    return projectId;
-  });
-  if (new Set(allowedProjectIds).size !== allowedProjectIds.length) {
-    throw new SpacePolicyValidationError(`${name}.allowedProjectIds must be unique`);
-  }
-  return Object.freeze({
-    id,
-    type: "uploadthing",
-    allowedProjectIds: Object.freeze(allowedProjectIds),
-  });
-}
-
-function qualities(value: unknown): readonly number[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new SpacePolicyValidationError("qualities must not be empty");
-  }
-  const parsed = value.map((quality, index) => {
-    if (!Number.isSafeInteger(quality) || (quality as number) < 1 || (quality as number) > 100) {
-      throw new SpacePolicyValidationError(`qualities[${index}] must be an integer from 1 to 100`);
+    if (input.pathPrefix === undefined) return Object.freeze({ origin: url.origin });
+    if (
+      !input.pathPrefix.startsWith("/") ||
+      input.pathPrefix.includes("?") ||
+      input.pathPrefix.includes("#") ||
+      input.pathPrefix.includes(",")
+    ) {
+      context.addIssue("allowedSourceOrigins[].pathPrefix must be an absolute URL path");
+      return z.NEVER;
     }
-    return quality as number;
+    const pathPrefix = normalizeSourceOriginPathPrefix(input.pathPrefix);
+    if (pathPrefix === "/") return Object.freeze({ origin: url.origin });
+    return Object.freeze({ origin: url.origin, pathPrefix });
   });
-  if (new Set(parsed).size !== parsed.length) {
-    throw new SpacePolicyValidationError("qualities must be unique");
-  }
-  return Object.freeze(parsed);
-}
 
-export function parseSpacePolicy(value: unknown): SpacePolicy {
-  const input = record(value, "Space policy");
-  exactKeys(
-    input,
-    ["id", "routeClass", "qualities", "defaultQuality", "allowedSourceOrigins", "resolvers"],
-    "Space policy",
-  );
-  const id = identifier(input.id, "id");
-  const parsedQualities = qualities(input.qualities);
-  if (
-    !Number.isSafeInteger(input.defaultQuality) ||
-    !parsedQualities.includes(input.defaultQuality as number)
-  ) {
-    throw new SpacePolicyValidationError("defaultQuality must be one of the permitted qualities");
+const sourceOriginRulesSchema = z
+  .array(sourceOriginRuleSchema, { error: "allowedSourceOrigins must not be empty" })
+  .nonempty({ error: "allowedSourceOrigins must not be empty" })
+  .refine((rules) => unique(rules, (rule) => `${rule.origin}${rule.pathPrefix ?? "/"}`), {
+    error: "allowedSourceOrigins must be unique",
+  })
+  .readonly();
+
+const resolverSchema = z
+  .strictObject(
+    {
+      id: identifier("resolvers[].id"),
+      type: z.string({ error: "resolvers[].type is not supported" }),
+      allowedProjectIds: z
+        .array(
+          z
+            .string({ error: "resolvers[].allowedProjectIds[] is not valid" })
+            .regex(PROJECT_ID_PATTERN, { error: "resolvers[].allowedProjectIds[] is not valid" }),
+          { error: "resolvers[].allowedProjectIds must not be empty" },
+        )
+        .nonempty({ error: "resolvers[].allowedProjectIds must not be empty" })
+        .refine((projectIds) => unique(projectIds, (projectId) => projectId), {
+          error: "resolvers[].allowedProjectIds must be unique",
+        })
+        .readonly(),
+    },
+    { error: "resolvers[] contains missing or unknown fields" },
+  )
+  .transform((input, context): SourceResolverPolicy => {
+    if (input.type !== "uploadthing") {
+      context.addIssue("resolvers[].type is not supported");
+      return z.NEVER;
+    }
+    return Object.freeze({
+      id: input.id,
+      type: "uploadthing",
+      allowedProjectIds: input.allowedProjectIds,
+    });
+  });
+
+const qualitiesSchema = z
+  .array(z.int({ error: "qualities[] must be an integer from 1 to 100" }).min(1).max(100), {
+    error: "qualities must not be empty",
+  })
+  .nonempty({ error: "qualities must not be empty" })
+  .refine((qualities) => unique(qualities, String), { error: "qualities must be unique" })
+  .readonly();
+
+const spacePolicyCandidateSchema = z.strictObject(
+  {
+    id: identifier("id"),
+    routeClass: z.string({ error: "routeClass must be public or private" }),
+    qualities: qualitiesSchema,
+    defaultQuality: z.int({ error: "defaultQuality must be one of the permitted qualities" }),
+    allowedSourceOrigins: sourceOriginRulesSchema,
+    resolvers: z.array(resolverSchema, { error: "resolvers must be an array" }).readonly(),
+  },
+  { error: "Space policy contains missing or unknown fields" },
+);
+
+/**
+ * A Space policy before validation: the loosely typed value an operator form,
+ * a database row, or an already parsed policy supplies to `parseSpacePolicy`.
+ */
+export type SpacePolicyInput = z.input<typeof spacePolicyCandidateSchema>;
+
+const spacePolicySchema = spacePolicyCandidateSchema.transform((input, context): SpacePolicy => {
+  if (!input.qualities.includes(input.defaultQuality)) {
+    context.addIssue("defaultQuality must be one of the permitted qualities");
+    return z.NEVER;
   }
-  const allowedSourceOrigins = parseSourceOriginRules(input.allowedSourceOrigins);
-  if (!Array.isArray(input.resolvers)) {
-    throw new SpacePolicyValidationError("resolvers must be an array");
-  }
-  const resolvers = Object.freeze(input.resolvers.map(resolver));
-  if (new Set(resolvers.map((entry) => entry.id)).size !== resolvers.length) {
-    throw new SpacePolicyValidationError("resolver IDs must be unique inside a Space");
+  if (!unique(input.resolvers, (resolver) => resolver.id)) {
+    context.addIssue("resolver IDs must be unique inside a Space");
+    return z.NEVER;
   }
   const common = {
-    id,
-    qualities: parsedQualities,
-    defaultQuality: input.defaultQuality as number,
-    allowedSourceOrigins,
+    id: input.id,
+    qualities: input.qualities,
+    defaultQuality: input.defaultQuality,
+    allowedSourceOrigins: input.allowedSourceOrigins,
   };
   if (input.routeClass === "private") {
-    if (resolvers.length !== 0) {
-      throw new SpacePolicyValidationError("a private Space cannot have a Source Resolver");
+    if (input.resolvers.length !== 0) {
+      context.addIssue("a private Space cannot have a Source Resolver");
+      return z.NEVER;
     }
     return Object.freeze({
       ...common,
@@ -198,8 +188,33 @@ export function parseSpacePolicy(value: unknown): SpacePolicy {
     return Object.freeze({
       ...common,
       routeClass: "public",
-      resolvers,
+      resolvers: input.resolvers,
     }) satisfies PublicSpacePolicy;
   }
-  throw new SpacePolicyValidationError("routeClass must be public or private");
+  context.addIssue("routeClass must be public or private");
+  return z.NEVER;
+});
+
+/** The schema for one Space policy; embed it in wire schemas that carry policies. */
+export const SPACE_POLICY_SCHEMA = spacePolicySchema;
+/** The schema for a Source Origin allowlist; embed it in wire schemas that carry one. */
+export const SOURCE_ORIGIN_RULES_SCHEMA = sourceOriginRulesSchema;
+
+function firstIssueMessage(error: z.ZodError): string {
+  return error.issues[0]?.message ?? "Space policy is invalid";
+}
+
+/** Source Origin rules before validation, as `parseSourceOriginRules` accepts them. */
+export type SourceOriginRulesInput = z.input<typeof sourceOriginRulesSchema>;
+
+export function parseSourceOriginRules(value: SourceOriginRulesInput): readonly SourceOriginRule[] {
+  const result = sourceOriginRulesSchema.safeParse(value);
+  if (!result.success) throw new SpacePolicyValidationError(firstIssueMessage(result.error));
+  return result.data;
+}
+
+export function parseSpacePolicy(value: SpacePolicyInput): SpacePolicy {
+  const result = spacePolicySchema.safeParse(value);
+  if (!result.success) throw new SpacePolicyValidationError(firstIssueMessage(result.error));
+  return result.data;
 }

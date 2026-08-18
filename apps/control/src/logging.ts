@@ -1,3 +1,4 @@
+import type { Attributes } from "@opentelemetry/api";
 import { type LogAttributes, SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
 import { resourceFromAttributes } from "@opentelemetry/resources";
@@ -41,23 +42,24 @@ function createStdoutLogger(stdout?: DestinationStream): Logger {
 function resourceAttributes(
   environment: ControlLoggingEnvironment,
   packageVersion: string,
-): Record<string, string> {
-  return {
+): Attributes {
+  const attributes: Attributes = {
     "service.name": "shutter-control",
     "service.namespace": "shutter",
     "service.version": environment.RAILWAY_GIT_COMMIT_SHA ?? packageVersion,
     "deployment.environment.name":
       environment.RAILWAY_ENVIRONMENT_NAME ?? environment.NODE_ENV ?? "development",
-    ...(environment.RAILWAY_REPLICA_ID === undefined
-      ? {}
-      : { "service.instance.id": environment.RAILWAY_REPLICA_ID }),
-    ...(environment.RAILWAY_REPLICA_REGION === undefined
-      ? {}
-      : { "cloud.region": environment.RAILWAY_REPLICA_REGION }),
-    ...(environment.RAILWAY_DEPLOYMENT_ID === undefined
-      ? {}
-      : { "railway.deployment.id": environment.RAILWAY_DEPLOYMENT_ID }),
   };
+  if (environment.RAILWAY_REPLICA_ID !== undefined) {
+    attributes["service.instance.id"] = environment.RAILWAY_REPLICA_ID;
+  }
+  if (environment.RAILWAY_REPLICA_REGION !== undefined) {
+    attributes["cloud.region"] = environment.RAILWAY_REPLICA_REGION;
+  }
+  if (environment.RAILWAY_DEPLOYMENT_ID !== undefined) {
+    attributes["railway.deployment.id"] = environment.RAILWAY_DEPLOYMENT_ID;
+  }
+  return attributes;
 }
 
 type OptionalOperationalEventField = Exclude<keyof OperationalEvent, "event">;
@@ -85,18 +87,24 @@ const EVENT_FIELD_PROJECTIONS = {
   features: "shutter.features",
 } satisfies Record<OptionalOperationalEventField, string>;
 
-function projectEvent(event: OperationalEvent): {
-  stdout: Record<string, string | number>;
+interface ProjectedEvent {
+  /** The flat record written to stdout through pino. */
+  stdout: LogAttributes;
+  /** The same fields under their OpenTelemetry semantic-convention names. */
   attributes: LogAttributes;
-} {
-  const stdout: Record<string, string | number> = { event: event.event };
+}
+
+function isProjectedField(field: string): field is OptionalOperationalEventField {
+  return Object.hasOwn(EVENT_FIELD_PROJECTIONS, field);
+}
+
+function projectEvent(event: OperationalEvent): ProjectedEvent {
+  const stdout: LogAttributes = { event: event.event };
   const attributes: LogAttributes = { "event.name": event.event };
-  for (const field of Object.keys(EVENT_FIELD_PROJECTIONS) as OptionalOperationalEventField[]) {
-    const value = event[field];
-    if (value !== undefined) {
-      stdout[field] = value;
-      attributes[EVENT_FIELD_PROJECTIONS[field]] = value;
-    }
+  for (const [field, value] of Object.entries(event)) {
+    if (!isProjectedField(field) || value === undefined) continue;
+    stdout[field] = value;
+    attributes[EVENT_FIELD_PROJECTIONS[field]] = value;
   }
   return { stdout, attributes };
 }

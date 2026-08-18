@@ -1,4 +1,10 @@
-import { decodeCapabilityKey, parseSpacePolicy, type SpacePolicy } from "@shutter/protocol";
+import {
+  decodeCapabilityKey,
+  type JsonValue,
+  SPACE_POLICY_SCHEMA,
+  type SpacePolicy,
+} from "@shutter/protocol";
+import { z } from "zod";
 import type { SpaceRegistry } from "./registry.js";
 
 export interface RegistryImportSpace {
@@ -12,53 +18,57 @@ export interface RegistryImport {
   spaces: readonly RegistryImportSpace[];
 }
 
-function object(value: unknown, name: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${name} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function exactKeys(value: Record<string, unknown>, keys: readonly string[], name: string): void {
-  const actual = Object.keys(value).sort().join(",");
-  if (actual !== [...keys].sort().join(",")) throw new Error(`${name} has unexpected fields`);
-}
-
-export function parseRegistryImport(value: unknown): RegistryImport {
-  const input = object(value, "registry import");
-  exactKeys(input, ["schemaVersion", "spaces"], "registry import");
-  if (input.schemaVersion !== "v1" || !Array.isArray(input.spaces) || input.spaces.length === 0) {
-    throw new Error("registry import is not v1");
-  }
-  const spaces = input.spaces.map((rawSpace, spaceIndex) => {
-    const space = object(rawSpace, `spaces[${spaceIndex}]`);
-    exactKeys(space, ["policy", "apiTokens", "capabilityKeys"], `spaces[${spaceIndex}]`);
-    const policy = parseSpacePolicy(space.policy);
-    if (!Array.isArray(space.apiTokens) || !Array.isArray(space.capabilityKeys)) {
-      throw new Error(`spaces[${spaceIndex}] credentials must be arrays`);
-    }
-    const apiTokens = space.apiTokens.map((rawToken, tokenIndex) => {
-      const token = object(rawToken, `apiTokens[${tokenIndex}]`);
-      exactKeys(token, ["label", "token"], `apiTokens[${tokenIndex}]`);
-      if (typeof token.label !== "string" || typeof token.token !== "string") {
-        throw new Error(`apiTokens[${tokenIndex}] is invalid`);
+const capabilityKeySchema = z.strictObject(
+  {
+    keyId: z.string(),
+    key: z.string().transform((encoded, context) => {
+      try {
+        return decodeCapabilityKey(encoded);
+      } catch {
+        context.addIssue("capabilityKeys[] is invalid");
+        return z.NEVER;
       }
-      return { label: token.label, token: token.token };
-    });
-    const capabilityKeys = space.capabilityKeys.map((rawKey, keyIndex) => {
-      const key = object(rawKey, `capabilityKeys[${keyIndex}]`);
-      exactKeys(key, ["keyId", "key"], `capabilityKeys[${keyIndex}]`);
-      if (typeof key.keyId !== "string" || typeof key.key !== "string") {
-        throw new Error(`capabilityKeys[${keyIndex}] is invalid`);
-      }
-      return { keyId: key.keyId, key: decodeCapabilityKey(key.key) };
-    });
-    return { policy, apiTokens, capabilityKeys };
-  });
-  if (new Set(spaces.map((space) => space.policy.id)).size !== spaces.length) {
-    throw new Error("registry import Space IDs must be unique");
+    }),
+  },
+  { error: "capabilityKeys[] has unexpected fields" },
+);
+
+const importSpaceSchema = z.strictObject(
+  {
+    policy: SPACE_POLICY_SCHEMA,
+    apiTokens: z.array(z.strictObject({ label: z.string(), token: z.string() })).readonly(),
+    capabilityKeys: z.array(capabilityKeySchema).readonly(),
+  },
+  { error: "spaces[] has unexpected fields" },
+);
+
+const registryImportSchema = z
+  .strictObject(
+    {
+      schemaVersion: z.literal("v1", { error: "registry import is not v1" }),
+      spaces: z
+        .array(importSpaceSchema)
+        .nonempty({ error: "registry import is not v1" })
+        .readonly(),
+    },
+    { error: "registry import has unexpected fields" },
+  )
+  .refine(
+    (input) => new Set(input.spaces.map((space) => space.policy.id)).size === input.spaces.length,
+    { error: "registry import Space IDs must be unique" },
+  );
+
+export function parseRegistryImport(value: JsonValue): RegistryImport {
+  const result = registryImportSchema.safeParse(value);
+  if (!result.success) {
+    // An unknown field is reported ahead of any other defect so an operator
+    // sees a possible secret in the wrong place before anything else.
+    const issue =
+      result.error.issues.find((candidate) => candidate.code === "unrecognized_keys") ??
+      result.error.issues[0];
+    throw new Error(issue?.message ?? "registry import is invalid");
   }
-  return { schemaVersion: "v1", spaces };
+  return result.data;
 }
 
 function equalBytes(left: Uint8Array | undefined, right: Uint8Array): boolean {

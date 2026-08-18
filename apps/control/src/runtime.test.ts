@@ -29,7 +29,7 @@ const FULL_ENVIRONMENT = {
   PDF_EXECUTOR_TOKEN: TOKEN,
 };
 
-function build(environment: Record<string, string | undefined>) {
+function build(environment: NodeJS.ProcessEnv) {
   return buildControlRuntime(createServerEnv(environment), {
     logger: NOOP_LOGGER,
     fetch: vi.fn(),
@@ -37,8 +37,8 @@ function build(environment: Record<string, string | undefined>) {
   });
 }
 
-function without(...names: (keyof typeof FULL_ENVIRONMENT)[]) {
-  const environment: Record<string, string | undefined> = { ...FULL_ENVIRONMENT };
+function without(...names: (keyof typeof FULL_ENVIRONMENT)[]): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = { ...FULL_ENVIRONMENT };
   for (const name of names) delete environment[name];
   return environment;
 }
@@ -129,7 +129,7 @@ describe("control runtime", () => {
   });
 
   it("wakes a configured executor through the injected fetch", async () => {
-    const fetch = vi.fn(async () => new Response(null, { status: 200 }));
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 200 }));
     const runtime = buildControlRuntime(createServerEnv(FULL_ENVIRONMENT), {
       logger: NOOP_LOGGER,
       fetch,
@@ -137,9 +137,9 @@ describe("control runtime", () => {
     });
     await runtime.jobApiRuntime?.dispatch("video");
     expect(fetch).toHaveBeenCalledOnce();
-    const [url, init] = fetch.mock.calls[0] as unknown as [URL, RequestInit];
-    expect(url.toString()).toBe("http://video.internal:3000/internal/v1/run-once");
-    expect(new Headers(init.headers).get("authorization")).toBe(`Bearer ${TOKEN}`);
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(String(url)).toBe("http://video.internal:3000/internal/v1/run-once");
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${TOKEN}`);
     await runtime.close();
   });
 

@@ -32,12 +32,12 @@ async function waitForBudget<T>(operation: Promise<T>, budgetMs: number): Promis
   }
 }
 
-type OperationResult = { ok: true } | { ok: false; error: unknown };
+type OperationResult = { ok: true } | { ok: false; cause: unknown };
 
 function operationResult(operation: Promise<void>): Promise<OperationResult> {
   return operation.then(
     () => ({ ok: true }),
-    (error: unknown) => ({ ok: false, error }),
+    (cause: unknown) => ({ ok: false, cause }),
   );
 }
 
@@ -77,13 +77,13 @@ export function createControlShutdown(
           if (!outcome.ok) dependencies.setExitCode(1);
         });
       };
-      const failNow = (error: unknown) => {
+      const failNow = (cause: unknown) => {
         failed = true;
         dependencies.logger.emit("error", {
           event: "control.service.failed",
           outcome: "failed",
           failureCode: "service_unavailable",
-          errorType: operationalErrorType(error),
+          errorType: operationalErrorType(cause),
         });
       };
 
@@ -92,10 +92,10 @@ export function createControlShutdown(
         failLate(close);
         failLate(release);
       } else {
-        if (!closeWithinBudget.value.ok) failNow(closeWithinBudget.value.error);
+        if (!closeWithinBudget.value.ok) failNow(closeWithinBudget.value.cause);
         const releaseWithinBudget = await waitForBudget(release, closeBudgetMs);
         if (releaseWithinBudget.status === "timed_out") failLate(release);
-        else if (!releaseWithinBudget.value.ok) failNow(releaseWithinBudget.value.error);
+        else if (!releaseWithinBudget.value.ok) failNow(releaseWithinBudget.value.cause);
       }
 
       const flush = operationResult(dependencies.logger.shutdown());

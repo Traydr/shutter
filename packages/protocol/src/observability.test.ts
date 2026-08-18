@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { operationalEvent, sanitizeOperationalEvent } from "./observability.js";
+import {
+  type OperationalEvent,
+  type OperationalEventFields,
+  operationalEvent,
+  sanitizeOperationalEvent,
+} from "./observability.js";
 
 describe("operational events", () => {
   it("hashes identifiers, drops junk fields, and rejects concrete HTTP paths", async () => {
@@ -22,15 +27,14 @@ describe("operational events", () => {
     expect(JSON.stringify(event)).not.toContain("raw-source-id");
     expect(JSON.stringify(event)).not.toContain("raw-processing-token");
 
-    expect(
-      sanitizeOperationalEvent({
-        event: "control.http.completed",
-        requestId: "request-id\nsecret",
-        httpRoute: "/v1/spaces/acme/sources/private-source/previews/video",
-        authorization: "Bearer secret",
-        outcome: "failed",
-      } as never),
-    ).toEqual({
+    // Junk reaches a logger through untyped merges at runtime; the allowlist must drop it.
+    const leakyEvent: OperationalEvent = { event: "control.http.completed", outcome: "failed" };
+    Object.assign(leakyEvent, {
+      requestId: "request-id\nsecret",
+      httpRoute: "/v1/spaces/acme/sources/private-source/previews/video",
+      authorization: "Bearer secret",
+    });
+    expect(sanitizeOperationalEvent(leakyEvent)).toEqual({
       event: "control.http.completed",
       outcome: "failed",
     });
@@ -67,19 +71,22 @@ describe("operational events", () => {
   });
 
   it("keeps Source Delivery measurements bounded and redacted", async () => {
+    const leakyFields: OperationalEventFields = {
+      routeClass: "private",
+      cacheOutcome: "edge-hit",
+      mediaClass: "video",
+      byteRangeOutcome: "edge-hit",
+      originFetchResult: "not-requested",
+    };
+    Object.assign(leakyFields, {
+      locator: "https://secret.example/source.mp4?signature=secret",
+      range: "bytes=123-456",
+    });
     const event = await operationalEvent({
       event: "edge.source_delivery",
       spaceId: "example-private",
       sourceId: "raw-source-id",
-      fields: {
-        routeClass: "private",
-        cacheOutcome: "edge-hit",
-        mediaClass: "video",
-        byteRangeOutcome: "edge-hit",
-        originFetchResult: "not-requested",
-        locator: "https://secret.example/source.mp4?signature=secret",
-        range: "bytes=123-456",
-      } as never,
+      fields: leakyFields,
     });
 
     expect(event).toMatchObject({

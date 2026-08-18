@@ -1,4 +1,8 @@
-import { verifySourceCapability } from "@shutter/protocol";
+import {
+  type JsonValue,
+  parsePreviewJobSubmission,
+  verifySourceCapability,
+} from "@shutter/protocol";
 import { describe, expect, it } from "vitest";
 import { createShutterClient, ShutterClientError } from "./index.js";
 
@@ -13,12 +17,22 @@ function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-type RecordedRequest = { url: URL; init: RequestInit };
+interface RecordedRequest {
+  url: URL;
+  init: RequestInit;
+}
 
-function fetchStub(responses: Response[]): {
+interface FetchStub {
   requests: RecordedRequest[];
   fetch: typeof globalThis.fetch;
-} {
+}
+
+interface ClientHarness {
+  requests: RecordedRequest[];
+  instance: ReturnType<typeof createShutterClient>;
+}
+
+function fetchStub(responses: Response[]): FetchStub {
   const requests: RecordedRequest[] = [];
   return {
     requests,
@@ -31,10 +45,7 @@ function fetchStub(responses: Response[]): {
   };
 }
 
-function client(overrides?: { responses?: Response[]; edgeBaseUrl?: string }): {
-  requests: RecordedRequest[];
-  instance: ReturnType<typeof createShutterClient>;
-} {
+function client(overrides?: { responses?: Response[]; edgeBaseUrl?: string }): ClientHarness {
   const stub = fetchStub(overrides?.responses ?? []);
   return {
     requests: stub.requests,
@@ -49,7 +60,7 @@ function client(overrides?: { responses?: Response[]; edgeBaseUrl?: string }): {
   };
 }
 
-function jsonResponse(status: number, body: unknown, headers?: Record<string, string>): Response {
+function jsonResponse(status: number, body: JsonValue, headers?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "content-type": "application/json", ...headers },
@@ -76,8 +87,8 @@ describe("preview jobs", () => {
     expect(request?.init.method).toBe("PUT");
     expect(new Headers(request?.init.headers).get("authorization")).toBe("Bearer space-token");
 
-    const body = JSON.parse(String(request?.init.body)) as { sourceCapability: string };
-    const claims = await verifySourceCapability(body.sourceCapability, {
+    const submission = parsePreviewJobSubmission(JSON.parse(String(request?.init.body)));
+    const claims = await verifySourceCapability(submission.sourceCapability, {
       spaceId: SPACE,
       expectedPurpose: "preview_job",
       keys: KEYS,

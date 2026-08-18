@@ -26,7 +26,7 @@ export interface OtlpLogsConfig {
 export const OPENOBSERVE_LOG_STREAM = "default";
 const MAX_OTLP_EXPORT_TIMEOUT_MILLIS = 5_000;
 
-function parseHeaders(value: string | undefined): Record<string, string> {
+function parseHeaders(value: string | undefined): OtlpLogsConfig["headers"] {
   if (value === undefined || value.trim() === "") throw new Error("missing OTLP headers");
   const headers: Record<string, string> = {};
   const normalizedNames = new Set<string>();

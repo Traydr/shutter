@@ -76,11 +76,10 @@ async function emitDeliveryEvent(
       event: "edge.delivery",
       spaceId: identity.spaceId,
       sourceId: identity.sourceId,
-      fields: {
-        routeClass: identity.routeClass,
-        cacheOutcome,
-        ...(identity.input.type === "master" ? { kind: identity.input.kind } : {}),
-      },
+      fields:
+        identity.input.type === "master"
+          ? { routeClass: identity.routeClass, cacheOutcome, kind: identity.input.kind }
+          : { routeClass: identity.routeClass, cacheOutcome },
     }),
   );
 }

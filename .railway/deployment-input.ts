@@ -65,7 +65,12 @@ function httpsUrl(environment: Environment, key: string): string {
   return url.toString().replace(/\/$/u, "");
 }
 
-function r2Endpoint(environment: Environment): { endpoint: string; accountId: string } {
+interface R2Endpoint {
+  endpoint: string;
+  accountId: string;
+}
+
+function r2Endpoint(environment: Environment): R2Endpoint {
   const endpoint = httpsUrl(environment, "SHUTTER_R2_ENDPOINT");
   const hostname = new URL(endpoint).hostname;
   const match = /^([a-f0-9]{32})(?:\.(?:eu|fedramp))?\.r2\.cloudflarestorage\.com$/u.exec(hostname);
@@ -151,9 +156,7 @@ export function parseDeploymentInput(environment: Environment): DeploymentInput 
     cloudflareZoneId: identifier(environment, "SHUTTER_CLOUDFLARE_ZONE_ID"),
     imgproxyAllowedSources: allowedSources(environment),
   };
-  return Object.freeze({
-    ...common,
-    secretsSeeded: secretsSeeded(environment),
-    ...(jobsVolumeName === undefined ? {} : { jobsVolumeName }),
-  });
+  const input: DeploymentInput = { ...common, secretsSeeded: secretsSeeded(environment) };
+  if (jobsVolumeName !== undefined) input.jobsVolumeName = jobsVolumeName;
+  return Object.freeze(input);
 }

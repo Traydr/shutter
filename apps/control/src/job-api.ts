@@ -5,6 +5,8 @@ import {
   type ExecutorCompleteRequest,
   type ExecutorFailRequest,
   type ExecutorHeartbeatRequest,
+  type JsonValue,
+  type OperationalEventFields,
   operationalEvent,
   type PreviewJobRepresentation,
   type PreviewKind,
@@ -18,6 +20,7 @@ import {
 import { Hono } from "hono";
 import { type ControlLogger, operationalErrorType } from "./logging.js";
 import type {
+  AttemptFailure,
   JobIdentity,
   MasterCompletion,
   PreviewJobLifecycle,
@@ -98,10 +101,10 @@ async function spaceAccess(
 
 function activeResponse(body: PreviewJobRepresentation, location: string): Response {
   const active = body.status === "pending" || body.status === "processing";
-  return Response.json(body, {
-    status: active ? 202 : 200,
-    ...(active ? { headers: { location, "retry-after": "5" } } : {}),
-  });
+  if (active) {
+    return Response.json(body, { status: 202, headers: { location, "retry-after": "5" } });
+  }
+  return Response.json(body, { status: 200 });
 }
 
 function requestFailure(status: number, code: string): Response {
@@ -111,7 +114,7 @@ function requestFailure(status: number, code: string): Response {
   );
 }
 
-async function strictJson(request: Request): Promise<unknown> {
+async function strictJson(request: Request): Promise<JsonValue> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
     throw new ProtocolError("submission_invalid", "request must use application/json");
   }
@@ -342,11 +345,10 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         spaceId: identity.spaceId,
         sourceId: identity.sourceId,
         processingToken: body.processingToken,
-        fields: {
-          kind: identity.kind,
-          outcome: result.outcome === "accepted" ? "ready" : "failed",
-          ...(result.outcome === "accepted" ? {} : { failureCode: "stale_attempt" }),
-        },
+        fields:
+          result.outcome === "accepted"
+            ? { kind: identity.kind, outcome: "ready" }
+            : { kind: identity.kind, outcome: "failed", failureCode: "stale_attempt" },
       }),
     );
     return result.outcome === "accepted"
@@ -370,13 +372,16 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
     } catch {
       return requestFailure(400, "request_invalid");
     }
+    const failure: AttemptFailure = { retryable: body.retryable };
+    const fields: OperationalEventFields = { kind: identity.kind, outcome: "failed" };
+    if (body.code !== undefined) {
+      failure.code = body.code;
+      fields.failureCode = body.code;
+    }
     const result = await runtime.lifecycle.fail(
       identity,
       body.processingToken,
-      {
-        retryable: body.retryable,
-        ...(body.code === undefined ? {} : { code: body.code }),
-      },
+      failure,
       runtime.now(),
     );
     runtime.logger.emit(
@@ -386,11 +391,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono {
         spaceId: identity.spaceId,
         sourceId: identity.sourceId,
         processingToken: body.processingToken,
-        fields: {
-          kind: identity.kind,
-          outcome: "failed",
-          ...(body.code === undefined ? {} : { failureCode: body.code }),
-        },
+        fields,
       }),
     );
     return result.outcome === "stale_attempt"
