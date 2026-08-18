@@ -2,6 +2,7 @@ import {
   buildSourceCacheTag,
   buildSourceDeliveryCacheUrl,
   emitOperationalEvent,
+  type OperationalEventFields,
   operationalEvent,
   ProtocolError,
   type SourceDeliveryCacheIdentity,
@@ -311,19 +312,20 @@ async function emitDeliveryEvent(
   byteRangeOutcome: ByteRangeOutcome,
   originFetchResult: OriginFetchResult,
 ): Promise<void> {
+  const fields: OperationalEventFields = {
+    routeClass: identity.routeClass,
+    cacheOutcome,
+    byteRangeOutcome,
+    originFetchResult,
+  };
+  if (mediaClass !== undefined) fields.mediaClass = mediaClass;
   emitOperationalEvent(
     "info",
     await operationalEvent({
       event: "edge.source_delivery",
       spaceId: identity.spaceId,
       sourceId: identity.sourceId,
-      fields: {
-        routeClass: identity.routeClass,
-        cacheOutcome,
-        ...(mediaClass === undefined ? {} : { mediaClass }),
-        byteRangeOutcome,
-        originFetchResult,
-      },
+      fields,
     }),
   );
 }

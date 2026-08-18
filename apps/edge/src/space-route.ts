@@ -25,7 +25,10 @@ export function spaceRoute(
 ): void {
   app.on([...options.methods], options.path, async (context) => {
     try {
-      const spaceId = context.req.param("spaceId" as never) as string | undefined;
+      // The path is a runtime string, so Hono cannot name its parameters; on
+      // any path the parameter record is a string-to-string map.
+      const params: Record<string, string> = context.req.param();
+      const spaceId = params.spaceId;
       if (spaceId === undefined || spaceId === "") return notFound();
       const snapshot = await getEdgeConfig(context.env, context.executionCtx);
       const policy = snapshot.policyFor(spaceId);

@@ -1,17 +1,19 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import {
+  type EdgeConfigBindings,
   EdgeConfigUnavailableError,
   getEdgeConfig,
   resetEdgeConfigForTest,
+  type WaitUntilContext,
 } from "./config-snapshot.js";
 
 const START = Date.parse("2026-08-11T10:00:00.000Z");
-const bindings = {
+const bindings: EdgeConfigBindings = {
   ORIGIN_BASE_URL: "https://control.example.test",
   EDGE_CONFIG_TOKEN: "e".repeat(32),
-} as CloudflareBindings;
+};
 
-function wire(generation: number, generatedAt = Date.now()): Record<string, unknown> {
+function wire(generation: number, generatedAt = Date.now()) {
   return {
     schemaVersion: "v1",
     generation,
@@ -30,15 +32,15 @@ function wire(generation: number, generatedAt = Date.now()): Record<string, unkn
   };
 }
 
-function executionContext(): {
-  context: ExecutionContext;
+interface RecordingContext {
+  context: WaitUntilContext;
   pending: Promise<unknown>[];
-} {
+}
+
+function executionContext(): RecordingContext {
   const pending: Promise<unknown>[] = [];
   return {
-    context: {
-      waitUntil: (promise: Promise<unknown>) => pending.push(promise),
-    } as unknown as ExecutionContext,
+    context: { waitUntil: (promise) => pending.push(promise) },
     pending,
   };
 }
@@ -49,12 +51,12 @@ function isRefreshReport(input: RequestInfo | URL): boolean {
   );
 }
 
-function snapshotCalls(fetch: ReturnType<typeof vi.fn>): number {
-  return fetch.mock.calls.filter(([input]) => !isRefreshReport(input as RequestInfo | URL)).length;
+function snapshotCalls(fetch: Mock<typeof globalThis.fetch>): number {
+  return fetch.mock.calls.filter(([input]) => !isRefreshReport(input)).length;
 }
 
-function refreshReportCalls(fetch: ReturnType<typeof vi.fn>): number {
-  return fetch.mock.calls.filter(([input]) => isRefreshReport(input as RequestInfo | URL)).length;
+function refreshReportCalls(fetch: Mock<typeof globalThis.fetch>): number {
+  return fetch.mock.calls.filter(([input]) => isRefreshReport(input)).length;
 }
 
 afterEach(() => {

@@ -1,16 +1,20 @@
-import { emitOperationalEvent, ProtocolError } from "@shutter/protocol";
+import { emitOperationalEvent } from "@shutter/protocol";
+import { z } from "zod";
 
-export function protocolFailure(error: unknown): Response {
-  if (
-    error instanceof ProtocolError ||
-    (error instanceof Error &&
-      error.name === "ProtocolError" &&
-      "code" in error &&
-      typeof error.code === "string")
-  ) {
-    const status = error.code === "query_invalid" || error.code === "request_invalid" ? 400 : 403;
+/**
+ * A ProtocolError by contract rather than by class: the Worker may see one
+ * from another copy of the protocol package, and only its name and code
+ * decide the response.
+ */
+const protocolErrorSchema = z.object({ name: z.literal("ProtocolError"), code: z.string() });
+
+export function protocolFailure(cause: unknown): Response {
+  const protocolError = cause instanceof Error ? protocolErrorSchema.safeParse(cause) : undefined;
+  if (protocolError?.success) {
+    const { code } = protocolError.data;
+    const status = code === "query_invalid" || code === "request_invalid" ? 400 : 403;
     return Response.json(
-      { error: { code: error.code } },
+      { error: { code } },
       { status, headers: { "cache-control": "private, no-store" } },
     );
   }

@@ -1,4 +1,6 @@
+import type { JsonValue } from "@shutter/protocol";
 import { Hono } from "hono";
+import { z } from "zod";
 import { registerOptimizationRoutes } from "./optimization-routes.js";
 import { registerSourceDeliveryRoutes } from "./source-delivery-routes.js";
 
@@ -31,6 +33,11 @@ async function authorizedOrigin(
   return timingSafeEqualBytes(new Uint8Array(actual), new Uint8Array(expected));
 }
 
+/** A cache purge names one or more non-empty cache tags and nothing else. */
+const purgeRequestSchema = z.strictObject({
+  tags: z.array(z.string().min(1)).nonempty(),
+});
+
 export const app = new Hono<{ Bindings: CloudflareBindings }>();
 
 app.get("/healthz", (context) => context.json({ ok: true, service: "edge" }));
@@ -47,7 +54,7 @@ app.post("/internal/v1/cache/purge", async (context) => {
     });
   }
 
-  let body: unknown;
+  let body: JsonValue;
   try {
     body = await context.req.json();
   } catch {
@@ -55,15 +62,8 @@ app.post("/internal/v1/cache/purge", async (context) => {
       "cache-control": "private, no-store",
     });
   }
-  if (
-    typeof body !== "object" ||
-    body === null ||
-    !("tags" in body) ||
-    !Array.isArray(body.tags) ||
-    body.tags.length === 0 ||
-    body.tags.some((tag) => typeof tag !== "string" || tag.length === 0) ||
-    Object.keys(body).sort().join(",") !== "tags"
-  ) {
+  const purge = purgeRequestSchema.safeParse(body);
+  if (!purge.success) {
     return context.json({ error: { code: "request_invalid" } }, 400, {
       "cache-control": "private, no-store",
     });
@@ -75,7 +75,7 @@ app.post("/internal/v1/cache/purge", async (context) => {
       "cache-control": "private, no-store",
     });
   }
-  const result = await cache.purge({ tags: body.tags as string[] });
+  const result = await cache.purge({ tags: purge.data.tags });
   if (!result.success) {
     return context.json({ error: { code: "service_unavailable" } }, 503, {
       "cache-control": "private, no-store",
