@@ -35,7 +35,8 @@ from Postgres and does not wait for Edge.
 ## Decommission a Space
 
 Stop the consuming application from submitting new work or minting new
-capabilities. Use the Space's danger zone to decommission it. This immediately
+capabilities. On the Space page, type the identifier into the Decommission
+panel to confirm, then decommission it. This immediately
 blocks new Space-scoped Control work and removes the Space from new Edge
 snapshots. It does not delete the Space, free its identifier, or remove policy
 and credential audit fields needed by unfinished work. Jobs that Shutter

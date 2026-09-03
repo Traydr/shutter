@@ -186,7 +186,7 @@ describe("control app", () => {
     });
     const response = await control.request("https://shutter.test/admin");
     expect(response.status).toBe(200);
-    expect(await response.text()).toContain("Manage Spaces");
+    expect(await response.text()).toContain("Bootstrap token");
   });
 
   it("creates a Space through admin, observes Edge refresh, and renders without code configuration", async () => {
@@ -276,7 +276,7 @@ describe("control app", () => {
     const refreshedBody = await refreshedDashboard.text();
     expect(refreshedBody).toContain("Latest Edge refresh");
     expect(refreshedBody).toContain(
-      `Registry generation</div><div class="metric">${snapshot.generation}`,
+      `Registry generation <span class="num">${snapshot.generation}</span>`,
     );
   });
 
