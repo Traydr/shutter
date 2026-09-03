@@ -132,7 +132,8 @@ function shell(title: string, body: string): string {
 
     table { width:100%; border-collapse:collapse; }
     th { text-align:left; font:600 10.5px/1 var(--sans); letter-spacing:.07em; text-transform:uppercase; color:var(--ink-3); padding:6px 10px; border-bottom:1px solid var(--rule); white-space:nowrap; }
-    td { padding:6px 10px; border-bottom:1px solid var(--rule-2); vertical-align:middle; }
+    td { padding:6px 10px; border-bottom:1px solid var(--rule-2); vertical-align:middle; overflow-wrap:anywhere; }
+    td.r { white-space:nowrap; }
     tr:last-child td { border-bottom:0; }
     td.r, th.r { text-align:right; }
     tr.off td { color:var(--ink-3); }
@@ -188,28 +189,29 @@ function shell(title: string, body: string): string {
     .q:hover, .q:focus { border-color:var(--ink-2); color:var(--ink-2); outline:none; }
     .q .tip { position:absolute; left:0; top:calc(100% + 7px); width:270px; background:#1b211f; color:#fff; font:400 11.5px/1.45 var(--sans); text-transform:none; letter-spacing:0; padding:8px 10px; border-radius:6px; z-index:30; display:none; text-align:left; box-shadow:0 8px 24px #0004; white-space:normal; }
     .q:hover .tip, .q:focus .tip { display:block; }
-    .rail .q .tip, td.r .q .tip, .head .q.l .tip { left:auto; right:0; }
+    td.r .q .tip, .head .q.l .tip { left:auto; right:0; }
 
-    .layout { display:grid; grid-template-columns:150px minmax(0,1fr) 240px; gap:18px; align-items:start; }
+    .layout { display:grid; grid-template-columns:240px minmax(0,1fr); gap:18px; align-items:start; }
     .col { display:grid; gap:14px; min-width:0; }
-    .jump { position:sticky; top:12px; display:grid; gap:1px; font-size:12.5px; }
+    .side { position:sticky; top:12px; display:grid; gap:8px; }
+    .jump { display:grid; gap:1px; font-size:12.5px; }
     .jump a { display:flex; justify-content:space-between; padding:5px 8px; border-radius:5px; color:var(--ink-2); }
     .jump a b { font:600 10.5px var(--mono); color:var(--ink-3); }
     .jump a.dng { color:var(--red); margin-top:8px; border:0; background:transparent; }
     body:has(#policy:target) .jump a[href="#policy"], body:has(#tokens:target) .jump a[href="#tokens"], body:has(#keys:target) .jump a[href="#keys"], body:has(#decommission:target) .jump a[href="#decommission"] { background:var(--panel); color:var(--ink); font-weight:600; box-shadow:inset 2px 0 0 var(--brand); }
-    .rail { position:sticky; top:12px; display:grid; gap:8px; }
-    .rail .panel { padding:10px 12px; display:grid; gap:6px; font-size:12px; }
-    .rail dl { margin:0; display:grid; gap:5px; }
-    .rail .rw { display:flex; justify-content:space-between; align-items:center; gap:8px; }
-    .rail dt { color:var(--ink-3); font-size:11px; white-space:nowrap; }
-    .rail dd { margin:0; text-align:right; }
-    .rail .panel.dng { border-color:#e6c4c4; color:var(--ink); }
-    .rail .panel.dng .lbl { color:var(--red); }
-    .rail form { display:grid; gap:6px; }
+    .side .panel { padding:10px 12px; display:grid; gap:6px; font-size:12px; }
+    .side dl { margin:0; display:grid; gap:5px; }
+    .side .rw { display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .side dt { color:var(--ink-3); font-size:11px; white-space:nowrap; }
+    .side dd { margin:0; text-align:right; }
+    .decom { border-color:#e6c4c4; }
+    .decom .head { border-color:#f0d9d9; }
+    .decom .head h2 { color:var(--red); }
+    .decom .inl { grid-template-columns:minmax(0,320px) auto; justify-content:start; border-top:0; }
 
     @media (max-width: 1100px) {
       .layout { grid-template-columns:1fr; }
-      .jump, .rail { position:static; }
+      .side { position:static; }
       .jump { display:flex; flex-wrap:wrap; gap:4px; }
       .jump a.dng { margin-top:0; }
     }
@@ -471,12 +473,10 @@ export function spaceView(model: SpaceDetail): string {
     : "";
 
   const decommissionJump = active ? '<a href="#decommission" class="dng">Decommission</a>' : "";
-  const decommissionPanel = active
-    ? `<form class="panel dng" id="decommission" method="post" action="/admin/spaces/${id}/decommission">${csrf}
-        <span class="lbl">Decommission${hint(HINTS.decommission)}</span>
-        <span class="dim">Blocks new work, keeps records, never frees the identifier.</span>
-        <input name="confirm" required pattern="${htmlEscape(policy.id)}" placeholder="Type ${htmlEscape(policy.id)} to confirm" aria-label="Type the identifier to confirm" autocomplete="off">
-        <button class="sm dng" type="submit">Decommission Space</button>
+  const decommissionSection = active
+    ? `<form class="panel sect decom" id="decommission" method="post" action="/admin/spaces/${id}/decommission">${csrf}
+        <div class="head"><h2>Decommission${hint(HINTS.decommission)}</h2><span class="muted">blocks new work, keeps records, never frees the identifier</span></div>
+        <div class="inl"><input name="confirm" required pattern="${htmlEscape(policy.id)}" placeholder="Type ${htmlEscape(policy.id)} to confirm" aria-label="Type the identifier to confirm" autocomplete="off"><button class="dng" type="submit">Decommission Space</button></div>
       </form>`
     : "";
 
@@ -488,12 +488,24 @@ export function spaceView(model: SpaceDetail): string {
       ${model.notice === undefined ? "" : `<p class="notice">${htmlEscape(model.notice)}</p>`}
       ${model.secret === undefined ? "" : `<section class="panel reveal"><h2>${htmlEscape(model.secret.label)}</h2><span class="dim">This secret is shown once. Copy it now into the application's secret store.</span><div class="secret">${htmlEscape(model.secret.value)}</div></section>`}
       <div class="layout">
-        <nav class="jump" aria-label="Sections">
-          <a href="#policy">Policy</a>
-          <a href="#tokens">API tokens<b>${activeTokens}</b></a>
-          <a href="#keys">Capability Keys<b>${acceptingKeys}</b></a>
-          ${decommissionJump}
-        </nav>
+        <aside class="side">
+          <nav class="jump" aria-label="Sections">
+            <a href="#policy">Policy</a>
+            <a href="#tokens">API tokens<b>${activeTokens}</b></a>
+            <a href="#keys">Capability Keys<b>${acceptingKeys}</b></a>
+            ${decommissionJump}
+          </nav>
+          <div class="panel"><dl>
+            <div class="rw"><dt>Route class${hint(HINTS.routeClass)}</dt><dd>${policy.routeClass}</dd></div>
+            <div class="rw"><dt>Status</dt><dd>${statusPill(model.space)}</dd></div>
+            <div class="rw"><dt>Registry generation</dt><dd class="num">${model.generation}</dd></div>
+            <div class="rw"><dt>Created</dt><dd>${time(model.space.createdAt)}</dd></div>
+            <div class="rw"><dt>Policy updated</dt><dd>${time(model.space.updatedAt)}</dd></div>
+            ${decommissionedAt === undefined ? "" : `<div class="rw"><dt>Decommissioned</dt><dd>${time(decommissionedAt)}</dd></div>`}
+          </dl></div>
+          <div class="panel"><span class="lbl">Rotation state</span>${rotationState(model.space, model.capabilityKeys)}</div>
+          <div class="panel"><span class="lbl">Deployment</span>${deploymentState(model.coverage, model.space)}</div>
+        </aside>
         <div class="col">
           <div class="titlerow"><h1 class="mono">${htmlEscape(policy.id)}</h1>${routeClassChip(policy)}${statusPill(model.space)}</div>
           ${policySection}
@@ -520,20 +532,8 @@ export function spaceView(model: SpaceDetail): string {
             }
             ${generateKey}
           </section>
+          ${decommissionSection}
         </div>
-        <aside class="rail">
-          <div class="panel"><dl>
-            <div class="rw"><dt>Route class${hint(HINTS.routeClass)}</dt><dd>${policy.routeClass}</dd></div>
-            <div class="rw"><dt>Status</dt><dd>${statusPill(model.space)}</dd></div>
-            <div class="rw"><dt>Registry generation</dt><dd class="num">${model.generation}</dd></div>
-            <div class="rw"><dt>Created</dt><dd>${time(model.space.createdAt)}</dd></div>
-            <div class="rw"><dt>Policy updated</dt><dd>${time(model.space.updatedAt)}</dd></div>
-            ${decommissionedAt === undefined ? "" : `<div class="rw"><dt>Decommissioned</dt><dd>${time(decommissionedAt)}</dd></div>`}
-          </dl></div>
-          <div class="panel"><span class="lbl">Rotation state</span>${rotationState(model.space, model.capabilityKeys)}</div>
-          <div class="panel"><span class="lbl">Deployment</span>${deploymentState(model.coverage, model.space)}</div>
-          ${decommissionPanel}
-        </aside>
       </div>
     </main>`,
   );
