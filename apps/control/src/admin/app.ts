@@ -82,19 +82,21 @@ async function currentSpace(registry: SpaceRegistry, spaceId: string): Promise<S
 async function loadSpaceDetail(
   registry: SpaceRegistry,
   spaceId: string,
-): Promise<{
-  space: SpaceRecord;
-  generation: number;
-  apiTokens: Awaited<ReturnType<SpaceRegistry["listApiTokens"]>>;
-  capabilityKeys: Awaited<ReturnType<SpaceRegistry["listCapabilityKeys"]>>;
-}> {
+  imgproxyAllowedSources: string | undefined,
+): Promise<Omit<SpaceDetail, "csrfToken" | "notice" | "secret">> {
   const [space, generation, apiTokens, capabilityKeys] = await Promise.all([
     currentSpace(registry, spaceId),
     registry.getGeneration(),
     registry.listApiTokens(spaceId),
     registry.listCapabilityKeys(spaceId),
   ]);
-  return { space, generation: generation.generation, apiTokens, capabilityKeys };
+  return {
+    space,
+    generation: generation.generation,
+    apiTokens,
+    capabilityKeys,
+    coverage: deploymentCoverage([space], imgproxyAllowedSources),
+  };
 }
 
 /**
@@ -252,7 +254,11 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
 
   admin.get("/spaces/:spaceId", async (context) => {
     const session = context.get("session");
-    const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
+    const detail = await loadSpaceDetail(
+      registry,
+      context.req.param("spaceId"),
+      runtime.imgproxyAllowedSources(),
+    );
     const requested = new URL(context.req.url).searchParams.get("generation");
     const notice = generationNotice(requested, detail.generation);
     const model: SpaceDetail = { csrfToken: session.csrfToken, ...detail };
@@ -286,7 +292,11 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
     const session = context.get("session");
     const label = formText(context.get("form"), "label");
     if (label === undefined) throw new AdminInputError();
-    const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
+    const detail = await loadSpaceDetail(
+      registry,
+      context.req.param("spaceId"),
+      runtime.imgproxyAllowedSources(),
+    );
     const issued = await registry.issueApiToken(context.req.param("spaceId"), label);
     const { token, ...summary } = issued.value;
     return html(
@@ -315,7 +325,11 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
     const session = context.get("session");
     const keyId = formText(context.get("form"), "keyId");
     if (keyId === undefined) throw new AdminInputError();
-    const detail = await loadSpaceDetail(registry, context.req.param("spaceId"));
+    const detail = await loadSpaceDetail(
+      registry,
+      context.req.param("spaceId"),
+      runtime.imgproxyAllowedSources(),
+    );
     const issued = await registry.addCapabilityKey(context.req.param("spaceId"), keyId);
     const { key, ...summary } = issued.value;
     return html(

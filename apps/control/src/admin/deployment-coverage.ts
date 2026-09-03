@@ -1,4 +1,4 @@
-import { normalizeSourceOriginPathPrefix } from "@shutter/protocol";
+import { normalizeSourceOriginPathPrefix, type SourceOriginRule } from "@shutter/protocol";
 import type { SpaceRecord } from "../spaces/registry.js";
 
 export interface DeploymentCoverage {
@@ -6,9 +6,10 @@ export interface DeploymentCoverage {
   uncovered: readonly string[];
 }
 
-function rulePrefix(origin: string, pathPrefix: string | undefined): string {
-  const prefix = normalizeSourceOriginPathPrefix(pathPrefix);
-  return `${origin}${prefix === "/" ? "" : prefix}`;
+/** The `origin[/path-prefix]` form of one allowed-source rule, as imgproxy and the admin pages show it. */
+export function sourceOriginPrefix(rule: SourceOriginRule): string {
+  const prefix = normalizeSourceOriginPathPrefix(rule.pathPrefix);
+  return `${rule.origin}${prefix === "/" ? "" : prefix}`;
 }
 
 function normalizedPrefix(value: string): string | undefined {
@@ -35,9 +36,7 @@ export function deploymentCoverage(
     ...new Set(
       spaces
         .filter((space) => space.status === "active")
-        .flatMap((space) =>
-          space.policy.allowedSourceOrigins.map((rule) => rulePrefix(rule.origin, rule.pathPrefix)),
-        ),
+        .flatMap((space) => space.policy.allowedSourceOrigins.map(sourceOriginPrefix)),
     ),
   ].sort();
   const configured = (configuredValue ?? "")

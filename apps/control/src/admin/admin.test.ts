@@ -218,7 +218,7 @@ describe("Control admin surface", () => {
     expect(created.headers.get("location")).toBe("/admin/spaces/example-public?generation=1");
     const detail = await app.request(`${ORIGIN}/spaces/example-public`, { headers: { cookie } });
     const detailBody = await detail.text();
-    expect(detailBody).toContain("Registry generation 1");
+    expect(detailBody).toMatch(/Registry generation<\/dt><dd[^>]*>1</u);
     expect(detailBody).not.toContain('name="spaceId"');
     expect(detailBody).not.toContain('name="routeClass"');
 
