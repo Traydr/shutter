@@ -1,3 +1,4 @@
+import { faviconIcoResponse, faviconSvgResponse } from "@shutter/assets";
 import type { JsonValue } from "@shutter/protocol";
 import { Hono } from "hono";
 import { z } from "zod";
@@ -40,6 +41,8 @@ const purgeRequestSchema = z.strictObject({
 
 export const app = new Hono<{ Bindings: CloudflareBindings }>();
 
+app.get("/favicon.svg", faviconSvgResponse);
+app.get("/favicon.ico", faviconIcoResponse);
 app.get("/healthz", (context) => context.json({ ok: true, service: "edge" }));
 
 registerSourceDeliveryRoutes(app);

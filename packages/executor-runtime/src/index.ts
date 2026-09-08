@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { serve } from "@hono/node-server";
+import { faviconIcoResponse, faviconSvgResponse } from "@shutter/assets";
 import {
   type ExecutorClaim,
   emitOperationalEvent,
@@ -236,6 +237,8 @@ export function createExecutorApp(
 ): Hono {
   const app = new Hono();
   let running = false;
+  app.get("/favicon.svg", faviconSvgResponse);
+  app.get("/favicon.ico", faviconIcoResponse);
   app.get("/healthz", (context) => context.json({ ok: true, service: `executor-${kind}` }));
   app.post("/internal/v1/run-once", async (context) => {
     if (

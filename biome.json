@@ -9,7 +9,8 @@
       "!!**/dist",
       "!!**/node_modules",
       "!!**/worker-configuration.d.ts",
-      "!tools/oxlint/anti-slop"
+      "!tools/oxlint/anti-slop",
+      "!!assets/generated.ts"
     ]
   },
   "formatter": {

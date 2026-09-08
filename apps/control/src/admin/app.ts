@@ -35,7 +35,7 @@ function html(body: string, status = 200, headers: HeadersInit = {}): Response {
     headers: {
       "cache-control": "private, no-store",
       "content-security-policy":
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       "content-type": "text/html; charset=UTF-8",
       // Not no-referrer: under that policy browsers serialize the Origin
       // header as "null" even on same-origin form POSTs (Fetch spec), which

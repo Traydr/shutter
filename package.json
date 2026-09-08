@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "pnpm -r --sort --if-present build",
-    "build:packages": "pnpm -r --filter './packages/*' --sort --if-present build",
+    "build:packages": "pnpm -r --filter './assets' --filter './packages/*' --sort --if-present build",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "deploy:edge": "pnpm --filter @shutter/edge run deploy",
     "deployment:apply": "railway config apply",

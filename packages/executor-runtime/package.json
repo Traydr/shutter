@@ -14,6 +14,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1084.0",
     "@hono/node-server": "2.0.8",
+    "@shutter/assets": "workspace:*",
     "@shutter/protocol": "workspace:*",
     "hono": "4.12.28",
     "zod": "^4.4.3"

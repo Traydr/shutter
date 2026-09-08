@@ -13,6 +13,7 @@
     "typecheck": "wrangler types --env-interface CloudflareBindings --check && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
+    "@shutter/assets": "workspace:*",
     "@shutter/protocol": "workspace:*",
     "hono": "4.12.28",
     "zod": "^4.4.3"

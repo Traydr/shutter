@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { faviconIcoResponse, faviconSvgResponse } from "@shutter/assets";
 import {
   CONTROL_HTTP_ROUTES,
   type ControlHttpRoute,
@@ -97,6 +98,8 @@ export function createControlApp(
     });
   });
 
+  control.get("/favicon.svg", faviconSvgResponse);
+  control.get("/favicon.ico", faviconIcoResponse);
   control.get(CONTROL_HTTP_ROUTES.healthz, (context) =>
     context.json({ ok: true, service: "control" }),
   );
