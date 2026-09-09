@@ -17,7 +17,9 @@ is the 2026-09-09 HTML plan; this file is the checklist.
   references on a cold Source Delivery miss.
 - v2 jobs and purge need only the Space API token; Control resolves at claim
   (ADR 0027).
-- Private Spaces add `?token=`; the token carries no locator (ADR 0028, PR 7).
+- Private Spaces add `?token=`; the token carries no locator (ADR 0028). A
+  private Space may hold resolvers from PR 7 on; migration 0004 drops the
+  trigger that forbade them.
 - The v1 located, master, and private routes stay. The v1 `resolver/` routes
   go: the Edge logs showed only crawler traffic.
 - The retired `uploadthing` kind stays parseable in the protocol until the
@@ -48,5 +50,9 @@ valid one for at most 10 minutes, then answers 503. So:
 
 1. `pnpm deploy:edge` from the stack tip before merging.
 2. Confirm the refresh generation on the admin dashboard.
-3. Merge the stack; migration 0003 rewrites the resolver rows.
+3. Merge the stack; migration 0003 rewrites the resolver rows. From here on a
+   Worker rollback to a pre-stack version is unsafe: it rejects any snapshot
+   with a `template` or `s3` resolver, or a resolver on a private Space, and
+   the rejection takes every Space to 503 after 10 minutes. Roll the Worker
+   forward instead.
 4. Create the ernesta `media` resolver in the admin UI and run Test.

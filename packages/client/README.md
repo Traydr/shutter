@@ -97,3 +97,20 @@ back. Give it the quality as well as the width: on a public Space a `w` without
 know the Space's default. v2 request errors arrive as RFC 9457 problems;
 `ShutterClientError.code` carries their `code` and `requestId` the handle an
 operator finds the log event by.
+
+For a private Space the same URLs carry an access token minted with the
+Capability Key; the purpose follows the options you pass, so the three grants
+cannot be confused:
+
+```ts
+const src = await shutter.v2PrivateDeliveryUrl(
+  { resolverId: "media", reference: key },
+  { width: 640, quality: 75 },
+);
+```
+
+A token is bound to the operation it was minted for, so mint private URLs
+with the width they are shown at. `transformDeliveryUrl` keeps the token only
+while the operation stays the same; widening a Source Delivery URL drops it,
+and the Edge refuses the result until the application mints an `image_source`
+token.

@@ -14,8 +14,13 @@ SameSite=Strict session. All pages are non-cacheable.
    path prefix per line. Every Source Resolver you add later must expand inside
    these origins, so add the bucket or provider origin here first.
 4. Create the Space and record the new registry generation.
-5. For a public Space, add Source Resolvers from the Resolvers section (see
-   below).
+5. Add Source Resolvers from the Resolvers section (see below). On a private
+   Space every v2 request also needs an access token the application mints
+   with its Capability Key. The token protects Shutter's route, not the origin:
+   a template resolver is fetched without credentials, so anyone who learns a
+   reference can read the original from the origin directly. Only an S3
+   resolver, whose credential stays sealed in Control, keeps a private Space's
+   bytes private end to end.
 6. Issue an API token and a Capability Key from the Space page. Each full secret
    appears once. Copy it directly into the consuming application's secret store.
 7. Wait until the latest Edge refresh generation is at least the new registry

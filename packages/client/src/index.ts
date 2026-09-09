@@ -1,4 +1,5 @@
 import {
+  type AccessTokenClaims,
   buildPreviewJobUrl,
   buildPrivateDeliveryUrl,
   buildPrivateMasterUrl,
@@ -13,6 +14,7 @@ import {
   type CapabilityKeyMaterial,
   type DeliveryUrlOptions,
   decodeCapabilityKey,
+  issueAccessToken,
   issueSourceCapability,
   type JsonValue,
   type MasterPreviewDescriptor,
@@ -329,6 +331,53 @@ export class ShutterClient {
   }
 
   // v2: resolver sources, no capability
+
+  /**
+   * Mints a v2 access token for a private Space with the Capability Key
+   * (ADR 0028): no locator, one purpose, and the kind for a Master Preview.
+   */
+  async issueAccessToken(
+    claims: Omit<AccessTokenClaims, "space_id" | "iat" | "exp"> & {
+      iat?: number | undefined;
+      exp?: number | undefined;
+    },
+  ): Promise<string> {
+    const keyConfig = requireConfig(this.#config.capabilityKey, "capabilityKey");
+    const iat = claims.iat ?? Math.floor(Date.now() / 1000);
+    const exp = claims.exp ?? iat + (this.#config.capabilityLifetimeSeconds ?? 300);
+    const full: AccessTokenClaims = {
+      space_id: this.#config.spaceId,
+      source_id: claims.source_id,
+      purpose: claims.purpose,
+      iat,
+      exp,
+    };
+    if (claims.kind !== undefined) full.kind = claims.kind;
+    return issueAccessToken(full, { kid: keyConfig.kid, key: keyMaterial(keyConfig.key) });
+  }
+
+  /**
+   * A private Space's v2 Delivery URL: the token's purpose follows the
+   * options, so a delivery grant, an optimization grant, and a preview grant
+   * can never be mixed up.
+   */
+  async v2PrivateDeliveryUrl(
+    source: ResolverSource,
+    options: Omit<DeliveryUrlOptions, "token"> = {},
+  ): Promise<string> {
+    const sourceId = sourceIdFor(source.resolverId, source.reference);
+    const token =
+      options.preview !== undefined
+        ? await this.issueAccessToken({
+            source_id: sourceId,
+            purpose: "master_preview",
+            kind: options.preview,
+          })
+        : options.width !== undefined
+          ? await this.issueAccessToken({ source_id: sourceId, purpose: "image_source" })
+          : await this.issueAccessToken({ source_id: sourceId, purpose: "source_delivery" });
+    return this.v2DeliveryUrl(source, { ...options, token });
+  }
 
   /** `/v2/{space}/{resolver}/{reference}` with the canonical query; see `@shutter/client/urls`. */
   v2DeliveryUrl(source: ResolverSource, options: DeliveryUrlOptions = {}): string {

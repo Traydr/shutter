@@ -1,3 +1,11 @@
+export {
+  ACCESS_TOKEN_VERSION,
+  type AccessTokenClaims,
+  type AccessTokenPurpose,
+  issueAccessToken,
+  type VerifyAccessTokenOptions,
+  verifyAccessToken,
+} from "./access-token.js";
 export * from "./cache-identity.js";
 export {
   type CapabilityKeyMaterial,

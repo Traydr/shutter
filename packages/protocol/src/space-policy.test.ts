@@ -119,7 +119,7 @@ describe("parseSpacePolicy", () => {
     ).toThrow("resolver lw can produce a location outside allowedSourceOrigins");
   });
 
-  it("accepts a private Space without Source Resolvers", () => {
+  it("accepts a private Space with or without Source Resolvers", () => {
     expect(
       parseSpacePolicy({
         ...validPublicPolicy,
@@ -128,6 +128,21 @@ describe("parseSpacePolicy", () => {
         resolvers: [],
       }),
     ).toMatchObject({ id: "example-private", routeClass: "private", resolvers: [] });
+    expect(
+      parseSpacePolicy({
+        ...validPublicPolicy,
+        id: "example-private",
+        routeClass: "private",
+        resolvers: [
+          {
+            id: "media",
+            type: "template",
+            url: "https://sources.example.com/media/{key}",
+            placeholders: { key: {} },
+          },
+        ],
+      }).resolvers,
+    ).toHaveLength(1);
   });
 
   it.each([
@@ -277,7 +292,6 @@ describe("parseSpacePolicy", () => {
         ],
       },
     ],
-    ["private resolver", { ...validPublicPolicy, routeClass: "private" }],
     [
       "path prefix with a comma",
       {

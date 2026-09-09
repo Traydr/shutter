@@ -24,6 +24,11 @@ export interface DeliveryQuery {
   token?: string;
 }
 
+/** A private Space's query: the token is proven present, so the gate need not re-check. */
+export interface PrivateDeliveryQuery extends DeliveryQuery {
+  token: string;
+}
+
 export interface DeliveryQueryOptions {
   /** A private Space requires `token`; a public Space rejects it as unknown. */
   token: "required" | "forbidden";
@@ -45,6 +50,16 @@ function single(query: URLSearchParams, name: string): string | undefined {
  * `query_invalid`. A missing required token is `capability_malformed` so the
  * route answers 403 like any other failed authorization.
  */
+export function parseDeliveryQuery(
+  query: URLSearchParams,
+  policy: OptimizationPolicyInput,
+  options: { token: "required" },
+): PrivateDeliveryQuery;
+export function parseDeliveryQuery(
+  query: URLSearchParams,
+  policy: OptimizationPolicyInput,
+  options: DeliveryQueryOptions,
+): DeliveryQuery;
 export function parseDeliveryQuery(
   query: URLSearchParams,
   policy: OptimizationPolicyInput,

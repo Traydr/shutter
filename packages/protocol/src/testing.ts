@@ -8,3 +8,5 @@ export async function issueSourceCapabilityWithIv(
 ): Promise<string> {
   return issueSourceCapabilityWithIvInternal(claims, options, iv);
 }
+
+export { issueAccessTokenWithIvInternal as issueAccessTokenWithIv } from "./access-token.js";

@@ -1,10 +1,12 @@
 import type {
+  AccessTokenClaims,
   CapabilityKeyMaterial,
   OptimizationCacheIdentity,
   S3ResolverPolicy,
   SourceCapabilityClaims,
   SourceDeliveryCacheIdentity,
   TemplateResolverPolicy,
+  VerifyAccessTokenOptions,
   VerifyCapabilityOptions,
 } from "@shutter/protocol";
 
@@ -82,6 +84,57 @@ export const CAPABILITY_FIXTURES: readonly CapabilityFixture[] = Object.freeze([
     iv: Uint8Array.from([24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]),
     expectedToken:
       "v1.fixture-key-2026-07.GBkaGxwdHh8gISIj.aD0zYLoqABBoZ5_zcb2pNmSMiCO2IYVlABICrK5MrR8ADEuEyuwG5oSBjUWIrCSgj1SLe-hdKYBZThXj3VDFUBzwtSdTkRsGxnihOR3xQ1he_7Tv5jhCDi_g4Ssm1mdAzClJ3P_VwoyKG9Kx9_mjFPvPlFYp3awn3j14C_CqZs-PWHVzj-6aizU_21qDfoP3LF3W_A7AS113UymXoF-AwCyPA8Y6kSpWy243qC6om7cxAH6jI5yhY0QkTYUXroTb8Me9I-jJK5iFBok2LSuRGZq36XZ86JEhcyYHFg",
+  }),
+]);
+
+export interface AccessTokenFixture {
+  name: string;
+  claims: AccessTokenClaims;
+  iv: Uint8Array;
+  expectedToken: string;
+}
+
+/** v2 access tokens (ADR 0028): one per purpose, pinned byte for byte. */
+export const ACCESS_TOKEN_FIXTURES: readonly AccessTokenFixture[] = Object.freeze([
+  Object.freeze({
+    name: "source delivery",
+    claims: Object.freeze({
+      space_id: "fixture-space",
+      source_id: "media/file.one",
+      purpose: "source_delivery",
+      iat: 1_800_000_000,
+      exp: 1_800_003_600,
+    }),
+    iv: Uint8Array.from([48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59]),
+    expectedToken:
+      "v2.fixture-key-2026-07.MDEyMzQ1Njc4OTo7.yBdCsIgML1xDV6zWMP9XEOhSPTLuTTRkRNtzYMrAEUsxA2k7RaS5nYxJdy0Tp_xLxyA4Z0TfoAWBYhEhMjg-hzVEhK3nxkJNk37GMgMDFbZZq0khr-d7vnHEAYNbYC_Y-4dmKWBUJWgm2TlqNc_ZIQ9UfW9gdh5yt4QhvCAoWhui3vMtUSfL",
+  }),
+  Object.freeze({
+    name: "image source",
+    claims: Object.freeze({
+      space_id: "fixture-space",
+      source_id: "media/file.one",
+      purpose: "image_source",
+      iat: 1_800_000_000,
+      exp: 1_800_003_600,
+    }),
+    iv: Uint8Array.from([60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71]),
+    expectedToken:
+      "v2.fixture-key-2026-07.PD0-P0BBQkNERUZH.DPxKgJUssOjFxk0WDCwVWdFp6RAP_lAoQWOG6gqKfyWRS0TaEb9mhnbxB84tgkQAwIjf7iIkSByhmZPrLRj-igmwVsYcXdFl2PbMpkMlAPCZktpO2ixsu9nmXO8oC5JVhO2IW80KrBuqzeWWzNQ18AJGTuqUsn0fN_rKfaQCUj1LKGmB",
+  }),
+  Object.freeze({
+    name: "master preview",
+    claims: Object.freeze({
+      space_id: "fixture-space",
+      source_id: "media/tour.mp4",
+      purpose: "master_preview",
+      kind: "video",
+      iat: 1_800_000_000,
+      exp: 1_800_003_600,
+    }),
+    iv: Uint8Array.from([72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83]),
+    expectedToken:
+      "v2.fixture-key-2026-07.SElKS0xNTk9QUVJT.tQ_4ExSCfBCxJBVHTEZACkvPfDQTqMTMkFGRy__gz89pos3C5QbgRyjdXcZHeGhiCVI5ftYuIwYU4u2shzCrLZwDmtquTxSWAw8IGl-b7IOQBlLNcSSb6NfwK1wHN_5cEL3DNUVs-3KMm9ZYbANUVtnpOJM4qK8UBp_0ElTa3nSSPvwTQPqM0Gr5GacGZgaiJLWKtI4",
   }),
 ]);
 
@@ -222,6 +275,52 @@ export async function runCapabilityConformance(
     if ("kind" in fixture.claims) verification.expectedKind = fixture.claims.kind;
     const verified = await adapter.verify(token, verification);
     if (canonicalClaims(verified) !== canonicalClaims(fixture.claims)) {
+      throw new Error(`${fixture.name}: decoded claims drifted`);
+    }
+  }
+}
+
+export interface AccessTokenConformanceAdapter {
+  issueWithIv(
+    claims: AccessTokenClaims,
+    options: { kid: string; key: CapabilityKeyMaterial },
+    iv: Uint8Array,
+  ): Promise<string>;
+  verify(
+    token: string,
+    options: VerifyAccessTokenOptions<AccessTokenClaims["purpose"]>,
+  ): Promise<AccessTokenClaims>;
+}
+
+function canonicalTokenClaims(claims: AccessTokenClaims): string {
+  return JSON.stringify(claims, Object.keys(claims).sort());
+}
+
+export async function runAccessTokenConformance(
+  adapter: AccessTokenConformanceAdapter,
+): Promise<void> {
+  const keys = new Map<string, CapabilityKeyMaterial>([[TEST_CAPABILITY_KID, TEST_CAPABILITY_KEY]]);
+  for (const fixture of ACCESS_TOKEN_FIXTURES) {
+    const token = await adapter.issueWithIv(
+      fixture.claims,
+      { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+      fixture.iv,
+    );
+    if (token !== fixture.expectedToken) {
+      throw new Error(
+        `${fixture.name}: token fixture drifted\nexpected ${fixture.expectedToken}\nreceived ${token}`,
+      );
+    }
+    const verification: VerifyAccessTokenOptions<AccessTokenClaims["purpose"]> = {
+      spaceId: fixture.claims.space_id,
+      expectedPurpose: fixture.claims.purpose,
+      expectedSourceId: fixture.claims.source_id,
+      keys,
+      now: TEST_CAPABILITY_NOW,
+    };
+    if (fixture.claims.kind !== undefined) verification.expectedKind = fixture.claims.kind;
+    const verified = await adapter.verify(token, verification);
+    if (canonicalTokenClaims(verified) !== canonicalTokenClaims(fixture.claims)) {
       throw new Error(`${fixture.name}: decoded claims drifted`);
     }
   }

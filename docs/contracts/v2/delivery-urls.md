@@ -13,7 +13,9 @@ percent-encoded path segment per placeholder in the named Source Resolver, in
 placeholder order; see [source-resolvers.md](./source-resolvers.md) for the
 segment grammar and how the reference becomes a Source ID. A reference with the
 wrong number of segments, a segment outside the grammar, or a resolver the Space
-does not have answers `404 Not Found`, as does an unknown Space.
+does not have answers `404 Not Found`, as does an unknown Space. On a private
+Space the query is checked first, so a request without a token answers `403`
+whatever the path names and learns nothing about the Space's resolvers.
 
 The query selects the operation:
 

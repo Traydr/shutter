@@ -348,14 +348,10 @@ const spacePolicySchema = spacePolicyCandidateSchema.transform((input, context):
     allowedSourceOrigins: input.allowedSourceOrigins,
   };
   if (input.routeClass === "private") {
-    if (input.resolvers.length !== 0) {
-      context.addIssue("a private Space cannot have a Source Resolver");
-      return z.NEVER;
-    }
     return Object.freeze({
       ...common,
       routeClass: "private",
-      resolvers: Object.freeze([] as const),
+      resolvers: input.resolvers,
     }) satisfies PrivateSpacePolicy;
   }
   if (input.routeClass === "public") {
