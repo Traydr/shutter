@@ -102,7 +102,12 @@ export function registerSpaceRegistryContract(
           { origin: "https://media.example.com", pathPrefix: "/media/" },
         ],
         resolvers: [
-          { id: "uploadthing", type: "uploadthing", allowedProjectIds: ["contract_project"] },
+          {
+            id: "roots",
+            type: "template",
+            url: "https://roots.example.com/{key}",
+            placeholders: { key: {} },
+          },
         ],
       } satisfies SpacePolicy;
       const canonical = parseSpacePolicy(spelled);
@@ -120,6 +125,181 @@ export function registerSpaceRegistryContract(
         { origin: "https://roots.example.com" },
       ]);
       await expect(registry.getActiveSpacePolicy(spelled.id)).resolves.toEqual(edited.value.policy);
+    });
+
+    it("stores resolver credentials beside s3 resolvers and never inside policy", async () => {
+      const policy = {
+        ...otherPolicy,
+        id: "contract-resolvers",
+        allowedSourceOrigins: [
+          { origin: "https://other.example.com" },
+          { origin: "https://objects.example.test", pathPrefix: "/contract-bucket" },
+        ],
+        resolvers: [
+          {
+            id: "lw",
+            type: "template",
+            url: "https://other.example.com/cdn/{token}",
+            placeholders: { token: {} },
+          },
+          {
+            id: "media",
+            type: "s3",
+            endpoint: "https://objects.example.test",
+            region: "auto",
+            bucket: "contract-bucket",
+            pathStyle: true,
+            keyTemplate: "{key}",
+          },
+        ],
+      } satisfies SpacePolicy;
+      const credential = { resolverId: "media", accessKeyId: "AKIA1", secretAccessKey: "s3cr3t" };
+
+      await expectCode(registry.createSpace(policy), "invalid");
+      await expectCode(
+        registry.createSpace(policy, [{ ...credential, resolverId: "lw" }]),
+        "invalid",
+      );
+      await registry.createSpace(policy, [credential]);
+      await expect(registry.getActiveSpacePolicy(policy.id)).resolves.toEqual(policy);
+      const snapshot = await registry.loadEdgeSnapshot();
+      expect(JSON.stringify(snapshot.spaces)).not.toContain("s3cr3t");
+      expect(JSON.stringify(snapshot.spaces)).not.toContain("AKIA1");
+      await expect(registry.listResolverCredentials(policy.id)).resolves.toEqual([
+        { resolverId: "media", accessKeyId: "AKIA1", updatedAt: expect.any(Date) },
+      ]);
+      await expect(registry.getResolverCredential(policy.id, "media")).resolves.toEqual({
+        accessKeyId: "AKIA1",
+        secretAccessKey: "s3cr3t",
+      });
+      await expect(registry.getResolverCredential(policy.id, "lw")).resolves.toBeUndefined();
+
+      // An edit that does not mention the credential keeps it.
+      await registry.editSpace(policy.id, {
+        qualities: policy.qualities,
+        defaultQuality: policy.defaultQuality,
+        allowedSourceOrigins: policy.allowedSourceOrigins,
+        resolvers: policy.resolvers,
+      });
+      await expect(registry.getResolverCredential(policy.id, "media")).resolves.toEqual({
+        accessKeyId: "AKIA1",
+        secretAccessKey: "s3cr3t",
+      });
+      // A supplied one replaces it; dropping the resolver drops the credential.
+      await registry.editSpace(policy.id, {
+        qualities: policy.qualities,
+        defaultQuality: policy.defaultQuality,
+        allowedSourceOrigins: policy.allowedSourceOrigins,
+        resolvers: policy.resolvers,
+        resolverCredentials: [{ ...credential, accessKeyId: "AKIA2", secretAccessKey: "next" }],
+      });
+      await expect(registry.getResolverCredential(policy.id, "media")).resolves.toEqual({
+        accessKeyId: "AKIA2",
+        secretAccessKey: "next",
+      });
+      await registry.editSpace(policy.id, {
+        qualities: policy.qualities,
+        defaultQuality: policy.defaultQuality,
+        allowedSourceOrigins: policy.allowedSourceOrigins,
+        resolvers: policy.resolvers.filter((resolver) => resolver.type !== "s3"),
+      });
+      await expect(registry.listResolverCredentials(policy.id)).resolves.toEqual([]);
+      await expectCode(
+        registry.editSpace(policy.id, {
+          qualities: policy.qualities,
+          defaultQuality: policy.defaultQuality,
+          allowedSourceOrigins: policy.allowedSourceOrigins,
+          resolvers: policy.resolvers,
+        }),
+        "invalid",
+      );
+      await expectCode(registry.listResolverCredentials("missing-space"), "not_found");
+    });
+
+    it("adds, replaces, and removes one resolver at a time under the identifier rules", async () => {
+      const policy = {
+        ...otherPolicy,
+        id: "contract-edit-resolver",
+        allowedSourceOrigins: [
+          { origin: "https://other.example.com" },
+          { origin: "https://objects.example.test", pathPrefix: "/contract-bucket" },
+        ],
+      } satisfies SpacePolicy;
+      const template = {
+        id: "lw",
+        type: "template",
+        url: "https://other.example.com/cdn/{token}",
+        placeholders: { token: {} },
+      } as const;
+      const bucket = {
+        id: "media",
+        type: "s3",
+        endpoint: "https://objects.example.test",
+        region: "auto",
+        bucket: "contract-bucket",
+        pathStyle: true,
+        keyTemplate: "{key}",
+      } as const;
+      await registry.createSpace(policy);
+      await expect(
+        registry.editResolver(policy.id, { resolverId: "lw", resolver: template, create: true }),
+      ).resolves.toMatchObject({ generation: 2, value: { policy: { resolvers: [template] } } });
+      await expectCode(
+        registry.editResolver(policy.id, { resolverId: "lw", resolver: template, create: true }),
+        "conflict",
+      );
+      await expectCode(registry.editResolver(policy.id, { resolverId: "media" }), "not_found");
+      await expectCode(
+        registry.editResolver(policy.id, { resolverId: "media", resolver: bucket, create: true }),
+        "invalid",
+      );
+      await expectCode(
+        registry.editResolver(policy.id, {
+          resolverId: "lw",
+          resolver: { ...template, id: "renamed" },
+        }),
+        "invalid",
+      );
+      await registry.editResolver(policy.id, {
+        resolverId: "media",
+        resolver: bucket,
+        credential: { resolverId: "media", accessKeyId: "AKIA1", secretAccessKey: "s" },
+        create: true,
+      });
+      await expect(registry.getActiveSpacePolicy(policy.id)).resolves.toMatchObject({
+        resolvers: [template, bucket],
+      });
+      await registry.editResolver(policy.id, {
+        resolverId: "media",
+        resolver: { ...bucket, keyTemplate: "originals/{key}" },
+      });
+      await expect(registry.getResolverCredential(policy.id, "media")).resolves.toEqual({
+        accessKeyId: "AKIA1",
+        secretAccessKey: "s",
+      });
+      await registry.editResolver(policy.id, { resolverId: "lw" });
+      await expect(registry.getActiveSpacePolicy(policy.id)).resolves.toMatchObject({
+        resolvers: [{ id: "media", keyTemplate: "originals/{key}" }],
+      });
+      await expectCode(
+        registry.editResolver("missing-space", {
+          resolverId: "lw",
+          resolver: template,
+          create: true,
+        }),
+        "not_found",
+      );
+    });
+
+    it("refuses to store the retired uploadthing kind", async () => {
+      await expectCode(
+        registry.createSpace({
+          ...otherPolicy,
+          id: "contract-retired",
+          resolvers: [{ id: "ut", type: "uploadthing", allowedProjectIds: ["p"] }],
+        }),
+        "invalid",
+      );
     });
 
     it("reports the same error code for every failure from either adapter", async () => {

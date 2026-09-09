@@ -244,6 +244,23 @@ describe("parseSpacePolicy", () => {
       },
     ],
     [
+      "a dotted bucket with virtual-hosted addressing",
+      {
+        ...validPublicPolicy,
+        resolvers: [
+          {
+            id: "media",
+            type: "s3",
+            endpoint: "https://sources.example.com",
+            region: "auto",
+            bucket: "media.images",
+            pathStyle: false,
+            keyTemplate: "{key}",
+          },
+        ],
+      },
+    ],
+    [
       "an S3 key template without a placeholder",
       {
         ...validPublicPolicy,

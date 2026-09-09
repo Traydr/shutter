@@ -15,7 +15,14 @@ const publicPolicy = {
   qualities: [30, 50, 75],
   defaultQuality: 75,
   allowedSourceOrigins: [{ origin: "https://sources.example.com", pathPrefix: "/media" }],
-  resolvers: [{ id: "uploadthing", type: "uploadthing", allowedProjectIds: ["example_project"] }],
+  resolvers: [
+    {
+      id: "media",
+      type: "template",
+      url: "https://sources.example.com/media/{key}",
+      placeholders: { key: {} },
+    },
+  ],
 } satisfies SpacePolicy;
 const privatePolicy = {
   id: "example-private",
@@ -56,7 +63,14 @@ describe("PostgresSpaceRegistry", () => {
         qualities: [50, 75],
         defaultQuality: 50,
         allowedSourceOrigins: [{ origin: "https://new-sources.example.com" }],
-        resolvers: [{ id: "uploadthing", type: "uploadthing", allowedProjectIds: ["new_project"] }],
+        resolvers: [
+          {
+            id: "media",
+            type: "template",
+            url: "https://new-sources.example.com/{key}",
+            placeholders: { key: {} },
+          },
+        ],
       }),
     ).resolves.toMatchObject({ generation: 2 });
     expect(await registry.getActiveSpacePolicy(publicPolicy.id)).toEqual({
@@ -64,10 +78,34 @@ describe("PostgresSpaceRegistry", () => {
       qualities: [50, 75],
       defaultQuality: 50,
       allowedSourceOrigins: [{ origin: "https://new-sources.example.com" }],
-      resolvers: [{ id: "uploadthing", type: "uploadthing", allowedProjectIds: ["new_project"] }],
+      resolvers: [
+        {
+          id: "media",
+          type: "template",
+          url: "https://new-sources.example.com/{key}",
+          placeholders: { key: {} },
+        },
+      ],
     });
+    // A policy edit that names no resolvers keeps the stored list, so a save from a
+    // stale page cannot undo a resolver another operator added meanwhile.
+    await expect(
+      registry.editSpace(publicPolicy.id, {
+        qualities: [75],
+        defaultQuality: 75,
+        allowedSourceOrigins: [{ origin: "https://new-sources.example.com" }],
+      }),
+    ).resolves.toMatchObject({ generation: 3 });
+    expect((await registry.getActiveSpacePolicy(publicPolicy.id))?.resolvers).toEqual([
+      {
+        id: "media",
+        type: "template",
+        url: "https://new-sources.example.com/{key}",
+        placeholders: { key: {} },
+      },
+    ]);
     await expect(registry.decommissionSpace(publicPolicy.id)).resolves.toMatchObject({
-      generation: 3,
+      generation: 4,
       value: { status: "decommissioned", decommissionedAt: now },
     });
     await expect(registry.getActiveSpacePolicy(publicPolicy.id)).resolves.toBeUndefined();
@@ -93,18 +131,86 @@ describe("PostgresSpaceRegistry", () => {
     ).rejects.toMatchObject({ code: "23505" });
     await expect(
       test.pool.query(
-        `insert into space_resolvers
-          (space_id, resolver_id, resolver_type, allowed_project_ids)
-         values ($1, 'uploadthing', 'uploadthing', array['another'])`,
+        `insert into space_resolvers (space_id, resolver_id, resolver_type, config)
+         values ($1, 'media', 'template', '{}'::jsonb)`,
         [recordId],
       ),
     ).rejects.toMatchObject({ code: "23505" });
+    await expect(
+      test.pool.query(
+        `insert into space_resolvers (space_id, resolver_id, resolver_type, config)
+         values ($1, 'bucket', 's3', '{}'::jsonb)`,
+        [recordId],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+    await expect(
+      test.pool.query(
+        `insert into space_resolvers (space_id, resolver_id, resolver_type, config)
+         values ($1, 'legacy', 'uploadthing', '{}'::jsonb)`,
+        [recordId],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
     await expect(
       test.pool.query(
         `insert into space_source_origins (space_id, origin, path_prefix)
          values (2147483647, 'https://sources.example.com', '/')`,
       ),
     ).rejects.toMatchObject({ code: "23503" });
+  });
+
+  it("keeps an unreadable credential from blocking the rest of the Space", async () => {
+    const bucket = (id: string) =>
+      ({
+        id,
+        type: "s3",
+        endpoint: "https://objects.example.test",
+        region: "auto",
+        bucket: "example-bucket",
+        pathStyle: true,
+        keyTemplate: `${id}/{key}`,
+      }) as const;
+    await registry.createSpace(
+      {
+        ...publicPolicy,
+        allowedSourceOrigins: [
+          ...publicPolicy.allowedSourceOrigins,
+          { origin: "https://objects.example.test", pathPrefix: "/example-bucket" },
+        ],
+        resolvers: [...publicPolicy.resolvers, bucket("one"), bucket("two")],
+      },
+      [
+        { resolverId: "one", accessKeyId: "AKIA1", secretAccessKey: "first" },
+        { resolverId: "two", accessKeyId: "AKIA2", secretAccessKey: "second" },
+      ],
+    );
+    await test.pool.query(
+      `update space_resolvers set sealed_credential = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+       where resolver_id = 'one'`,
+    );
+    await expect(registry.getResolverCredential(publicPolicy.id, "one")).rejects.toThrow();
+    await expect(registry.getResolverCredential(publicPolicy.id, "two")).resolves.toEqual({
+      accessKeyId: "AKIA2",
+      secretAccessKey: "second",
+    });
+    // Editing an unrelated resolver, replacing the broken credential, and
+    // removing the broken resolver all work without opening the broken envelope.
+    await registry.editResolver(publicPolicy.id, {
+      resolverId: "two",
+      resolver: { ...bucket("two"), keyTemplate: "moved/{key}" },
+    });
+    await registry.editResolver(publicPolicy.id, {
+      resolverId: "one",
+      resolver: bucket("one"),
+      credential: { resolverId: "one", accessKeyId: "AKIA3", secretAccessKey: "repaired" },
+    });
+    await expect(registry.getResolverCredential(publicPolicy.id, "one")).resolves.toEqual({
+      accessKeyId: "AKIA3",
+      secretAccessKey: "repaired",
+    });
+    await registry.editResolver(publicPolicy.id, { resolverId: "one" });
+    await expect(registry.listResolverCredentials(publicPolicy.id)).resolves.toMatchObject([
+      { resolverId: "two", accessKeyId: "AKIA2" },
+    ]);
   });
 
   it("rejects public identifier and route-class changes in direct SQL", async () => {
@@ -129,9 +235,8 @@ describe("PostgresSpaceRegistry", () => {
     );
     await expect(
       test.pool.query(
-        `insert into space_resolvers
-          (space_id, resolver_id, resolver_type, allowed_project_ids)
-         values ($1, 'uploadthing', 'uploadthing', array['example'])`,
+        `insert into space_resolvers (space_id, resolver_id, resolver_type, config)
+         values ($1, 'media', 'template', '{}'::jsonb)`,
         [space.rows[0]?.id],
       ),
     ).rejects.toThrow("private Space cannot have a Source Resolver");

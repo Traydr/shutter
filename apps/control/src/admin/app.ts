@@ -2,15 +2,35 @@ import { SpacePolicyValidationError } from "@shutter/protocol";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { EdgeRefreshStatus } from "../edge-refresh-status.js";
+import type { SourceResolverService } from "../source-resolvers.js";
 import { type SpaceRecord, type SpaceRegistry, SpaceRegistryError } from "../spaces/registry.js";
+import {
+  type AddressLookup,
+  assertPublicHost,
+  displayMediaType,
+  type LocationProbe,
+  type ProbeLocation,
+  probeLocation as probeOverHttps,
+} from "./address-guard.js";
 import { deploymentCoverage } from "./deployment-coverage.js";
-import { AdminInputError, formText, parseCreateSpaceForm, parseEditSpaceForm } from "./input.js";
+import {
+  AdminInputError,
+  formText,
+  parseCreateSpaceForm,
+  parseEditSpaceForm,
+  parseResolverForm,
+  parseTestReference,
+  resolverKind,
+} from "./input.js";
 import { type AdminSession, AdminSessionManager } from "./session.js";
 import {
   type AdminOverview,
   errorView,
   loginView,
   overviewView,
+  type ResolverEditor,
+  type ResolverTestResult,
+  resolverEditorView,
   type SpaceDetail,
   spaceView,
   unavailableView,
@@ -21,8 +41,18 @@ export interface AdminRuntime {
   imgproxyAllowedSources(): string | undefined;
   registry?: SpaceRegistry;
   edgeRefreshStatus(): EdgeRefreshStatus | undefined;
+  /** Resolves references for the Test panel; absent when the registry is not configured. */
+  sourceResolvers?: SourceResolverService;
+  /** Probes a resolved location for the Test panel; a pinned HTTPS request by default. */
+  probeLocation?: ProbeLocation;
+  /** Resolves a hostname for the Test panel's private-address guard; DNS by default. */
+  addressLookup?: AddressLookup;
+  edgeBaseUrl?(): string | undefined;
   now?(): number;
 }
+
+const RESOLVER_TEST_TIMEOUT_MS = 5_000;
+const RESOLVER_TEST_LIFETIME_SECONDS = 60;
 
 type AdminEnv = { Variables: { session: AdminSession; form: FormData } };
 
@@ -83,20 +113,120 @@ async function loadSpaceDetail(
   registry: SpaceRegistry,
   spaceId: string,
   imgproxyAllowedSources: string | undefined,
+  edgeBaseUrl: string | undefined,
 ): Promise<Omit<SpaceDetail, "csrfToken" | "notice" | "secret">> {
-  const [space, generation, apiTokens, capabilityKeys] = await Promise.all([
+  const [space, generation, apiTokens, capabilityKeys, resolverCredentials] = await Promise.all([
     currentSpace(registry, spaceId),
     registry.getGeneration(),
     registry.listApiTokens(spaceId),
     registry.listCapabilityKeys(spaceId),
+    registry.listResolverCredentials(spaceId),
   ]);
-  return {
+  const detail: Omit<SpaceDetail, "csrfToken" | "notice" | "secret"> = {
     space,
     generation: generation.generation,
     apiTokens,
     capabilityKeys,
+    resolverCredentials,
     coverage: deploymentCoverage([space], imgproxyAllowedSources),
   };
+  if (edgeBaseUrl !== undefined) detail.edgeBaseUrl = edgeBaseUrl;
+  return detail;
+}
+
+async function existingResolver(registry: SpaceRegistry, spaceId: string, resolverId: string) {
+  const space = await currentSpace(registry, spaceId);
+  const resolver = space.policy.resolvers.find((candidate) => candidate.id === resolverId);
+  if (resolver === undefined) {
+    throw new SpaceRegistryError("not_found", "The resolver does not exist.");
+  }
+  return { space, resolver };
+}
+
+/**
+ * Resolves a sample reference exactly as a request would and fetches its first
+ * byte. The location is reported by host only, so a presigned URL never lands
+ * on an admin page.
+ */
+async function testResolver(
+  runtime: AdminRuntime,
+  space: SpaceRecord,
+  resolverId: string,
+  reference: readonly string[],
+): Promise<ResolverTestResult> {
+  const resolvers = runtime.sourceResolvers;
+  const probeLocation = runtime.probeLocation ?? probeOverHttps;
+  if (resolvers === undefined) {
+    return { outcome: "failed", message: "Resolver testing is not configured on this Control." };
+  }
+  const resolution = await resolvers.resolve({
+    policy: space.policy,
+    resolverId,
+    reference,
+    lifetimeSeconds: RESOLVER_TEST_LIFETIME_SECONDS,
+    now: new Date(),
+  });
+  switch (resolution.outcome) {
+    case "not_found":
+      return {
+        outcome: "failed",
+        message:
+          "The reference does not fit this resolver: wrong segment count, grammar, or value.",
+      };
+    case "not_allowed":
+      return { outcome: "failed", message: "The location is outside the allowed source origins." };
+    case "configuration_error":
+      return { outcome: "failed", message: "The resolver has no usable credential." };
+    case "resolved":
+      break;
+  }
+  const host = new URL(resolution.locator).host;
+  let addresses: readonly string[];
+  try {
+    addresses = await assertPublicHost(new URL(resolution.locator).hostname, runtime.addressLookup);
+  } catch {
+    return {
+      outcome: "failed",
+      message:
+        "The location resolves to a private or loopback address, which Control will not fetch.",
+      sourceId: resolution.sourceId,
+      host,
+    };
+  }
+  // The connection goes to an address the guard accepted, never to a fresh DNS answer.
+  let response: LocationProbe;
+  try {
+    response = await probeLocation(
+      resolution.locator,
+      addresses[0] ?? "",
+      RESOLVER_TEST_TIMEOUT_MS,
+    );
+  } catch {
+    return {
+      outcome: "failed",
+      message: "The location could not be fetched within five seconds.",
+      sourceId: resolution.sourceId,
+      host,
+    };
+  }
+  const result: ResolverTestResult = {
+    outcome: response.status === 200 || response.status === 206 ? "ok" : "failed",
+    message:
+      response.status === 200 || response.status === 206
+        ? "The location answered with bytes."
+        : `The location answered ${response.status}.`,
+    sourceId: resolution.sourceId,
+    host,
+    status: response.status,
+  };
+  const contentType = displayMediaType(response.headers.get("content-type"));
+  if (contentType !== undefined) result.contentType = contentType;
+  const total = /\/(\d{1,16})$/u.exec(response.headers.get("content-range") ?? "")?.[1];
+  const contentLength = total ?? response.headers.get("content-length") ?? undefined;
+  if (contentLength !== undefined && /^\d{1,16}$/u.test(contentLength)) {
+    result.contentLength = Number(contentLength);
+  }
+  return result;
 }
 
 /**
@@ -258,6 +388,7 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
       registry,
       context.req.param("spaceId"),
       runtime.imgproxyAllowedSources(),
+      runtime.edgeBaseUrl?.(),
     );
     const requested = new URL(context.req.url).searchParams.get("generation");
     const notice = generationNotice(requested, detail.generation);
@@ -267,12 +398,132 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
   });
 
   admin.post("/spaces/:spaceId/policy", async (context) => {
-    const edited = await registry.editSpace(
-      context.req.param("spaceId"),
-      parseEditSpaceForm(context.get("form")),
-    );
+    const spaceId = context.req.param("spaceId");
+    // Resolvers have their own editor; the registry keeps the stored list under its lock.
+    const edited = await registry.editSpace(spaceId, parseEditSpaceForm(context.get("form")));
     return redirect(
       `/admin/spaces/${encodeURIComponent(edited.value.policy.id)}?generation=${edited.generation}`,
+    );
+  });
+
+  // Resolver editor: one page per resolver, one form per action.
+  const editorModel = async (
+    context: { get(name: "session"): AdminSession },
+    spaceId: string,
+    resolverId: string,
+    extra: Pick<ResolverEditor, "testResult" | "notice">,
+  ): Promise<ResolverEditor> => {
+    const [{ space, resolver }, generation, credentials] = await Promise.all([
+      existingResolver(registry, spaceId, resolverId),
+      registry.getGeneration(),
+      registry.listResolverCredentials(spaceId),
+    ]);
+    const kind = resolverKind(resolver.type);
+    if (kind === undefined) {
+      throw new SpaceRegistryError("invalid", "The retired uploadthing kind has no editor.");
+    }
+    const model: ResolverEditor = {
+      csrfToken: context.get("session").csrfToken,
+      generation: generation.generation,
+      space,
+      kind,
+      resolver,
+    };
+    const credential = credentials.find((candidate) => candidate.resolverId === resolverId);
+    if (credential !== undefined) model.credential = credential;
+    const edgeBaseUrl = runtime.edgeBaseUrl?.();
+    if (edgeBaseUrl !== undefined) model.edgeBaseUrl = edgeBaseUrl;
+    if (extra.testResult !== undefined) model.testResult = extra.testResult;
+    if (extra.notice !== undefined) model.notice = extra.notice;
+    return model;
+  };
+
+  admin.get("/spaces/:spaceId/resolvers/new", async (context) => {
+    const session = context.get("session");
+    const url = new URL(context.req.url);
+    const kind = resolverKind(url.searchParams.get("kind") ?? "template") ?? "template";
+    const preset = url.searchParams.get("preset");
+    const [space, generation] = await Promise.all([
+      currentSpace(registry, context.req.param("spaceId")),
+      registry.getGeneration(),
+    ]);
+    if (space.status !== "active" || space.policy.routeClass !== "public") {
+      throw new SpaceRegistryError("invalid", "Only an active public Space takes resolvers.");
+    }
+    const model: ResolverEditor = {
+      csrfToken: session.csrfToken,
+      generation: generation.generation,
+      space,
+      kind,
+    };
+    if (preset === "uploadthing" || preset === "prefix") model.preset = preset;
+    const edgeBaseUrl = runtime.edgeBaseUrl?.();
+    if (edgeBaseUrl !== undefined) model.edgeBaseUrl = edgeBaseUrl;
+    return html(resolverEditorView(model));
+  });
+
+  admin.post("/spaces/:spaceId/resolvers", async (context) => {
+    const spaceId = context.req.param("spaceId");
+    const form = context.get("form");
+    const resolverId = formText(form, "resolverId")?.trim();
+    if (resolverId === undefined || resolverId.length === 0) throw new AdminInputError();
+    const parsed = parseResolverForm(form, resolverId);
+    const edited = await registry.editResolver(spaceId, {
+      resolverId,
+      resolver: parsed.resolver,
+      credential: parsed.credential,
+      create: true,
+    });
+    return redirect(
+      `/admin/spaces/${encodeURIComponent(spaceId)}/resolvers/${encodeURIComponent(resolverId)}?generation=${edited.generation}`,
+    );
+  });
+
+  admin.get("/spaces/:spaceId/resolvers/:resolverId", async (context) => {
+    const requested = new URL(context.req.url).searchParams.get("generation");
+    const model = await editorModel(
+      context,
+      context.req.param("spaceId"),
+      context.req.param("resolverId"),
+      {},
+    );
+    const notice = generationNotice(requested, model.generation);
+    if (notice !== undefined) model.notice = notice;
+    return html(resolverEditorView(model));
+  });
+
+  admin.post("/spaces/:spaceId/resolvers/:resolverId", async (context) => {
+    const spaceId = context.req.param("spaceId");
+    const resolverId = context.req.param("resolverId");
+    const parsed = parseResolverForm(context.get("form"), resolverId);
+    const edited = await registry.editResolver(spaceId, {
+      resolverId,
+      resolver: parsed.resolver,
+      credential: parsed.credential,
+    });
+    return redirect(
+      `/admin/spaces/${encodeURIComponent(spaceId)}/resolvers/${encodeURIComponent(resolverId)}?generation=${edited.generation}`,
+    );
+  });
+
+  admin.post("/spaces/:spaceId/resolvers/:resolverId/remove", async (context) => {
+    const spaceId = context.req.param("spaceId");
+    const resolverId = context.req.param("resolverId");
+    if (context.get("form").get("confirm") !== resolverId) throw new AdminInputError();
+    const edited = await registry.editResolver(spaceId, { resolverId });
+    return redirect(
+      `/admin/spaces/${encodeURIComponent(spaceId)}?generation=${edited.generation}#resolvers`,
+    );
+  });
+
+  admin.post("/spaces/:spaceId/resolvers/:resolverId/test", async (context) => {
+    const spaceId = context.req.param("spaceId");
+    const resolverId = context.req.param("resolverId");
+    const reference = parseTestReference(context.get("form"));
+    const { space } = await existingResolver(registry, spaceId, resolverId);
+    const testResult = await testResolver(runtime, space, resolverId, reference);
+    return html(
+      resolverEditorView(await editorModel(context, spaceId, resolverId, { testResult })),
     );
   });
 
@@ -296,6 +547,7 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
       registry,
       context.req.param("spaceId"),
       runtime.imgproxyAllowedSources(),
+      runtime.edgeBaseUrl?.(),
     );
     const issued = await registry.issueApiToken(context.req.param("spaceId"), label);
     const { token, ...summary } = issued.value;
@@ -329,6 +581,7 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
       registry,
       context.req.param("spaceId"),
       runtime.imgproxyAllowedSources(),
+      runtime.edgeBaseUrl?.(),
     );
     const issued = await registry.addCapabilityKey(context.req.param("spaceId"), keyId);
     const { key, ...summary } = issued.value;

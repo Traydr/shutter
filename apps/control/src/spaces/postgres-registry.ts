@@ -1,6 +1,8 @@
 import {
+  type JsonObject,
   normalizeSourceOriginPathPrefix,
   parseSpacePolicy,
+  type SourceResolverPolicy,
   type SpacePolicy,
 } from "@shutter/protocol";
 import type { Pool, PoolClient } from "pg";
@@ -27,13 +29,22 @@ import type {
   IssuedCapabilityKey,
   RegistryGeneration,
   RegistryMutation,
+  ResolverChange,
+  ResolverCredential,
+  ResolverCredentialInput,
+  ResolverCredentialSummary,
   SpacePolicyUpdate,
   SpaceRecord,
   SpaceRegistry,
   SpaceRegistryTransaction,
   SpaceRequestAuthorization,
 } from "./registry.js";
-import { SpaceRegistryError } from "./registry.js";
+import {
+  applyResolverChange,
+  planResolverCredentials,
+  rejectRetiredResolvers,
+  SpaceRegistryError,
+} from "./registry.js";
 
 interface GenerationRow {
   generation: number;
@@ -60,6 +71,66 @@ interface SealedCapabilityKeyRow {
   key_id: string;
   sealed_nonce: string;
   sealed_key: string;
+}
+
+interface ResolverCredentialRow {
+  resolver_id: string;
+  credential_access_key_id: string;
+  sealed_credential_nonce: string;
+  sealed_credential: string;
+  credential_updated_at: Date;
+}
+
+/** A credential as it is written: sealed, so a carry-over never opens it. */
+interface SealedCredentialColumns {
+  accessKeyId: string;
+  nonce: string;
+  ciphertext: string;
+  updatedAt: Date;
+}
+
+const RESOLVER_CREDENTIAL_COLUMNS =
+  "resolver_id, credential_access_key_id, sealed_credential_nonce, sealed_credential, credential_updated_at";
+
+function sealedColumns(row: ResolverCredentialRow): SealedCredentialColumns {
+  return {
+    accessKeyId: row.credential_access_key_id,
+    nonce: row.sealed_credential_nonce,
+    ciphertext: row.sealed_credential,
+    updatedAt: row.credential_updated_at,
+  };
+}
+
+/** The AAD scope of a sealed resolver credential: the row and its access key ID, so neither can be swapped. */
+function credentialScope(resolverId: string, accessKeyId: string): string {
+  return `resolver:${resolverId}:${accessKeyId}`;
+}
+
+/** The kind-specific public fields of a resolver, as the `config` column stores them. */
+function resolverConfig(resolver: SourceResolverPolicy): JsonObject {
+  switch (resolver.type) {
+    case "template": {
+      const placeholders: Record<string, JsonObject> = {};
+      for (const [name, placeholder] of Object.entries(resolver.placeholders)) {
+        placeholders[name] =
+          placeholder.allowed === undefined ? {} : { allowed: [...placeholder.allowed] };
+      }
+      return { url: resolver.url, placeholders };
+    }
+    case "s3":
+      return {
+        endpoint: resolver.endpoint,
+        region: resolver.region,
+        bucket: resolver.bucket,
+        pathStyle: resolver.pathStyle,
+        keyTemplate: resolver.keyTemplate,
+      };
+    case "uploadthing":
+      throw new SpaceRegistryError(
+        "invalid",
+        "the uploadthing resolver kind can no longer be stored",
+      );
+  }
 }
 
 const API_TOKEN_COLUMNS = "id, label, display_prefix, created_at, last_used_at, revoked_at";
@@ -124,6 +195,7 @@ async function insertPolicyChildren(
   client: PoolClient,
   recordId: number,
   policy: SpacePolicy,
+  credentials: ReadonlyMap<string, SealedCredentialColumns>,
 ): Promise<void> {
   for (const rule of policy.allowedSourceOrigins) {
     await client.query(
@@ -132,16 +204,31 @@ async function insertPolicyChildren(
     );
   }
   for (const resolver of policy.resolvers) {
-    // Template and S3 resolvers get their columns in migration 0003; until
-    // then the registry refuses them rather than silently dropping fields.
-    if (resolver.type !== "uploadthing") {
-      throw new SpaceRegistryError("invalid", `resolver kind ${resolver.type} is not stored yet`);
+    const config = resolverConfig(resolver);
+    const credential = credentials.get(resolver.id);
+    if (resolver.type !== "s3" || credential === undefined) {
+      await client.query(
+        `insert into space_resolvers (space_id, resolver_id, resolver_type, config)
+         values ($1, $2, $3, $4)`,
+        [recordId, resolver.id, resolver.type, config],
+      );
+      continue;
     }
     await client.query(
       `insert into space_resolvers
-        (space_id, resolver_id, resolver_type, allowed_project_ids)
-       values ($1, $2, $3, $4)`,
-      [recordId, resolver.id, resolver.type, resolver.allowedProjectIds],
+        (space_id, resolver_id, resolver_type, config, credential_access_key_id,
+         sealed_credential_nonce, sealed_credential, credential_updated_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        recordId,
+        resolver.id,
+        resolver.type,
+        config,
+        credential.accessKeyId,
+        credential.nonce,
+        credential.ciphertext,
+        credential.updatedAt,
+      ],
     );
   }
 }
@@ -320,8 +407,12 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     return this.#read((client) => this.#loadEdgeSnapshot(client));
   }
 
-  async createSpace(policy: SpacePolicy): Promise<RegistryMutation<SpaceRecord>> {
+  async createSpace(
+    policy: SpacePolicy,
+    resolverCredentials: readonly ResolverCredentialInput[] = [],
+  ): Promise<RegistryMutation<SpaceRecord>> {
     const parsed = parseSpacePolicy(policy);
+    rejectRetiredResolvers(parsed);
     try {
       return await this.#write(async (client) => {
         const now = this.#now();
@@ -334,7 +425,13 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
         const recordId = inserted.rows[0]?.id;
         if (recordId === undefined)
           throw new Error("the Space insert did not return an identifier");
-        await insertPolicyChildren(client, recordId, parsed);
+        const plan = planResolverCredentials(parsed, resolverCredentials, new Set());
+        await insertPolicyChildren(
+          client,
+          recordId,
+          parsed,
+          this.#sealSupplied(parsed.id, plan.supplied, now),
+        );
         const generation = await bumpGeneration(client, now);
         const value: SpaceRecord = {
           policy: parsed,
@@ -356,20 +453,106 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     return this.#mutate(spaceId, async (client, recordId, now) => {
       const [stored] = await loadSpaceRecords(client, { spaceId });
       if (stored === undefined) throw new Error("the locked Space could not be loaded");
+      const { resolverCredentials, resolvers, ...policyUpdate } = update;
       const policy = parseSpacePolicy({
-        ...update,
+        ...policyUpdate,
         id: stored.value.policy.id,
         routeClass: stored.value.policy.routeClass,
+        resolvers: resolvers ?? stored.value.policy.resolvers,
       });
-      await client.query(
-        `update spaces set qualities = $2, default_quality = $3, updated_at = $4 where id = $1`,
-        [recordId, policy.qualities, policy.defaultQuality, now],
+      return this.#writePolicy(
+        client,
+        recordId,
+        stored.value,
+        policy,
+        resolverCredentials ?? [],
+        now,
       );
-      await client.query(`delete from space_source_origins where space_id = $1`, [recordId]);
-      await client.query(`delete from space_resolvers where space_id = $1`, [recordId]);
-      await insertPolicyChildren(client, recordId, policy);
-      return { ...stored.value, policy, updatedAt: now };
     });
+  }
+
+  async editResolver(
+    spaceId: string,
+    change: ResolverChange,
+  ): Promise<RegistryMutation<SpaceRecord>> {
+    return this.#mutate(spaceId, async (client, recordId, now) => {
+      const [stored] = await loadSpaceRecords(client, { spaceId });
+      if (stored === undefined) throw new Error("the locked Space could not be loaded");
+      const policy = parseSpacePolicy({
+        ...stored.value.policy,
+        resolvers: applyResolverChange(stored.value.policy, change),
+      });
+      return this.#writePolicy(
+        client,
+        recordId,
+        stored.value,
+        policy,
+        change.credential === undefined ? [] : [change.credential],
+        now,
+      );
+    });
+  }
+
+  /**
+   * The one policy write: every child row is replaced, and each s3 resolver
+   * keeps its sealed credential unless the caller supplied a new one. Kept
+   * envelopes are copied as stored, never opened, so one unreadable secret
+   * cannot block edits to the rest of the Space.
+   */
+  async #writePolicy(
+    client: PoolClient,
+    recordId: number,
+    stored: SpaceRecord,
+    policy: SpacePolicy,
+    supplied: readonly ResolverCredentialInput[],
+    now: Date,
+  ): Promise<SpaceRecord> {
+    rejectRetiredResolvers(policy);
+    const existing = await client.query<ResolverCredentialRow>(
+      `select ${RESOLVER_CREDENTIAL_COLUMNS} from space_resolvers
+       where space_id = $1 and sealed_credential is not null`,
+      [recordId],
+    );
+    const sealedById = new Map(existing.rows.map((row) => [row.resolver_id, sealedColumns(row)]));
+    const plan = planResolverCredentials(policy, supplied, new Set(sealedById.keys()));
+    const credentials = this.#sealSupplied(policy.id, plan.supplied, now);
+    for (const resolverId of plan.kept) {
+      const kept = sealedById.get(resolverId);
+      if (kept !== undefined) credentials.set(resolverId, kept);
+    }
+    await client.query(
+      `update spaces set qualities = $2, default_quality = $3, updated_at = $4 where id = $1`,
+      [recordId, policy.qualities, policy.defaultQuality, now],
+    );
+    await client.query(`delete from space_source_origins where space_id = $1`, [recordId]);
+    await client.query(`delete from space_resolvers where space_id = $1`, [recordId]);
+    await insertPolicyChildren(client, recordId, policy, credentials);
+    return { ...stored, policy, updatedAt: now };
+  }
+
+  /** Seals every supplied credential under its resolver scope; needs the registry encryption key. */
+  #sealSupplied(
+    spaceId: string,
+    supplied: ReadonlyMap<string, ResolverCredentialInput>,
+    now: Date,
+  ): Map<string, SealedCredentialColumns> {
+    const sealed = new Map<string, SealedCredentialColumns>();
+    if (supplied.size === 0) return sealed;
+    const encryption = this.#capabilityKeyEncryption();
+    for (const [resolverId, input] of supplied) {
+      const envelope = encryption.sealSecret(
+        spaceId,
+        credentialScope(resolverId, input.accessKeyId),
+        Buffer.from(input.secretAccessKey, "utf8"),
+      );
+      sealed.set(resolverId, {
+        accessKeyId: input.accessKeyId,
+        nonce: envelope.nonce,
+        ciphertext: envelope.ciphertext,
+        updatedAt: now,
+      });
+    }
+    return sealed;
   }
 
   async decommissionSpace(spaceId: string): Promise<RegistryMutation<SpaceRecord>> {
@@ -508,6 +691,51 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
     } catch (error) {
       return mapConflict(error, "the Capability Key identifier already exists");
     }
+  }
+
+  async listResolverCredentials(spaceId: string): Promise<readonly ResolverCredentialSummary[]> {
+    return this.#read(async (client) => {
+      const [space] = await loadSpaceRecords(client, { spaceId });
+      if (space === undefined) {
+        throw new SpaceRegistryError("not_found", "the Space does not exist");
+      }
+      const result = await client.query<ResolverCredentialRow>(
+        `select ${RESOLVER_CREDENTIAL_COLUMNS} from space_resolvers
+         where space_id = $1 and sealed_credential is not null order by id`,
+        [space.recordId],
+      );
+      return result.rows.map((row) => ({
+        resolverId: row.resolver_id,
+        accessKeyId: row.credential_access_key_id,
+        updatedAt: row.credential_updated_at,
+      }));
+    });
+  }
+
+  async getResolverCredential(
+    spaceId: string,
+    resolverId: string,
+  ): Promise<ResolverCredential | undefined> {
+    return this.#read(async (client) => {
+      const [space] = await loadSpaceRecords(client, { spaceId });
+      if (space === undefined) return undefined;
+      const result = await client.query<ResolverCredentialRow>(
+        `select ${RESOLVER_CREDENTIAL_COLUMNS} from space_resolvers
+         where space_id = $1 and resolver_id = $2 and sealed_credential is not null`,
+        [space.recordId, resolverId],
+      );
+      const row = result.rows[0];
+      if (row === undefined) return undefined;
+      const secret = this.#capabilityKeyEncryption().openSecret(
+        spaceId,
+        credentialScope(row.resolver_id, row.credential_access_key_id),
+        { nonce: row.sealed_credential_nonce, ciphertext: row.sealed_credential },
+      );
+      return {
+        accessKeyId: row.credential_access_key_id,
+        secretAccessKey: Buffer.from(secret).toString("utf8"),
+      };
+    });
   }
 
   async listCapabilityKeys(spaceId: string): Promise<readonly CapabilityKeySummary[]> {

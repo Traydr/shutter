@@ -234,7 +234,6 @@ describe("control app", () => {
         qualities: "75",
         defaultQuality: "75",
         allowedSourceOrigins: "https://sources.example.com/media",
-        resolvers: "",
       }),
     });
     expect(created.status).toBe(303);

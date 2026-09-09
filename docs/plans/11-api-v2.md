@@ -20,6 +20,10 @@ is the 2026-09-09 HTML plan; this file is the checklist.
 - Private Spaces add `?token=`; the token carries no locator (ADR 0028, PR 7).
 - The v1 located, master, and private routes stay. The v1 `resolver/` routes
   go: the Edge logs showed only crawler traffic.
+- The retired `uploadthing` kind stays parseable in the protocol until the
+  stack is deployed, because the Worker built from the stack tip must still
+  accept the old Control's snapshot (see the deploy order). Migration 0003
+  rewrites the rows; a follow-up removes the kind once no snapshot carries it.
 - v2 JSON errors are RFC 9457 problems with a stable `code`.
 
 ## PR sequence

@@ -1,9 +1,15 @@
-import { buildMasterPreviewKey, buildOptimizeSourceQuery } from "@shutter/protocol";
+import {
+  buildMasterPreviewKey,
+  buildOptimizeSourceQuery,
+  type JsonObject,
+  type SpacePolicy,
+} from "@shutter/protocol";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import type { ControlRuntimeConfig } from "./app.js";
 import type { ControlLogger } from "./logging.js";
 import { registerOptimizeRoutes } from "./optimize-routes.js";
+import { createSourceResolverService } from "./source-resolvers.js";
 import { MemorySpaceRegistry } from "./spaces/memory-registry.js";
 
 const TOKEN = "a".repeat(32);
@@ -250,5 +256,157 @@ describe("optimize routes", () => {
     }).request(unknownSpace, { headers });
     expect(missing.status).toBe(404);
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("v2 optimize and resolve wire", () => {
+  const publicPolicy: SpacePolicy = {
+    id: "example-public",
+    routeClass: "public",
+    qualities: [75],
+    defaultQuality: 75,
+    allowedSourceOrigins: [
+      { origin: "https://example-project.ufs.sh", pathPrefix: "/f" },
+      { origin: "https://objects.example.test", pathPrefix: "/example-bucket" },
+    ],
+    resolvers: [
+      {
+        id: "ut",
+        type: "template",
+        url: "https://{project}.ufs.sh/f/{file}",
+        placeholders: { project: { allowed: ["example-project"] }, file: {} },
+      },
+      {
+        id: "media",
+        type: "s3",
+        endpoint: "https://objects.example.test",
+        region: "auto",
+        bucket: "example-bucket",
+        pathStyle: true,
+        keyTemplate: "originals/{key}",
+      },
+    ],
+  };
+
+  async function v2App(options: { credential?: boolean } = {}) {
+    const registry = new MemorySpaceRegistry();
+    await registry.createSpace(publicPolicy, [
+      { resolverId: "media", accessKeyId: "AKIA", secretAccessKey: "s" },
+    ]);
+    const presigned: string[] = [];
+    const sourceResolvers = createSourceResolverService({
+      // A credential that cannot be opened is the one configuration error the
+      // registry cannot prevent at write time.
+      credentials:
+        options.credential === false ? { getResolverCredential: async () => undefined } : registry,
+      presigner: {
+        presign: async ({ key, expiresInSeconds }) => {
+          presigned.push(`${key} ${expiresInSeconds}`);
+          return `https://objects.example.test/example-bucket/${key}?X-Amz-Signature=sealed`;
+        },
+      },
+    });
+    const fetch = vi.fn(
+      async () => new Response("webp", { headers: { "content-type": "image/webp" } }),
+    );
+    const control = optimizeApp({
+      spaceRegistry: registry,
+      sourceResolvers,
+      originAuthToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      masterStore: { presignGet: async (key) => `https://masters.example.test/${key}` },
+      fetch,
+    });
+    return { control, fetch, presigned };
+  }
+
+  function post(control: Hono, path: string, body: string, authorized = true) {
+    const headers = new Headers({ "content-type": "application/json" });
+    if (authorized) headers.set("authorization", `Bearer ${TOKEN}`);
+    return control.request(`http://shutter.test${path}`, { method: "POST", headers, body });
+  }
+
+  it("optimizes a resolved S3 input through a presigned locator that stays inside Control", async () => {
+    const { control, fetch, presigned } = await v2App();
+    const response = await post(
+      control,
+      "/internal/v2/optimize",
+      JSON.stringify({
+        spaceId: "example-public",
+        input: { type: "resolved", resolverId: "media", reference: ["file.one"] },
+        width: 640,
+        quality: 75,
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(presigned).toEqual(["originals/file.one 600"]);
+    const [url] = fetch.mock.calls[0] ?? [];
+    expect(String(url)).toMatch(/^http:\/\/shutter-imgproxy\.railway\.internal:8080\//u);
+    expect(String(url)).not.toContain("X-Amz-Signature");
+  });
+
+  it("answers each resolution failure with its own status", async () => {
+    const { control } = await v2App({ credential: false });
+    const request = (input: JsonObject) =>
+      post(
+        control,
+        "/internal/v2/optimize",
+        JSON.stringify({ spaceId: "example-public", input, width: 640, quality: 75 }),
+      );
+    expect((await request({ type: "resolved", resolverId: "nope", reference: ["x"] })).status).toBe(
+      404,
+    );
+    expect(
+      (await request({ type: "resolved", resolverId: "ut", reference: ["other", "x"] })).status,
+    ).toBe(404);
+    expect(
+      (await request({ type: "resolved", resolverId: "media", reference: ["x"] })).status,
+    ).toBe(503);
+    expect(
+      (await request({ type: "located", sourceUrl: "https://elsewhere.example/x" })).status,
+    ).toBe(403);
+    expect((await request({ type: "callback", url: "https://x" })).status).toBe(400);
+    expect((await post(control, "/internal/v2/optimize", JSON.stringify({}), false)).status).toBe(
+      401,
+    );
+  });
+
+  it("presigns a delivery locator for the Edge and never stores it", async () => {
+    const { control, presigned } = await v2App();
+    const response = await post(
+      control,
+      "/internal/v2/resolve",
+      JSON.stringify({ spaceId: "example-public", resolverId: "media", reference: ["clip.mp4"] }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    const body = await response.json();
+    expect(body).toMatchObject({
+      locator:
+        "https://objects.example.test/example-bucket/originals/clip.mp4?X-Amz-Signature=sealed",
+    });
+    expect(presigned).toEqual(["originals/clip.mp4 600"]);
+    const template = await post(
+      control,
+      "/internal/v2/resolve",
+      JSON.stringify({
+        spaceId: "example-public",
+        resolverId: "ut",
+        reference: ["example-project", "f"],
+      }),
+    );
+    expect(await template.json()).toMatchObject({
+      locator: "https://example-project.ufs.sh/f/f",
+    });
+    expect(
+      (
+        await post(
+          control,
+          "/internal/v2/resolve",
+          JSON.stringify({ spaceId: "missing", resolverId: "ut", reference: ["x"] }),
+        )
+      ).status,
+    ).toBe(404);
+    expect((await post(control, "/internal/v2/resolve", "{}", false)).status).toBe(401);
   });
 });

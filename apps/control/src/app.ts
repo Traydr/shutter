@@ -17,6 +17,7 @@ import { type ControlLogger, operationalErrorType } from "./logging.js";
 import type { MasterStore } from "./master-store.js";
 import { registerOptimizeRoutes } from "./optimize-routes.js";
 import { bearerAuthorized } from "./origin-auth.js";
+import type { SourceResolverService } from "./source-resolvers.js";
 import type { SpaceRegistry } from "./spaces/registry.js";
 
 export interface ControlRuntimeConfig {
@@ -25,11 +26,14 @@ export interface ControlRuntimeConfig {
   edgeConfigToken?(): string | undefined;
   adminBootstrapToken?(): string | undefined;
   imgproxyAllowedSources?(): string | undefined;
+  /** Where the Edge serves from; the admin pages show complete Delivery URLs with it. */
+  edgeBaseUrl?(): string | undefined;
   imgproxyConfig(): ImgproxyConfig | undefined;
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   masterStore?: MasterStore;
   jobApiRuntime?: JobApiRuntime;
   spaceRegistry?: SpaceRegistry;
+  sourceResolvers?: SourceResolverService;
   edgeRefreshTracker?: EdgeRefreshTracker;
 }
 
@@ -160,8 +164,10 @@ export function createControlApp(
     bootstrapToken: () => runtime.adminBootstrapToken?.(),
     imgproxyAllowedSources: () => runtime.imgproxyAllowedSources?.(),
     edgeRefreshStatus: () => runtime.edgeRefreshTracker?.latest(),
+    edgeBaseUrl: () => runtime.edgeBaseUrl?.(),
   };
   if (runtime.spaceRegistry !== undefined) adminOptions.registry = runtime.spaceRegistry;
+  if (runtime.sourceResolvers !== undefined) adminOptions.sourceResolvers = runtime.sourceResolvers;
   control.route("/admin", createAdminApp(adminOptions));
   if (runtime.jobApiRuntime !== undefined) {
     control.route("/", createJobApi(runtime.jobApiRuntime));
