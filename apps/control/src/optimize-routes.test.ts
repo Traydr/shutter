@@ -1,9 +1,4 @@
-import {
-  buildMasterPreviewKey,
-  buildOptimizeSourceQuery,
-  type JsonObject,
-  type SpacePolicy,
-} from "@shutter/protocol";
+import { buildMasterPreviewKey, type JsonObject, type SpacePolicy } from "@shutter/protocol";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import type { ControlRuntimeConfig } from "./app.js";
@@ -40,30 +35,50 @@ function optimizeApp(runtime: Omit<ControlRuntimeConfig, "logger"> & { logger?: 
   return app;
 }
 
-function spikeUrl(): string {
-  const url = new URL("http://shutter.test/internal/v1/optimize-source");
-  url.search = buildOptimizeSourceQuery({
+const OPTIMIZE_URL = "http://shutter.test/internal/v2/optimize";
+
+/** A located input as the v1 Edge routes send it, for the private fixture Space. */
+function locatedBody(sourceUrl = "https://sources.example.com/private/originals/test.jpg"): string {
+  return JSON.stringify({
     spaceId: "example-private",
-    sourceUrl: "https://sources.example.com/private/originals/test.jpg",
+    input: { type: "located", sourceUrl },
     width: 640,
     quality: 75,
-  }).toString();
-  return url.href;
+  });
+}
+
+function masterBody(sourceId = "source/one", kind = "video"): string {
+  return JSON.stringify({
+    spaceId: "example-private",
+    input: { type: "master", sourceId, kind },
+    width: 640,
+    quality: 75,
+  });
+}
+
+function optimizeRequest(
+  control: Hono,
+  body: string,
+  options: { authorized?: boolean; contentType?: string } = {},
+) {
+  const headers = new Headers({ "content-type": options.contentType ?? "application/json" });
+  if (options.authorized !== false) headers.set("authorization", `Bearer ${TOKEN}`);
+  return control.request(OPTIMIZE_URL, { method: "POST", headers, body });
 }
 
 describe("optimize routes", () => {
-  it("rejects direct access to the Railway origin probe", async () => {
+  it("rejects direct access to the Railway origin", async () => {
     const control = optimizeApp({
       spaceRegistry: SPACE_REGISTRY,
       originAuthToken: () => TOKEN,
       imgproxyConfig: () => IMGPROXY,
       fetch: vi.fn(),
     });
-    const url = spikeUrl();
-
-    const missing = await control.request(url);
-    const wrong = await control.request(url, {
-      headers: { authorization: `Bearer ${"b".repeat(32)}` },
+    const missing = await optimizeRequest(control, locatedBody(), { authorized: false });
+    const wrong = await control.request(OPTIMIZE_URL, {
+      method: "POST",
+      headers: { authorization: `Bearer ${"b".repeat(32)}`, "content-type": "application/json" },
+      body: locatedBody(),
     });
 
     expect(missing.status).toBe(401);
@@ -71,7 +86,7 @@ describe("optimize routes", () => {
     expect(missing.headers.get("cache-control")).toBe("private, no-store");
   });
 
-  it("serves only a valid cache probe to the Worker credential", async () => {
+  it("serves a located input to the Worker credential through a signed imgproxy request", async () => {
     const fetch = vi.fn(
       async () =>
         new Response(Uint8Array.from([82, 73, 70, 70]), {
@@ -84,9 +99,7 @@ describe("optimize routes", () => {
       imgproxyConfig: () => IMGPROXY,
       fetch,
     });
-    const response = await control.request(spikeUrl(), {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
+    const response = await optimizeRequest(control, locatedBody());
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/webp");
@@ -108,25 +121,34 @@ describe("optimize routes", () => {
       imgproxyConfig: () => IMGPROXY,
       fetch,
     });
-    const missingSource = await control.request(
-      "http://shutter.test/internal/v1/optimize-source?space=example-private&w=640&q=75",
-      { headers: { authorization: `Bearer ${TOKEN}` } },
+    const missingInput = await optimizeRequest(
+      control,
+      JSON.stringify({ spaceId: "example-private", width: 640, quality: 75 }),
     );
-    const missingSpace = await control.request(
-      "http://shutter.test/internal/v1/optimize-source?source=https://sources.example.com/private/originals/test.jpg&w=640&q=75",
-      { headers: { authorization: `Bearer ${TOKEN}` } },
+    const missingSpace = await optimizeRequest(
+      control,
+      JSON.stringify({
+        input: { type: "located", sourceUrl: "https://s/x" },
+        width: 640,
+        quality: 75,
+      }),
     );
-    const extraParameter = await control.request(`${spikeUrl()}&key=legacy-cache-key`, {
-      headers: { authorization: `Bearer ${TOKEN}` },
+    const extraField = await optimizeRequest(
+      control,
+      JSON.stringify({ ...JSON.parse(locatedBody()), key: "legacy-cache-key" }),
+    );
+    const wrongContentType = await optimizeRequest(control, locatedBody(), {
+      contentType: "text/plain",
     });
 
-    expect(missingSource.status).toBe(400);
+    expect(missingInput.status).toBe(400);
     expect(missingSpace.status).toBe(400);
-    expect(extraParameter.status).toBe(400);
+    expect(extraField.status).toBe(400);
+    expect(wrongContentType.status).toBe(400);
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("rejects origin sources outside the Space allowlist", async () => {
+  it("rejects located sources outside the Space allowlist", async () => {
     const fetch = vi.fn();
     const control = optimizeApp({
       spaceRegistry: SPACE_REGISTRY,
@@ -134,17 +156,13 @@ describe("optimize routes", () => {
       imgproxyConfig: () => IMGPROXY,
       fetch,
     });
-    const url = new URL(spikeUrl());
-    url.searchParams.set("source", "https://evil.example/object.jpg");
-    const response = await control.request(url, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
+    const response = await optimizeRequest(control, locatedBody("https://evil.example/object.jpg"));
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({ error: { code: "locator_not_allowed" } });
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("authenticates and strictly validates optimize-master requests", async () => {
+  it("presigns the stored master for a master input and validates it strictly", async () => {
     const presignGet = vi.fn(async () => "https://r2.example.test/signed-master?signature=secret");
     const fetch = vi.fn(async () => new Response("master", { status: 200 }));
     const control = optimizeApp({
@@ -154,31 +172,21 @@ describe("optimize routes", () => {
       fetch,
       masterStore: { presignGet },
     });
-    const url = "http://shutter.test/internal/v1/optimize-master";
-    const body = JSON.stringify({
-      spaceId: "example-private",
-      sourceId: "source/one",
-      kind: "video",
-      w: 640,
-      q: 75,
-    });
 
-    expect((await control.request(url, { method: "POST" })).status).toBe(401);
+    expect((await optimizeRequest(control, masterBody(), { authorized: false })).status).toBe(401);
     expect(
       (
-        await control.request(url, {
-          method: "POST",
-          headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-          body: JSON.stringify({ ...JSON.parse(body), key: "masters/caller-selected" }),
-        })
+        await optimizeRequest(
+          control,
+          JSON.stringify({
+            ...JSON.parse(masterBody()),
+            input: { type: "master", sourceId: "source/one", kind: "video", key: "caller" },
+          }),
+        )
       ).status,
     ).toBe(400);
 
-    const response = await control.request(url, {
-      method: "POST",
-      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body,
-    });
+    const response = await optimizeRequest(control, masterBody());
     expect(response.status).toBe(200);
     expect(presignGet).toHaveBeenCalledWith(
       await buildMasterPreviewKey("example-private", "source/one", "video"),
@@ -196,17 +204,7 @@ describe("optimize routes", () => {
       fetch: vi.fn(async () => new Response(null, { status: 502 })),
       masterStore: { presignGet: async () => signed },
     });
-    const response = await control.request("http://shutter.test/internal/v1/optimize-master", {
-      method: "POST",
-      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify({
-        spaceId: "example-private",
-        sourceId: "one",
-        kind: "pdf",
-        w: 640,
-        q: 75,
-      }),
-    });
+    const response = await optimizeRequest(control, masterBody("one", "pdf"));
     expect(response.status).toBe(502);
     expect(JSON.stringify(error.mock.calls)).not.toContain(signed);
     error.mockRestore();
@@ -231,30 +229,17 @@ describe("optimize routes", () => {
       imgproxyConfig: () => IMGPROXY,
       fetch,
     });
-    const headers = { authorization: `Bearer ${TOKEN}` };
-    expect((await noImgproxy.request(spikeUrl(), { headers })).status).toBe(503);
-    expect((await noRegistry.request(spikeUrl(), { headers })).status).toBe(503);
-    const master = await noMasterStore.request("http://shutter.test/internal/v1/optimize-master", {
-      method: "POST",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({
-        spaceId: "example-private",
-        sourceId: "one",
-        kind: "pdf",
-        w: 640,
-        q: 75,
-      }),
-    });
-    expect(master.status).toBe(503);
-    const unknownSpace = new URL(spikeUrl());
-    unknownSpace.searchParams.set("space", "unknown-space");
-    const missing = await optimizeApp({
-      spaceRegistry: SPACE_REGISTRY,
-      originAuthToken: () => TOKEN,
-      imgproxyConfig: () => IMGPROXY,
-      fetch,
-    }).request(unknownSpace, { headers });
-    expect(missing.status).toBe(404);
+    expect((await optimizeRequest(noImgproxy, locatedBody())).status).toBe(503);
+    expect((await optimizeRequest(noRegistry, locatedBody())).status).toBe(503);
+    expect((await optimizeRequest(noMasterStore, masterBody())).status).toBe(503);
+    expect(
+      (
+        await optimizeRequest(
+          noMasterStore,
+          JSON.stringify({ ...JSON.parse(locatedBody()), spaceId: "missing" }),
+        )
+      ).status,
+    ).toBe(404);
     expect(fetch).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,6 @@
 import {
   buildCanonicalCacheUrl,
   buildMasterPreviewKey,
-  buildOptimizeSourceQuery,
   buildR2CacheKey,
   buildSourceCacheTag,
   CONTROL_HTTP_ROUTES,
@@ -9,6 +8,7 @@ import {
   normalizeOptimizationQuery,
   type OptimizationCacheIdentity,
   type OptimizationInput,
+  type OptimizeInput,
   operationalEvent,
   type PreviewKind,
   verifySourceCapability,
@@ -116,33 +116,15 @@ async function readR2Response(bucket: R2Bucket, key: string): Promise<Response |
   return new Response(object.body, { headers });
 }
 
-async function fetchOrigin(
+/**
+ * The one Edge-to-Control optimize call. Every input, a located source from
+ * a v1 capability, a resolver reference, or a stored master, travels as a
+ * tagged body; no locator ever sits in a query string.
+ */
+async function fetchOptimize(
   bindings: CloudflareBindings,
   identity: OptimizationCacheIdentity,
-  sourceUrl: string,
-): Promise<Response> {
-  const originUrl = new URL(CONTROL_HTTP_ROUTES.optimizeSource, bindings.ORIGIN_BASE_URL);
-  originUrl.search = buildOptimizeSourceQuery({
-    spaceId: identity.spaceId,
-    sourceUrl,
-    width: identity.width,
-    quality: identity.quality,
-  }).toString();
-  const response = await fetch(originUrl, {
-    headers: { authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}` },
-    redirect: "manual",
-  });
-  if (!response.ok) {
-    throw new Error(`origin returned ${response.status}`);
-  }
-  return response;
-}
-
-/** The v2 optimize wire: Control resolves the reference itself, so no locator crosses. */
-async function fetchResolvedOrigin(
-  bindings: CloudflareBindings,
-  identity: OptimizationCacheIdentity,
-  origin: { resolverId: string; reference: readonly string[] },
+  input: OptimizeInput,
 ): Promise<Response> {
   const response = await fetch(new URL(CONTROL_HTTP_ROUTES.optimize, bindings.ORIGIN_BASE_URL), {
     method: "POST",
@@ -152,39 +134,12 @@ async function fetchResolvedOrigin(
     },
     body: JSON.stringify({
       spaceId: identity.spaceId,
-      input: { type: "resolved", resolverId: origin.resolverId, reference: origin.reference },
+      input,
       width: identity.width,
       quality: identity.quality,
     }),
     redirect: "manual",
   });
-  if (!response.ok) throw new Error(`origin returned ${response.status}`);
-  return response;
-}
-
-async function fetchMasterOrigin(
-  bindings: CloudflareBindings,
-  identity: OptimizationCacheIdentity,
-  kind: PreviewKind,
-): Promise<Response> {
-  const response = await fetch(
-    new URL(CONTROL_HTTP_ROUTES.optimizeMaster, bindings.ORIGIN_BASE_URL),
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        spaceId: identity.spaceId,
-        sourceId: identity.sourceId,
-        kind,
-        w: identity.width,
-        q: identity.quality,
-      }),
-      redirect: "manual",
-    },
-  );
   if (!response.ok) throw new Error(`origin returned ${response.status}`);
   return response;
 }
@@ -205,12 +160,23 @@ async function renderAtOrigin(
         );
         if ((await bindings.MEDIA_STORE.head(masterKey)) === null) return undefined;
       }
-      return fetchMasterOrigin(bindings, identity, origin.kind);
+      return fetchOptimize(bindings, identity, {
+        type: "master",
+        sourceId: identity.sourceId,
+        kind: origin.kind,
+      });
     }
     case "resolved":
-      return fetchResolvedOrigin(bindings, identity, origin);
+      return fetchOptimize(bindings, identity, {
+        type: "resolved",
+        resolverId: origin.resolverId,
+        reference: origin.reference,
+      });
     case "source":
-      return fetchOrigin(bindings, identity, await origin.locate());
+      return fetchOptimize(bindings, identity, {
+        type: "located",
+        sourceUrl: await origin.locate(),
+      });
   }
 }
 

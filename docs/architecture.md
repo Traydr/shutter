@@ -293,10 +293,12 @@ Cache policy is trusted Space configuration, not a caller-controlled query
 parameter. Private cache objects use a stable key derived from Source ID and
 normalized optimization parameters, so a refreshed Source Capability
 can reuse existing bytes without extending the previous capability's access.
-The internal optimize routes between the Worker and Control carry the Space ID
-and the Source Locator, never a cache key: the Delivery Cache key is built and
-owned at the Edge through `@shutter/protocol`, and Control resolves policy from
-the Space ID alone.
+The one internal optimize route between the Worker and Control,
+`POST /internal/v2/optimize`, carries the Space ID and a tagged input (a
+located source from a v1 capability, a resolver reference, or a stored Master
+Preview), never a cache key and never a locator in a query string: the Delivery
+Cache key is built and owned at the Edge through `@shutter/protocol`, and
+Control resolves policy from the Space ID alone.
 
 Private image Source Capabilities live for 24 hours in v1. Public optimized
 images use a 30-day Cloudflare edge TTL and the same 30-day R2 cache lifetime,
