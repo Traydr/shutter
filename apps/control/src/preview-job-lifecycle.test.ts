@@ -137,6 +137,29 @@ describe("Postgres Preview Job lifecycle", () => {
     });
   });
 
+  it("gives a resolver source the full retry window and exhausts it without a capability", async () => {
+    await lifecycle.submit(identity, start);
+    const row = await test.pool.query<{
+      retry_deadline_at: Date;
+      source_capability: string | null;
+    }>("select retry_deadline_at, source_capability from preview_jobs");
+    expect(row.rows[0]?.source_capability).toBeNull();
+    expect(row.rows[0]?.retry_deadline_at).toEqual(
+      new Date(start.getTime() + JOB_RETRY_WINDOW_SECONDS * 1_000),
+    );
+    const claimed = await lifecycle.claim("video", start);
+    expect(claimed).toMatchObject({ sourceId: "source-1", attemptNumber: 1 });
+    expect(claimed).not.toHaveProperty("sourceCapability");
+
+    await test.pool.query("truncate table preview_jobs");
+    await lifecycle.submit(identity, start);
+    const past = new Date(start.getTime() + JOB_RETRY_WINDOW_SECONDS * 1_000 + 1);
+    await lifecycle.maintain(past, 100);
+    await expect(lifecycle.read(identity)).resolves.toMatchObject({
+      representation: { status: "failed", failure: { code: "attempts_exhausted" } },
+    });
+  });
+
   it("bounds retry deadlines by lifecycle policy", async () => {
     await lifecycle.submit(
       { ...input, capabilityExpiresAt: new Date(start.getTime() + 48 * 60 * 60 * 1_000) },

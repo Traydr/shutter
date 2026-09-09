@@ -1,16 +1,18 @@
 import { issueSourceCapability, type JsonObject } from "@shutter/protocol";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createJobApi, type JobApiRuntime } from "./job-api.js";
+import { CLAIM_LOCATOR_LIFETIME_SECONDS, createJobApi, type JobApiRuntime } from "./job-api.js";
 import type { ControlLogger } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import type { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
 import type { SourcePurge } from "./source-purge.js";
+import { createSourceResolverService } from "./source-resolvers.js";
 import { MemorySpaceRegistry } from "./spaces/memory-registry.js";
 
 const KEY = Uint8Array.from({ length: 32 }, (_, index) => index);
 const KID = "test-key";
 const SPACE_TOKEN = "s".repeat(32);
 const VIDEO_TOKEN = "v".repeat(32);
+const PUBLIC_TOKEN = "p".repeat(32);
 const NOW = new Date("2026-07-11T00:00:00Z");
 const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
 let spaceRegistry: MemorySpaceRegistry;
@@ -44,6 +46,13 @@ function runtime(
     spaceRegistry,
     executorToken: (kind) => (kind === "video" ? VIDEO_TOKEN : undefined),
     dispatch,
+    sourceResolvers: createSourceResolverService({
+      credentials: spaceRegistry,
+      presigner: {
+        presign: async ({ key, expiresInSeconds }) =>
+          `https://objects.example.test/example-bucket/${key}?X-Amz-Expires=${expiresInSeconds}&X-Amz-Signature=sealed`,
+      },
+    }),
   };
   if (sourcePurge !== undefined) api.sourcePurge = sourcePurge;
   return api;
@@ -76,13 +85,31 @@ describe("job API", () => {
           routeClass: "public",
           qualities: [75],
           defaultQuality: 75,
-          allowedSourceOrigins: [{ origin: "https://sources.example.com" }],
+          allowedSourceOrigins: [
+            { origin: "https://sources.example.com" },
+            { origin: "https://objects.example.test", pathPrefix: "/example-bucket" },
+          ],
           resolvers: [],
         },
       ],
     });
     await spaceRegistry.issueApiToken("example-private", "test", SPACE_TOKEN);
     await spaceRegistry.addCapabilityKey("example-private", KID, KEY);
+    await spaceRegistry.issueApiToken("example-public", "test", PUBLIC_TOKEN);
+    await spaceRegistry.editResolver("example-public", {
+      resolverId: "media",
+      resolver: {
+        id: "media",
+        type: "s3",
+        endpoint: "https://objects.example.test",
+        region: "auto",
+        bucket: "example-bucket",
+        pathStyle: true,
+        keyTemplate: "originals/{key}",
+      },
+      credential: { resolverId: "media", accessKeyId: "AKIA", secretAccessKey: "s" },
+      create: true,
+    });
   });
 
   afterAll(async () => test.close());
@@ -144,6 +171,204 @@ describe("job API", () => {
         height: 1080,
         format: "webp",
       },
+    });
+  });
+
+  it("runs a v2 resolver-source job with no capability and a locator resolved at claim", async () => {
+    const dispatch = vi.fn(async () => {});
+    const app = createJobApi(runtime(lifecycle, dispatch));
+    const resource =
+      "http://shutter.test/v2/spaces/example-public/sources/media%2Ftour.mp4/previews/video";
+    const submitted = await app.request(resource, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${PUBLIC_TOKEN}`, "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(submitted.status).toBe(202);
+    expect(submitted.headers.get("location")).toBe(
+      "/v2/spaces/example-public/sources/media%2Ftour.mp4/previews/video",
+    );
+    expect(dispatch).toHaveBeenCalledWith("video");
+
+    const polled = await app.request(resource, {
+      headers: { authorization: `Bearer ${PUBLIC_TOKEN}` },
+    });
+    expect(polled.status).toBe(202);
+
+    const claim = await app.request("http://shutter.test/internal/v1/executors/video/claim", {
+      method: "POST",
+      headers: { authorization: `Bearer ${VIDEO_TOKEN}` },
+    });
+    expect(claim.status).toBe(200);
+    const work: JsonObject = await claim.json();
+    expect(work.sourceId).toBe("media/tour.mp4");
+    expect(work.locator).toBe(
+      `https://objects.example.test/example-bucket/originals/tour.mp4?X-Amz-Expires=${CLAIM_LOCATOR_LIFETIME_SECONDS}&X-Amz-Signature=sealed`,
+    );
+
+    const completed = await app.request(
+      "http://shutter.test/internal/v1/executors/video/jobs/example-public/media%2Ftour.mp4/complete",
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${VIDEO_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          processingToken: work.processingToken,
+          masterKey: work.outputKey,
+          width: 1920,
+          height: 1080,
+          format: "webp",
+          objectEtag: "etag-1",
+        }),
+      },
+    );
+    expect(completed.status).toBe(204);
+    const ready = await app.request(resource, {
+      headers: { authorization: `Bearer ${PUBLIC_TOKEN}` },
+    });
+    expect(ready.status).toBe(200);
+    await expect(ready.json()).resolves.toMatchObject({
+      status: "ready",
+      master: { sourceId: "media/tour.mp4", kind: "video" },
+    });
+  });
+
+  it("answers v2 request errors as problem details and refuses non-resolver sources", async () => {
+    const app = createJobApi(runtime(lifecycle));
+    const authorized = { authorization: `Bearer ${PUBLIC_TOKEN}` };
+    const problem = async (response: Response, code: string, status: number) => {
+      expect(response.status).toBe(status);
+      expect(response.headers.get("content-type")).toBe("application/problem+json");
+      await expect(response.json()).resolves.toEqual({
+        type: `https://shutter.traydr.dev/problems/${code}`,
+        title: expect.any(String),
+        status,
+        code,
+      });
+    };
+    await problem(
+      await app.request(
+        "http://shutter.test/v2/spaces/example-public/sources/plain-source/previews/video",
+        {
+          method: "PUT",
+          headers: { ...authorized, "content-type": "application/json" },
+          body: "{}",
+        },
+      ),
+      "not_found",
+      404,
+    );
+    await problem(
+      await app.request(
+        "http://shutter.test/v2/spaces/example-public/sources/nope%2Fx/previews/video",
+        {
+          method: "PUT",
+          headers: { ...authorized, "content-type": "application/json" },
+          body: "{}",
+        },
+      ),
+      "not_found",
+      404,
+    );
+    await problem(
+      await app.request(
+        "http://shutter.test/v2/spaces/example-public/sources/media%2Fx/previews/video",
+        {
+          method: "PUT",
+          headers: { ...authorized, "content-type": "application/json" },
+          body: JSON.stringify({ sourceCapability: "v1.k.iv.ct" }),
+        },
+      ),
+      "request_invalid",
+      400,
+    );
+    await problem(
+      await app.request(
+        "http://shutter.test/v2/spaces/example-public/sources/media%2Fx/previews/video",
+        { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" },
+      ),
+      "unauthorized",
+      401,
+    );
+    await problem(
+      await app.request(
+        "http://shutter.test/v2/spaces/example-public/sources/plain-source/previews/video",
+        { headers: authorized },
+      ),
+      "not_found",
+      404,
+    );
+    await problem(
+      await app.request("http://shutter.test/v2/spaces/example-public/sources/plain/purge", {
+        method: "POST",
+        headers: authorized,
+      }),
+      "not_found",
+      404,
+    );
+    await problem(
+      await app.request("http://shutter.test/v2/spaces/example-public/sources/media%2Fx/purge", {
+        method: "POST",
+        headers: authorized,
+      }),
+      "service_unavailable",
+      503,
+    );
+  });
+
+  it("leaves a claim to its lease when resolution fails temporarily", async () => {
+    const api = runtime(lifecycle);
+    api.sourceResolvers = {
+      resolve: async () => {
+        throw new Error("registry unavailable");
+      },
+    };
+    const app = createJobApi(api);
+    const resource =
+      "http://shutter.test/v2/spaces/example-public/sources/media%2Fflaky.mp4/previews/video";
+    await app.request(resource, {
+      method: "PUT",
+      headers: { authorization: `Bearer ${PUBLIC_TOKEN}`, "content-type": "application/json" },
+      body: "{}",
+    });
+    const claim = await app.request("http://shutter.test/internal/v1/executors/video/claim", {
+      method: "POST",
+      headers: { authorization: `Bearer ${VIDEO_TOKEN}` },
+    });
+    expect(claim.status).toBe(503);
+    const polled = await app.request(resource, {
+      headers: { authorization: `Bearer ${PUBLIC_TOKEN}` },
+    });
+    expect(polled.status).toBe(202);
+    await expect(polled.json()).resolves.toEqual({ status: "processing" });
+  });
+
+  it("fails a resolver job at claim when its resolver has gone", async () => {
+    const app = createJobApi(runtime(lifecycle));
+    const resource =
+      "http://shutter.test/v2/spaces/example-public/sources/media%2Fgone.mp4/previews/video";
+    expect(
+      (
+        await app.request(resource, {
+          method: "PUT",
+          headers: { authorization: `Bearer ${PUBLIC_TOKEN}`, "content-type": "application/json" },
+          body: "{}",
+        })
+      ).status,
+    ).toBe(202);
+    await spaceRegistry.editResolver("example-public", { resolverId: "media" });
+    const claim = await app.request("http://shutter.test/internal/v1/executors/video/claim", {
+      method: "POST",
+      headers: { authorization: `Bearer ${VIDEO_TOKEN}` },
+    });
+    expect(claim.status).toBe(409);
+    await expect(claim.json()).resolves.toEqual({ error: { code: "configuration_error" } });
+    const failed = await app.request(resource, {
+      headers: { authorization: `Bearer ${PUBLIC_TOKEN}` },
+    });
+    expect(failed.status).toBe(200);
+    await expect(failed.json()).resolves.toEqual({
+      status: "failed",
+      failure: { code: "configuration_error", action: "contact_operator" },
     });
   });
 

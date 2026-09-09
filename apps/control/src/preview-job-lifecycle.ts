@@ -26,12 +26,14 @@ export interface SourceIdentity {
 }
 
 export interface SubmitJobInput extends JobIdentity {
-  sourceCapability: string;
-  capabilityExpiresAt: Date;
+  /** Absent for a resolver source (ADR 0027): Control resolves the locator at every claim. */
+  sourceCapability?: string | undefined;
+  capabilityExpiresAt?: Date | undefined;
 }
 
 export interface ClaimedJob extends JobIdentity {
-  sourceCapability: string;
+  /** Absent for a resolver source; the claim route resolves the locator instead. */
+  sourceCapability?: string | undefined;
   processingToken: string;
   executionCycle: number;
   attemptNumber: number;
@@ -204,10 +206,23 @@ function fromRow(row: JobRow): JobRecord {
 }
 
 function retryDeadline(input: SubmitJobInput, now: Date): Date {
+  const window = now.getTime() + JOB_RETRY_WINDOW_SECONDS * 1_000;
   return new Date(
-    Math.min(input.capabilityExpiresAt.getTime(), now.getTime() + JOB_RETRY_WINDOW_SECONDS * 1_000),
+    input.capabilityExpiresAt === undefined
+      ? window
+      : Math.min(input.capabilityExpiresAt.getTime(), window),
   );
 }
+
+/**
+ * A pending job past its deadline is over. For a capability job that is the
+ * capability running out (`source_expired`, resubmit with a fresh one); a
+ * resolver job has no capability, so its budget is simply exhausted.
+ */
+const EXPIRE_PENDING_SQL = `update preview_jobs set status = 'failed',
+  failure_code = case when source_capability is null then 'attempts_exhausted' else 'source_expired' end,
+  source_capability = null, next_attempt_at = null, updated_at = $1
+ where status = 'pending' and retry_deadline_at <= $1`;
 
 async function lockSource(client: PoolClient, spaceId: string, sourceId: string): Promise<void> {
   await client.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [
@@ -235,7 +250,7 @@ export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
           (space_id, source_id, kind, status, source_capability, retry_deadline_at, next_attempt_at, updated_at)
          values ($1, $2, $3, 'pending', $4, $5, $6, $6)
          on conflict do nothing returning *`,
-        [input.spaceId, input.sourceId, input.kind, input.sourceCapability, deadline, now],
+        [input.spaceId, input.sourceId, input.kind, input.sourceCapability ?? null, deadline, now],
       );
       if (inserted.rows[0] !== undefined) {
         return { disposition: "created", job: jobView(fromRow(inserted.rows[0])) };
@@ -260,7 +275,7 @@ export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
           processing_token = null, lease_expires_at = null, heartbeat_at = null,
           failure_code = null, updated_at = $6
          where space_id = $1 and source_id = $2 and kind = $3 returning *`,
-        [input.spaceId, input.sourceId, input.kind, input.sourceCapability, deadline, now],
+        [input.spaceId, input.sourceId, input.kind, input.sourceCapability ?? null, deadline, now],
       );
       const reactivatedRow = reactivated.rows[0];
       if (reactivatedRow === undefined) throw new Error("job disappeared during reactivation");
@@ -280,12 +295,7 @@ export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
     const token = randomUUID();
     const lease = new Date(now.getTime() + PROCESSING_LEASE_SECONDS * 1_000);
     return transaction(this.#pool, async (client) => {
-      await client.query(
-        `update preview_jobs set status = 'failed', source_capability = null,
-          failure_code = 'source_expired', next_attempt_at = null, updated_at = $1
-         where status = 'pending' and retry_deadline_at <= $1`,
-        [now],
-      );
+      await client.query(EXPIRE_PENDING_SQL, [now]);
       const result = await client.query<JobRow>(
         `with candidate as (
           select space_id, source_id, kind from preview_jobs
@@ -303,16 +313,17 @@ export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
         [kind, now, token, lease],
       );
       const row = result.rows[0];
-      if (row === undefined || row.source_capability === null) return undefined;
-      return {
+      if (row === undefined) return undefined;
+      const claimed: ClaimedJob = {
         spaceId: row.space_id,
         sourceId: row.source_id,
         kind: row.kind,
-        sourceCapability: row.source_capability,
         processingToken: token,
         executionCycle: row.execution_cycle,
         attemptNumber: row.attempt_number,
       };
+      if (row.source_capability !== null) claimed.sourceCapability = row.source_capability;
+      return claimed;
     });
   }
 
@@ -406,12 +417,7 @@ export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
 
   async maintain(now: Date, limit: number): Promise<MaintenanceResult> {
     return transaction(this.#pool, async (client) => {
-      const expired = await client.query(
-        `update preview_jobs set status = 'failed', source_capability = null,
-          next_attempt_at = null, failure_code = 'source_expired', updated_at = $1
-         where status = 'pending' and retry_deadline_at <= $1`,
-        [now],
-      );
+      const expired = await client.query(EXPIRE_PENDING_SQL, [now]);
       const recovered = await client.query(
         `update preview_jobs set status = case when attempt_number >= $2 then 'failed' else 'pending' end,
           source_capability = case when attempt_number >= $2 then null else source_capability end,
