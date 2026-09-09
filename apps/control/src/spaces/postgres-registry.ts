@@ -132,6 +132,11 @@ async function insertPolicyChildren(
     );
   }
   for (const resolver of policy.resolvers) {
+    // Template and S3 resolvers get their columns in migration 0003; until
+    // then the registry refuses them rather than silently dropping fields.
+    if (resolver.type !== "uploadthing") {
+      throw new SpaceRegistryError("invalid", `resolver kind ${resolver.type} is not stored yet`);
+    }
     await client.query(
       `insert into space_resolvers
         (space_id, resolver_id, resolver_type, allowed_project_ids)

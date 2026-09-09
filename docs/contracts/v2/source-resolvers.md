@@ -68,9 +68,11 @@ substituted with `encodeURIComponent` and no other transformation.
 
 Every fetch location a resolver can produce must pass the Space's
 `allowedSourceOrigins` under the v1 locator rules. The policy parser proves
-this once at save time by expanding the template with a probe value for every
-path placeholder and each allowed value for a hostname placeholder; the Edge and
-Control re-check the expanded location before every fetch.
+this once at save time: for each allowed value of a hostname placeholder it
+checks the literal path before the first path placeholder against the
+allowlist, so a rule must cover that prefix, not a value inside it. A reference
+segment never contains `/`, so no expansion can leave a covered prefix. The Edge
+and Control re-check the expanded location before every fetch.
 
 ## Source identity
 
