@@ -6,8 +6,6 @@ import {
   buildPublicLocatedDeliveryUrl,
   buildPublicLocatedSourceUrl,
   buildPublicMasterUrl,
-  buildPublicResolverDeliveryUrl,
-  buildPublicResolverUrl,
   buildSourcePurgeUrl,
   type CapabilityKeyMaterial,
   decodeCapabilityKey,
@@ -229,16 +227,6 @@ export class ShutterClient {
 
   // Delivery URLs
 
-  publicResolverUrl(
-    resolverId: string,
-    sourceRef: string,
-    parameters: OptimizationParameters,
-  ): string {
-    return this.#edge(
-      buildPublicResolverUrl(this.#config.spaceId, resolverId, sourceRef, parameters),
-    );
-  }
-
   async publicLocatedSourceUrl(
     input: SourceInput,
     parameters: OptimizationParameters,
@@ -255,10 +243,6 @@ export class ShutterClient {
 
   publicMasterUrl(kind: PreviewKind, sourceId: string, parameters: OptimizationParameters): string {
     return this.#edge(buildPublicMasterUrl(this.#config.spaceId, kind, sourceId, parameters));
-  }
-
-  publicResolverDeliveryUrl(resolverId: string, sourceRef: string): string {
-    return this.#edge(buildPublicResolverDeliveryUrl(this.#config.spaceId, resolverId, sourceRef));
   }
 
   async publicLocatedDeliveryUrl(input: SourceInput): Promise<string> {

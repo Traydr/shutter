@@ -36,12 +36,12 @@ export function notFound(): Response {
   );
 }
 
-export function methodNotAllowed(): Response {
+export function methodNotAllowed(allow = "GET, HEAD"): Response {
   return Response.json(
     { error: { code: "method_not_allowed" } },
     {
       status: 405,
-      headers: { allow: "GET, HEAD", "cache-control": "private, no-store" },
+      headers: { allow, "cache-control": "private, no-store" },
     },
   );
 }

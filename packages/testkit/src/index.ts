@@ -86,10 +86,7 @@ export const CAPABILITY_FIXTURES: readonly CapabilityFixture[] = Object.freeze([
 ]);
 
 export const URL_FIXTURES = Object.freeze({
-  publicResolver: "/v1/public/example-public/resolver/uploadthing/project%2Ffile%20one?w=640&q=75",
   publicLocated: "/v1/public/example-public/located/source%2Fone/capability.token?w=640&q=75",
-  publicResolverDelivery:
-    "/v1/public/example-public/delivery/resolver/uploadthing/project%2Ffile%20one",
   publicLocatedDelivery: "/v1/public/example-public/delivery/located/source%2Fone/capability.token",
   publicMaster: "/v1/public/example-public/master/video/source%2Fone?w=640&q=75",
   privateSource: "/v1/private/example-private/source/capability.token?w=640&q=75",

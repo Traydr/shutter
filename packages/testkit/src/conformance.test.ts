@@ -9,8 +9,6 @@ import {
   buildPublicLocatedDeliveryUrl,
   buildPublicLocatedSourceUrl,
   buildPublicMasterUrl,
-  buildPublicResolverDeliveryUrl,
-  buildPublicResolverUrl,
   buildR2CacheKey,
   buildR2CachePurgePrefix,
   buildSourceCacheTag,
@@ -50,14 +48,8 @@ describe("Node protocol conformance", () => {
   it("matches the canonical URL fixtures", () => {
     const parameters = { width: 640, quality: 75 };
     expect(
-      buildPublicResolverUrl("example-public", "uploadthing", "project/file one", parameters),
-    ).toBe(URL_FIXTURES.publicResolver);
-    expect(
       buildPublicLocatedSourceUrl("example-public", "source/one", "capability.token", parameters),
     ).toBe(URL_FIXTURES.publicLocated);
-    expect(
-      buildPublicResolverDeliveryUrl("example-public", "uploadthing", "project/file one"),
-    ).toBe(URL_FIXTURES.publicResolverDelivery);
     expect(buildPublicLocatedDeliveryUrl("example-public", "source/one", "capability.token")).toBe(
       URL_FIXTURES.publicLocatedDelivery,
     );

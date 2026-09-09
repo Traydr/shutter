@@ -1,13 +1,11 @@
 import { ProtocolError, verifySourceCapability } from "@shutter/protocol";
 import type { Hono } from "hono";
-import { methodNotAllowed, notFound } from "./http-responses.js";
+import { methodNotAllowed } from "./http-responses.js";
 import { deliverSource } from "./source-delivery.js";
-import { resolverSourceRef, resolveUploadThingSource } from "./source-resolution.js";
 import { spaceRoute } from "./space-route.js";
 
 type EdgeApp = Hono<{ Bindings: CloudflareBindings }>;
 
-const PUBLIC_RESOLVER_ROUTE = "/v1/public/:spaceId/delivery/resolver/:resolverId/*";
 const PUBLIC_LOCATED_ROUTE = "/v1/public/:spaceId/delivery/located/:sourceId/:capability";
 const PRIVATE_ROUTE = "/v1/private/:spaceId/delivery/:capability";
 const DELIVERY_METHODS = ["GET", "HEAD"] as const;
@@ -19,27 +17,6 @@ function rejectQuery(requestUrl: string): void {
 }
 
 export function registerSourceDeliveryRoutes(app: EdgeApp): void {
-  spaceRoute(
-    app,
-    { methods: DELIVERY_METHODS, path: PUBLIC_RESOLVER_ROUTE, routeClass: "public" },
-    async (context, { spaceId, policy }) => {
-      rejectQuery(context.req.url);
-      const resolverId = context.req.param("resolverId") ?? "";
-      const resolver = policy.resolvers.find((candidate) => candidate.id === resolverId);
-      if (resolver === undefined || resolver.type !== "uploadthing") return notFound();
-      const sourceRef = resolverSourceRef(context.req.url, resolverId);
-      if (sourceRef === undefined) return notFound();
-      const source = resolveUploadThingSource(sourceRef, resolver.allowedProjectIds);
-      if (source === undefined) return notFound();
-      return deliverSource({
-        executionCtx: context.executionCtx,
-        request: context.req.raw,
-        identity: { routeClass: "public", spaceId, sourceId: source.sourceId },
-        locator: source.sourceUrl,
-      });
-    },
-  );
-
   spaceRoute(
     app,
     { methods: DELIVERY_METHODS, path: PUBLIC_LOCATED_ROUTE, routeClass: "public" },
@@ -58,7 +35,8 @@ export function registerSourceDeliveryRoutes(app: EdgeApp): void {
         executionCtx: context.executionCtx,
         request: context.req.raw,
         identity: { routeClass: "public", spaceId, sourceId },
-        locator: claims.locator,
+        locate: async () => claims.locator,
+        apiVersion: "v1",
       });
     },
   );
@@ -79,12 +57,13 @@ export function registerSourceDeliveryRoutes(app: EdgeApp): void {
         executionCtx: context.executionCtx,
         request: context.req.raw,
         identity: { routeClass: "private", spaceId, sourceId: claims.source_id },
-        locator: claims.locator,
+        locate: async () => claims.locator,
+        apiVersion: "v1",
       });
     },
   );
 
-  for (const route of [PUBLIC_RESOLVER_ROUTE, PUBLIC_LOCATED_ROUTE, PRIVATE_ROUTE]) {
+  for (const route of [PUBLIC_LOCATED_ROUTE, PRIVATE_ROUTE]) {
     app.all(route, () => methodNotAllowed());
   }
 }

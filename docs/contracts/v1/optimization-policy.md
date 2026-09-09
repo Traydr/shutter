@@ -55,6 +55,6 @@ quality.
 - Public browser cache: 1 day.
 - Public Cloudflare edge cache: 30 days.
 - R2 optimized-image cache: 30 days after object creation.
-- Public UploadThing resolver: no Source Capability.
+- Public resolver source (v2 Delivery URL): no Source Capability.
 - Public presigned locator: capability excluded from the CDN cache key, so a
   renewed locator reuses the existing public optimized image.

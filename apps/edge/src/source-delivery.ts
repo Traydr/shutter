@@ -29,7 +29,9 @@ export interface SourceDeliveryInput {
   executionCtx: { waitUntil(promise: Promise<unknown>): void };
   request: Request;
   identity: SourceDeliveryIdentity;
-  locator: string;
+  /** Resolved only on a cache miss, so a presign or a Control call never runs for a hit. */
+  locate(): Promise<string>;
+  apiVersion: "v1" | "v2";
 }
 
 const MEDIA_TYPES = new Map<string, MediaClass>([
@@ -234,9 +236,10 @@ function ifRangeMatches(ifRange: string, cached: Response): boolean {
 
 // A 200 with a valid Content-Length is a complete object no matter what the
 // request asked for, so a ranged request whose origin ignored the range still
-// warms the canonical entry.
-function cacheable(response: Response, request: Request): boolean {
-  if (request.method !== "GET" || response.status !== 200) return false;
+// warms the canonical entry. The origin is always fetched with GET (a presigned
+// URL binds its method), so a HEAD request warms the entry too.
+function cacheable(response: Response): boolean {
+  if (response.status !== 200) return false;
   const contentLength = response.headers.get("content-length");
   if (contentLength === null || !isContentLength(contentLength)) return false;
   return Number(contentLength) <= CACHE_API_MAX_BYTES;
@@ -273,7 +276,7 @@ async function warmCanonicalEntry(
     status: 200,
     headers: safeOriginHeaders(origin, mediaClass),
   });
-  if (!cacheable(response, new Request(canonicalUrl))) {
+  if (!cacheable(response)) {
     await response.body?.cancel().catch(() => undefined);
     return;
   }
@@ -306,14 +309,16 @@ function originResult(response: Response): OriginFetchResult {
 }
 
 async function emitDeliveryEvent(
-  identity: SourceDeliveryIdentity,
+  input: SourceDeliveryInput,
   cacheOutcome: CacheOutcome,
   mediaClass: MediaClass | undefined,
   byteRangeOutcome: ByteRangeOutcome,
   originFetchResult: OriginFetchResult,
 ): Promise<void> {
+  const identity = input.identity;
   const fields: OperationalEventFields = {
     routeClass: identity.routeClass,
+    apiVersion: input.apiVersion,
     cacheOutcome,
     byteRangeOutcome,
     originFetchResult,
@@ -348,7 +353,7 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
   if (cached !== undefined) {
     const mediaClass = mediaClassFor(cached.headers.get("content-type"));
     await emitDeliveryEvent(
-      input.identity,
+      input,
       "edge-hit",
       mediaClass,
       rangeOutcome(input.request, cached, "edge-hit"),
@@ -363,15 +368,19 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
   }
 
   let origin: Response;
+  let locator: string;
   try {
-    origin = await fetch(input.locator, {
-      method: input.request.method,
+    locator = await input.locate();
+    // Always GET: an S3 presigned URL is signed for one method, and HEAD
+    // answers come from the same response with the body dropped below.
+    origin = await fetch(locator, {
+      method: "GET",
       headers: sourceRequestHeaders(input.request),
       redirect: "manual",
     });
   } catch (error) {
     await emitDeliveryEvent(
-      input.identity,
+      input,
       "origin",
       undefined,
       input.request.headers.has("range") ? "origin" : "none",
@@ -381,7 +390,7 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
   }
   if (!validOriginResponse(input.request, origin)) {
     await emitDeliveryEvent(
-      input.identity,
+      input,
       "origin",
       undefined,
       input.request.headers.has("range") ? "origin" : "none",
@@ -392,7 +401,7 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
   const contentEncoding = origin.headers.get("content-encoding");
   if (contentEncoding !== null && contentEncoding !== "identity") {
     await emitDeliveryEvent(
-      input.identity,
+      input,
       "origin",
       undefined,
       input.request.headers.has("range") ? "origin" : "none",
@@ -404,7 +413,7 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
   const mediaClass = mediaClassFor(origin.headers.get("content-type"));
   if ((origin.status === 200 || origin.status === 206) && mediaClass === undefined) {
     await emitDeliveryEvent(
-      input.identity,
+      input,
       "origin",
       undefined,
       rangeOutcome(input.request, origin, "origin"),
@@ -417,13 +426,15 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
     headers: safeOriginHeaders(origin, mediaClass),
   });
 
-  if (cacheable(response, input.request)) {
+  const head = input.request.method === "HEAD";
+  if (cacheable(response)) {
     const internal = internalEdgeCacheResponse(response, input.identity.routeClass, cacheTag);
     input.executionCtx.waitUntil(
       caches.default.put(new Request(canonicalUrl), internal.clone()).catch(() => undefined),
     );
+    if (head) input.executionCtx.waitUntil(internal.body?.cancel() ?? Promise.resolve());
     await emitDeliveryEvent(
-      input.identity,
+      input,
       "origin",
       mediaClass,
       rangeOutcome(input.request, internal, "origin"),
@@ -433,20 +444,19 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
       routeClass: input.identity.routeClass,
       cacheStatus: "origin",
       cacheTag,
-      head: input.request.method === "HEAD",
+      head,
     });
   }
 
+  if (head) input.executionCtx.waitUntil(response.body?.cancel() ?? Promise.resolve());
   if (response.status === 206 && warmableTotal(response)) {
     input.executionCtx.waitUntil(
-      warmCanonicalEntry(input.locator, input.identity, canonicalUrl, cacheTag).catch(
-        () => undefined,
-      ),
+      warmCanonicalEntry(locator, input.identity, canonicalUrl, cacheTag).catch(() => undefined),
     );
   }
 
   await emitDeliveryEvent(
-    input.identity,
+    input,
     "origin",
     mediaClass,
     rangeOutcome(input.request, response, "origin"),
@@ -456,6 +466,6 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
     routeClass: input.identity.routeClass,
     cacheStatus: "origin",
     cacheTag,
-    head: input.request.method === "HEAD",
+    head,
   });
 }

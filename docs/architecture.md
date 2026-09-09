@@ -203,11 +203,13 @@ Media Store keys, and Source Purge. A Source Locator supplies only the
 current fetch path. A private Space can therefore keep the same SHA-256 Source ID while
 moving its locator from a Railway presigned GET URL to an R2 presigned GET URL.
 
-Publicly derivable sources use trusted Space-configured Source Resolvers. The v1
-UploadThing resolver maps an allowlisted project and file key to its public HTTPS
-location and fails closed when no project allowlist exists. Private Railway or
-R2 objects use encrypted Source Capabilities that bind the Source ID to a
-presigned HTTPS locator. Shutter accepts no arbitrary unsigned source URL.
+Resolver sources use Space-configured Source Resolvers (ADR 0025): a template
+expands an HTTPS URL with one placeholder per path segment or hostname label,
+and an S3 resolver presigns a GET with a read-only credential only Control
+holds. Every expansion is proven at save time to sit inside the Space's
+allowed source origins. Private Railway or R2 objects on v1 routes use
+encrypted Source Capabilities that bind the Source ID to a presigned HTTPS
+locator. Shutter accepts no arbitrary unsigned source URL.
 
 Source Delivery and Image Optimization are sibling v1 routes. Source Delivery
 supports only `GET` and `HEAD` and accepts no transformation query. It allows a
@@ -270,9 +272,10 @@ conditioned) and cannot recreate job state after purge.
 
 Image Optimization is request-driven:
 
-1. A public application supplies a trusted resolver path, or a consuming
-   application authorizes its user and issues an encrypted, time-limited Source
-   Capability binding a Source ID to a Source Locator.
+1. A public application names a Source Resolver and a reference in a v2
+   Delivery URL, or a consuming application authorizes its user and issues an
+   encrypted, time-limited Source Capability binding a Source ID to a Source
+   Locator.
 2. The frontend combines that source reference with permitted optimization
    parameters in a stateless Delivery URL; it does not call Shutter to mint the
    URL.
@@ -323,18 +326,19 @@ CDN cache key. Private URLs keep the capability on the Worker-authorized route,
 and the Worker derives a non-public canonical key only after decryption. Shutter
 rejects a URL whose route class does not match the Space's configured policy.
 
-The initial canonical delivery routes are:
+The canonical delivery routes are the v2 route and the v1 capability routes:
 
 ```text
-/v1/public/{space}/resolver/{resolver}/{sourceRef}?w=640&q=75
+/v2/{space}/{resolver}/{reference}[?preview={kind}][&w=640&q=75]
 /v1/public/{space}/located/{sourceId}/{capability}?w=640&q=75
 /v1/public/{space}/master/{kind}/{sourceId}?w=640&q=75
 /v1/private/{space}/source/{capability}?w=640&q=75
 /v1/private/{space}/master/{capability}?w=640&q=75
 ```
 
-The public route accepts a resolver-specific, percent-encoded source reference.
-The public located-source route uses an `image_source` capability only to
+The v2 route takes one percent-encoded segment per placeholder of the named
+resolver and selects Source Delivery, Image Optimization, or the Master
+Preview from its query (ADR 0026). The public located-source route uses an `image_source` capability only to
 authorize an application-owned original fetch on a cache and R2 miss. Its clear
 Source ID must match the authenticated claim and forms cache identity without
 the capability. The public master route addresses an intentionally public

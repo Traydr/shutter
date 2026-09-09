@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetEdgeConfigForTest } from "./config-snapshot.js";
 
 const PUBLIC_RESOLVER_URL =
-  "https://edge.shutter.test/v1/public/example-public/delivery/resolver/uploadthing/example-project%2Fsource-01";
+  "https://edge.shutter.test/v2/example-public/ut/example-project/source-01";
 
 function snapshotResponse(): Response {
   return Response.json({
@@ -19,12 +19,16 @@ function snapshotResponse(): Response {
         routeClass: "public",
         qualities: [75],
         defaultQuality: 75,
-        allowedSourceOrigins: [{ origin: "https://sources.example.com", pathPrefix: "/public" }],
+        allowedSourceOrigins: [
+          { origin: "https://sources.example.com", pathPrefix: "/public" },
+          { origin: "https://example-project.ufs.sh", pathPrefix: "/f" },
+        ],
         resolvers: [
           {
-            id: "uploadthing",
-            type: "uploadthing",
-            allowedProjectIds: ["example-project"],
+            id: "ut",
+            type: "template",
+            url: "https://{project}.ufs.sh/f/{file}",
+            placeholders: { project: { allowed: ["example-project"] }, file: {} },
           },
         ],
       },
@@ -136,7 +140,7 @@ describe("Source Delivery", () => {
     expect(first.headers.get("x-content-type-options")).toBe("nosniff");
     expect(first.headers.get("x-shutter-cache")).toBe("origin");
     expect(first.headers.get("cache-tag")).toBe(
-      await buildSourceCacheTag("example-public", "example-project/source-01"),
+      await buildSourceCacheTag("example-public", "ut/example-project/source-01"),
     );
     expect(first.headers.get("set-cookie")).toBeNull();
     expect(first.headers.get("x-origin-secret")).toBeNull();
@@ -395,7 +399,7 @@ describe("Source Delivery", () => {
     expect(active.status).toBe(415);
     expect(await active.json()).toEqual({ error: { code: "media_unsupported" } });
 
-    const transformed = await SELF.fetch(`${PUBLIC_RESOLVER_URL}?w=640&q=75`);
+    const transformed = await SELF.fetch(`${PUBLIC_RESOLVER_URL}?download=1`);
     expect(transformed.status).toBe(400);
     expect(await transformed.json()).toEqual({ error: { code: "query_invalid" } });
 
@@ -405,10 +409,8 @@ describe("Source Delivery", () => {
     expect(multipleRanges.status).toBe(400);
     expect(await multipleRanges.json()).toEqual({ error: { code: "request_invalid" } });
 
-    const unencodedSourceRef = await SELF.fetch(
-      "https://edge.shutter.test/v1/public/example-public/delivery/resolver/uploadthing/example-project/source-01",
-    );
-    expect(unencodedSourceRef.status).toBe(404);
+    const extraSegment = await SELF.fetch(`${PUBLIC_RESOLVER_URL}/extra`);
+    expect(extraSegment.status).toBe(404);
 
     const posted = await SELF.fetch(PUBLIC_RESOLVER_URL, { method: "POST" });
     expect(posted.status).toBe(405);
