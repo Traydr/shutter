@@ -7,7 +7,11 @@ import {
   buildPublicLocatedSourceUrl,
   buildPublicMasterUrl,
   buildSourcePurgeUrl,
+  buildV2DeliveryUrl,
+  buildV2PreviewJobUrl,
+  buildV2SourcePurgeUrl,
   type CapabilityKeyMaterial,
+  type DeliveryUrlOptions,
   decodeCapabilityKey,
   issueSourceCapability,
   type JsonValue,
@@ -17,8 +21,16 @@ import {
   type SourceCapabilityClaims,
 } from "@shutter/protocol";
 import { z } from "zod";
+import { sourceIdFor } from "./urls.js";
 
-export type { MasterPreviewDescriptor, PreviewKind };
+export {
+  type DeliverySource,
+  deliveryUrl,
+  isDeliveryUrl,
+  sourceIdFor,
+  transformDeliveryUrl,
+} from "./urls.js";
+export type { DeliveryUrlOptions, MasterPreviewDescriptor, PreviewKind };
 
 /** Omit that distributes over each member of a union of object types. */
 export type DistributedOmit<T, K extends keyof T> = T extends unknown ? Omit<T, K> : never;
@@ -62,6 +74,8 @@ export class ShutterClientError extends Error {
   readonly code: string | undefined;
   /** Parsed Retry-After header when the failing response carried one. */
   readonly retryAfterSeconds: number | undefined;
+  /** The v2 problem's request ID, the handle an operator finds the redacted log event by. */
+  readonly requestId: string | undefined;
 
   constructor(
     message: string,
@@ -69,6 +83,7 @@ export class ShutterClientError extends Error {
       status?: number | undefined;
       code?: string | undefined;
       retryAfterSeconds?: number | undefined;
+      requestId?: string | undefined;
     },
   ) {
     super(message);
@@ -76,6 +91,7 @@ export class ShutterClientError extends Error {
     this.status = options?.status;
     this.code = options?.code;
     this.retryAfterSeconds = options?.retryAfterSeconds;
+    this.requestId = options?.requestId;
   }
 }
 
@@ -87,6 +103,20 @@ interface SourceInput {
 
 interface PreviewInput extends SourceInput {
   kind: PreviewKind;
+}
+
+/** A resolver source: the resolver's identifier and one reference value per placeholder. */
+export interface ResolverSource {
+  resolverId: string;
+  reference: string | readonly string[];
+}
+
+interface ResolverPreviewInput extends ResolverSource {
+  kind: PreviewKind;
+}
+
+function referenceSegments(reference: string | readonly string[]): readonly string[] {
+  return Array.isArray(reference) ? reference : [String(reference)];
 }
 
 interface WaitOptions {
@@ -108,8 +138,18 @@ function retryAfterSeconds(response: Response): number {
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : 5;
 }
 
-/** The one field of a Shutter error body the client surfaces: `{ error: { code } }`. */
-const errorBodySchema = z.object({ error: z.object({ code: z.string() }) });
+/**
+ * What the client surfaces from a Shutter error body: the v1
+ * `{ error: { code } }`, or the v2 problem-details `code` and `requestId`.
+ */
+const errorBodySchema = z.union([
+  z
+    .object({ error: z.object({ code: z.string() }) })
+    .transform((body) => ({ code: body.error.code, requestId: undefined })),
+  z
+    .object({ code: z.string(), requestId: z.string().optional() })
+    .transform((body) => ({ code: body.code, requestId: body.requestId })),
+]);
 
 const masterPreviewSchema = z.object({
   sourceId: z.string(),
@@ -134,9 +174,10 @@ const jobRepresentationSchema = z.discriminatedUnion("status", [
 
 async function errorFromResponse(response: Response): Promise<ShutterClientError> {
   let code: string | undefined;
+  let requestId: string | undefined;
   try {
     const body = errorBodySchema.safeParse(await response.json());
-    if (body.success) code = body.data.error.code;
+    if (body.success) ({ code, requestId } = body.data);
   } catch {
     // Non-JSON error bodies keep the HTTP status as the only detail.
   }
@@ -145,6 +186,7 @@ async function errorFromResponse(response: Response): Promise<ShutterClientError
     status: response.status,
     code,
     retryAfterSeconds: Number.isFinite(retryAfter) && retryAfter >= 0 ? retryAfter : undefined,
+    requestId,
   });
 }
 
@@ -284,6 +326,62 @@ export class ShutterClient {
       locator: input.locator,
     });
     return this.#edge(buildPrivateDeliveryUrl(this.#config.spaceId, capability));
+  }
+
+  // v2: resolver sources, no capability
+
+  /** `/v2/{space}/{resolver}/{reference}` with the canonical query; see `@shutter/client/urls`. */
+  v2DeliveryUrl(source: ResolverSource, options: DeliveryUrlOptions = {}): string {
+    return this.#edge(
+      buildV2DeliveryUrl(
+        this.#config.spaceId,
+        source.resolverId,
+        referenceSegments(source.reference),
+        options,
+      ),
+    );
+  }
+
+  /** Submits a Preview Job for a resolver source. Needs the Space API token and nothing else. */
+  async submitV2PreviewJob(input: ResolverPreviewInput): Promise<PreviewJobResult> {
+    const sourceId = sourceIdFor(input.resolverId, input.reference);
+    const response = await this.#control(
+      buildV2PreviewJobUrl(this.#config.spaceId, sourceId, input.kind),
+      { method: "PUT", headers: { "content-type": "application/json" }, body: "{}" },
+    );
+    return this.#jobResult(response);
+  }
+
+  async getV2PreviewJob(source: ResolverSource, kind: PreviewKind): Promise<PreviewJobResult> {
+    const sourceId = sourceIdFor(source.resolverId, source.reference);
+    const response = await this.#control(
+      buildV2PreviewJobUrl(this.#config.spaceId, sourceId, kind),
+      { method: "GET" },
+    );
+    return this.#jobResult(response);
+  }
+
+  async waitForV2PreviewJob(
+    input: ResolverPreviewInput,
+    options?: WaitOptions,
+  ): Promise<PreviewJobResult> {
+    const deadline = Date.now() + (options?.maxWaitMs ?? 120_000);
+    let result = await this.submitV2PreviewJob(input);
+    while (result.status === "pending" || result.status === "processing") {
+      if (Date.now() >= deadline) return result;
+      await sleep(result.retryAfterSeconds * 1000, options?.signal);
+      result = await this.getV2PreviewJob(input, input.kind);
+    }
+    return result;
+  }
+
+  /** Purges everything Shutter holds for a resolver source: `{resolver}/{reference}`. */
+  async purgeV2Source(source: ResolverSource): Promise<void> {
+    const sourceId = sourceIdFor(source.resolverId, source.reference);
+    const response = await this.#control(buildV2SourcePurgeUrl(this.#config.spaceId, sourceId), {
+      method: "POST",
+    });
+    if (response.status !== 204) throw await errorFromResponse(response);
   }
 
   // Preview Jobs

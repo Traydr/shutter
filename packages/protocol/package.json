@@ -11,6 +11,10 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "default": "./dist/testing.js"
+    },
+    "./urls": {
+      "types": "./dist/urls.d.ts",
+      "default": "./dist/urls.js"
     }
   },
   "scripts": {
