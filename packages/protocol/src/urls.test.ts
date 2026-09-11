@@ -4,6 +4,8 @@ import { buildV2DeliveryUrl, buildV2PreviewJobUrl, buildV2SourcePurgeUrl } from 
 describe("v2 URL builders", () => {
   it("builds the delivery path with one encoded segment per reference value", () => {
     expect(buildV2DeliveryUrl("ernesta", "media", ["AbC123"])).toBe("/v2/ernesta/media/AbC123");
+    expect(() => buildV2DeliveryUrl("ernesta", "Media/x", ["AbC123"])).toThrow(TypeError);
+    expect(() => buildV2DeliveryUrl("ernesta", "", ["AbC123"])).toThrow(TypeError);
     expect(
       buildV2DeliveryUrl("ernesta", "ut", ["ernesta_prod", "file_9.jpg"], { width: 640 }),
     ).toBe("/v2/ernesta/ut/ernesta_prod/file_9.jpg?w=640");

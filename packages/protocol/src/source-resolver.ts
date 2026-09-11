@@ -17,6 +17,8 @@ import type {
  * into a fetch location, and the Source ID a resolver source gets.
  */
 
+/** A Space or resolver identifier: lowercase, at most 64 characters, no leading or trailing separator. */
+export const IDENTIFIER_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/u;
 const PLACEHOLDER_NAME_PATTERN = /^[a-z][a-z0-9_]{0,31}$/u;
 const PLACEHOLDER_PATTERN = /^\{([a-z][a-z0-9_]{0,31})\}$/u;
 /** One decoded reference segment. Never `.` or `..`, which the grammar cannot produce. */
@@ -137,6 +139,10 @@ export function isPlaceholderName(name: string): boolean {
 
 export function isReferenceSegment(value: string): boolean {
   return REFERENCE_SEGMENT_PATTERN.test(value);
+}
+
+export function isResolverId(value: string): boolean {
+  return IDENTIFIER_PATTERN.test(value);
 }
 
 export function isHostLabel(value: string): boolean {

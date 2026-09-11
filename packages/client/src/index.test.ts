@@ -259,3 +259,128 @@ describe("configuration guards", () => {
     ).rejects.toThrow(ShutterClientError);
   });
 });
+
+describe("v2 resolver sources", () => {
+  it("builds delivery URLs, submits jobs with an empty body, and purges by resolver source", async () => {
+    const { instance, requests } = client({
+      edgeBaseUrl: "https://edge.example.test",
+      responses: [
+        jsonResponse(202, { status: "pending" }, { "retry-after": "3" }),
+        jsonResponse(200, {
+          status: "ready",
+          master: {
+            sourceId: "media/tour.mp4",
+            kind: "video",
+            width: 1920,
+            height: 1080,
+            format: "webp",
+          },
+        }),
+        new Response(null, { status: 204 }),
+      ],
+    });
+
+    expect(
+      instance.v2DeliveryUrl({ resolverId: "media", reference: "tour.mp4" }, { width: 640 }),
+    ).toBe(`https://edge.example.test/v2/${SPACE}/media/tour.mp4?w=640`);
+
+    const submitted = await instance.submitV2PreviewJob({
+      resolverId: "media",
+      reference: "tour.mp4",
+      kind: "video",
+    });
+    expect(submitted).toEqual({ status: "pending", retryAfterSeconds: 3, location: undefined });
+    expect(requests[0]?.url.toString()).toBe(
+      `https://control.example.test/v2/spaces/${SPACE}/sources/media%2Ftour.mp4/previews/video`,
+    );
+    expect(requests[0]?.init.method).toBe("PUT");
+    expect(requests[0]?.init.body).toBe("{}");
+
+    const ready = await instance.getV2PreviewJob(
+      { resolverId: "media", reference: "tour.mp4" },
+      "video",
+    );
+    expect(ready).toMatchObject({ status: "ready", master: { sourceId: "media/tour.mp4" } });
+
+    await instance.purgeV2Source({ resolverId: "media", reference: "tour.mp4" });
+    expect(requests[2]?.url.toString()).toBe(
+      `https://control.example.test/v2/spaces/${SPACE}/sources/media%2Ftour.mp4/purge`,
+    );
+    expect(requests[2]?.init.method).toBe("POST");
+  });
+
+  it("surfaces the problem-details code of a v2 error", async () => {
+    const { instance } = client({
+      responses: [
+        new Response(
+          JSON.stringify({
+            type: "https://shutter.traydr.dev/problems/not_found",
+            title: "Not Found",
+            status: 404,
+            code: "not_found",
+          }),
+          { status: 404, headers: { "content-type": "application/problem+json" } },
+        ),
+      ],
+    });
+    await expect(
+      instance.getV2PreviewJob({ resolverId: "nope", reference: "x" }, "pdf"),
+    ).rejects.toMatchObject({ status: 404, code: "not_found" });
+  });
+
+  it("refuses a reference outside the grammar before any request", async () => {
+    const { instance, requests } = client();
+    await expect(
+      instance.purgeV2Source({ resolverId: "media", reference: "../secret" }),
+    ).rejects.toThrow(TypeError);
+    expect(requests).toHaveLength(0);
+  });
+});
+
+describe("v2 polling and problems", () => {
+  it("polls a v2 Preview Job to ready with the encoded Source ID on every call", async () => {
+    const master = {
+      sourceId: "ut/proj/f_9",
+      kind: "video",
+      width: 1920,
+      height: 1080,
+      format: "webp",
+    };
+    const { instance, requests } = client({
+      responses: [
+        jsonResponse(202, { status: "pending" }, { "retry-after": "0" }),
+        jsonResponse(200, { status: "ready", master }),
+      ],
+    });
+
+    const result = await instance.waitForV2PreviewJob({
+      resolverId: "ut",
+      reference: ["proj", "f_9"],
+      kind: "video",
+    });
+
+    expect(result).toEqual({ status: "ready", master });
+    expect(requests.map((request) => `${request.init.method} ${request.url.pathname}`)).toEqual([
+      `PUT /v2/spaces/${SPACE}/sources/ut%2Fproj%2Ff_9/previews/video`,
+      `GET /v2/spaces/${SPACE}/sources/ut%2Fproj%2Ff_9/previews/video`,
+    ]);
+  });
+
+  it("carries the problem's code and requestId on the error", async () => {
+    const { instance } = client({
+      responses: [
+        jsonResponse(503, {
+          type: "https://shutter.traydr.dev/problems/service_unavailable",
+          title: "Service Unavailable",
+          status: 503,
+          code: "service_unavailable",
+          requestId: "req-42",
+        }),
+      ],
+    });
+
+    await expect(
+      instance.purgeV2Source({ resolverId: "media", reference: "k" }),
+    ).rejects.toMatchObject({ status: 503, code: "service_unavailable", requestId: "req-42" });
+  });
+});

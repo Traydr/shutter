@@ -7,7 +7,8 @@ standards (`fetch`, WebCrypto), so it runs in Node 22+, workers, and Next.js
 server runtimes.
 
 Keep it server-side. The Capability Key and Space API token must never reach a
-browser.
+browser. The one exception is the `@shutter/client/urls` subpath, which holds
+no crypto and no credentials and is meant for browser bundles.
 
 ```ts
 import { createShutterClient } from "@shutter/client";
@@ -57,3 +58,42 @@ with the missing field's name, matching Shutter's fail-closed convention.
 Widths and qualities are normalized server-side by Space policy; pick values
 from your Optimization Policy to avoid the one-time canonicalization redirect
 on public routes.
+
+## v2: resolver sources
+
+A public Space with a Source Resolver needs no capability at all. The browser
+builds the Delivery URL from the resolver and the application's own key, and
+the server side submits jobs and purges with the Space API token alone.
+
+```ts
+// Browser or server: no crypto in this entry point.
+import { deliveryUrl, transformDeliveryUrl } from "@shutter/client/urls";
+
+const src = deliveryUrl(
+  { edgeBaseUrl: "https://shutter-edge.example", spaceId: "my-space", resolverId: "media", reference: key },
+  { width: 640, quality: 75 },
+);
+// Unpic-style transformer for a v2 URL:
+transformDeliveryUrl(src, "https://shutter-edge.example", { width: 1280, quality: 75 });
+
+// Server: jobs and purge by resolver source.
+const job = await shutter.waitForV2PreviewJob({ resolverId: "media", reference: key, kind: "video" });
+if (job.status === "ready") {
+  const poster = shutter.v2DeliveryUrl(
+    { resolverId: "media", reference: key },
+    { preview: "video", width: 640, quality: 75 },
+  );
+}
+await shutter.purgeV2Source({ resolverId: "media", reference: key });
+```
+
+`reference` is one value per placeholder of the resolver (a string for a
+one-placeholder resolver, an array otherwise) and must fit the reference
+grammar; the builders throw a `TypeError` otherwise, as they do for a resolver
+ID outside the identifier grammar. `transformDeliveryUrl` accepts the relative
+path `deliveryUrl` returns without an `edgeBaseUrl` and hands a relative path
+back. Give it the quality as well as the width: on a public Space a `w` without
+`q` is canonicalized with a one-time 308, and the browser-safe entry cannot
+know the Space's default. v2 request errors arrive as RFC 9457 problems;
+`ShutterClientError.code` carries their `code` and `requestId` the handle an
+operator finds the log event by.

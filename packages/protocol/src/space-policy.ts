@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { JsonObject } from "./json.js";
 import { normalizeSourceOriginPathPrefix } from "./source-locator.js";
 import {
+  IDENTIFIER_PATTERN,
   isHostLabel,
   isPlaceholderName,
   isReferenceSegment,
@@ -24,7 +25,6 @@ import type {
 
 export { normalizeSourceOriginPathPrefix };
 
-const IDENTIFIER_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/u;
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
 
 export class SpacePolicyValidationError extends Error {

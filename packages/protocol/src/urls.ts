@@ -1,5 +1,12 @@
-import { isReferenceSegment } from "./source-resolver.js";
+import { isReferenceSegment, isResolverId, resolverSourceId } from "./source-resolver.js";
 import type { PreviewKind } from "./types.js";
+
+export type { PreviewKind };
+/**
+ * This module is also the package's `./urls` entry: URL construction with no
+ * capability crypto behind it, so a browser bundle can import it alone.
+ */
+export { isReferenceSegment, isResolverId, resolverSourceId };
 
 interface OptimizationParameters {
   width: number;
@@ -90,6 +97,9 @@ export function buildV2DeliveryUrl(
   reference: readonly string[],
   options: DeliveryUrlOptions = {},
 ): string {
+  if (!isResolverId(resolverId)) {
+    throw new TypeError("a resolver ID is a lowercase identifier of at most 64 characters");
+  }
   if (reference.length === 0) throw new TypeError("a reference needs at least one segment");
   if (!reference.every(isReferenceSegment)) {
     throw new TypeError("a reference segment must match [A-Za-z0-9._-]{1,512} and not be . or ..");
