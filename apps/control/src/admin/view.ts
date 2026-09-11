@@ -1,6 +1,15 @@
-import type { SourceResolverPolicy, SpacePolicy } from "@shutter/protocol";
+import {
+  resolverPlaceholders,
+  type SourceResolverPolicy,
+  type SpacePolicy,
+} from "@shutter/protocol";
 import type { EdgeRefreshStatus } from "../edge-refresh-status.js";
-import type { ApiTokenSummary, CapabilityKeySummary, SpaceRecord } from "../spaces/registry.js";
+import type {
+  ApiTokenSummary,
+  CapabilityKeySummary,
+  ResolverCredentialSummary,
+  SpaceRecord,
+} from "../spaces/registry.js";
 import { type DeploymentCoverage, sourceOriginPrefix } from "./deployment-coverage.js";
 
 export interface AdminOverview {
@@ -18,10 +27,39 @@ export interface SpaceDetail {
   space: SpaceRecord;
   apiTokens: readonly ApiTokenSummary[];
   capabilityKeys: readonly CapabilityKeySummary[];
+  resolverCredentials: readonly ResolverCredentialSummary[];
   /** Coverage of this Space's origins alone, so the page can say what its own deployment lacks. */
   coverage: DeploymentCoverage;
+  /** Where the Edge serves from, so the page can show a complete example Delivery URL. */
+  edgeBaseUrl?: string;
   notice?: string;
   secret?: { label: string; value: string };
+}
+
+/** What the Test panel reports; the locator itself never reaches the page. */
+export interface ResolverTestResult {
+  outcome: "ok" | "failed";
+  message: string;
+  sourceId?: string;
+  host?: string;
+  status?: number;
+  contentType?: string;
+  contentLength?: number;
+}
+
+export interface ResolverEditor {
+  csrfToken: string;
+  generation: number;
+  space: SpaceRecord;
+  kind: "template" | "s3";
+  /** Absent on the "new resolver" page. */
+  resolver?: SourceResolverPolicy;
+  credential?: ResolverCredentialSummary;
+  /** Prefills for a new template: the UploadThing preset or a plain prefix. */
+  preset?: "uploadthing" | "prefix";
+  edgeBaseUrl?: string;
+  testResult?: ResolverTestResult;
+  notice?: string;
 }
 
 function htmlEscape(value: string | number): string {
@@ -65,7 +103,21 @@ const HINTS = {
   origins:
     "HTTPS origins or path prefixes Shutter may fetch Source Objects from, one per line. These also feed the imgproxy allowlist.",
   resolvers:
-    "Each line maps a public provider locator, such as an UploadThing file key, to an allowlisted fetch location: resolver-id:project-id,project-id. Leave empty for a private Space.",
+    "A Source Resolver turns the reference in a v2 Delivery URL into an allowlisted fetch location. A template expands an HTTPS URL with {placeholders}; an S3 resolver presigns a bucket read with a credential only Control holds. The resolver identifier is part of every Source ID and cannot change.",
+  resolverId:
+    "Lowercase letters, digits, - and _. It appears in every v2 Delivery URL and in the Source ID of everything the resolver serves, so it cannot change; removing a resolver orphans its cached bytes.",
+  templateUrl:
+    "An https URL where each {name} stands for one whole path segment or one hostname label. Every expansion must sit inside the Space's allowed source origins.",
+  allowed:
+    "One line per placeholder that only accepts listed values, as name=value,value. A placeholder in the hostname must have such a line; a path placeholder may.",
+  s3Endpoint:
+    "The S3-compatible endpoint origin, such as https://<account>.r2.cloudflarestorage.com. Its bucket path must be inside the Space's allowed source origins.",
+  keyTemplate:
+    "The object key with {name} placeholders, one per /-separated segment, such as originals/{key}.",
+  credential:
+    "A read-only key pair for this bucket, ideally scoped to the key prefix. It is sealed with the registry encryption key; only the access key ID is shown again. Leave both fields empty on edit to keep the stored pair.",
+  testResolver:
+    "Resolves the sample reference exactly as a request would, then fetches the first byte from the resulting location with a five-second limit. For an S3 resolver only the host is shown, never the signed URL.",
   apiTokens:
     "Bearer credential the consuming application uses to call Control: create Preview Jobs, request Source Purges. The full token is shown once, when issued.",
   capabilityKeys:
@@ -199,7 +251,7 @@ function shell(title: string, body: string): string {
     .jump a { display:flex; justify-content:space-between; padding:5px 8px; border-radius:5px; color:var(--ink-2); }
     .jump a b { font:600 10.5px var(--mono); color:var(--ink-3); }
     .jump a.dng { color:var(--red); margin-top:8px; border:0; background:transparent; }
-    body:has(#policy:target) .jump a[href="#policy"], body:has(#tokens:target) .jump a[href="#tokens"], body:has(#keys:target) .jump a[href="#keys"], body:has(#decommission:target) .jump a[href="#decommission"] { background:var(--panel); color:var(--ink); font-weight:600; box-shadow:inset 2px 0 0 var(--brand); }
+    body:has(#policy:target) .jump a[href="#policy"], body:has(#resolvers:target) .jump a[href="#resolvers"], body:has(#tokens:target) .jump a[href="#tokens"], body:has(#keys:target) .jump a[href="#keys"], body:has(#decommission:target) .jump a[href="#decommission"] { background:var(--panel); color:var(--ink); font-weight:600; box-shadow:inset 2px 0 0 var(--brand); }
     .side .panel { padding:10px 12px; display:grid; gap:6px; font-size:12px; }
     .side dl { margin:0; display:grid; gap:5px; }
     .side .rw { display:flex; justify-content:space-between; align-items:center; gap:8px; }
@@ -251,29 +303,198 @@ function routeClassChip(policy: SpacePolicy): string {
   return `<span class="chip${policy.routeClass === "public" ? " pub" : ""}">${policy.routeClass}</span>`;
 }
 
-/** One resolver as the textarea spells it; the editor replacing the textarea lands with migration 0003. */
-function resolverLine(resolver: SourceResolverPolicy): string {
+/** One resolver in a sentence: its kind and the one field that identifies where it points. */
+function resolverSummary(resolver: SourceResolverPolicy): string {
   switch (resolver.type) {
     case "uploadthing":
-      return `${resolver.id}:${resolver.allowedProjectIds.join(",")}`;
+      return `uploadthing (retired) · ${resolver.allowedProjectIds.join(", ")}`;
     case "template":
-      return `${resolver.id}:template:${resolver.url}`;
+      return resolver.url;
     case "s3":
-      return `${resolver.id}:s3:${resolver.bucket}`;
+      return `${resolver.pathStyle ? `${resolver.endpoint}/${resolver.bucket}` : `${resolver.bucket}.${new URL(resolver.endpoint).host}`} · ${resolver.keyTemplate}`;
   }
+}
+
+function resolverLine(resolver: SourceResolverPolicy): string {
+  return `${resolver.id} · ${resolver.type} · ${resolverSummary(resolver)}`;
+}
+
+/** The v2 Delivery URL shape for a resolver, with placeholder names where the reference goes. */
+function exampleDeliveryUrl(
+  spaceId: string,
+  resolver: SourceResolverPolicy,
+  edgeBaseUrl: string | undefined,
+): string {
+  let placeholders: readonly string[];
+  try {
+    placeholders = resolverPlaceholders(resolver);
+  } catch {
+    placeholders = [];
+  }
+  const path = `/v2/${encodeURIComponent(spaceId)}/${encodeURIComponent(resolver.id)}/${placeholders.map((name) => `{${name}}`).join("/")}`;
+  // Concatenated rather than URL-joined so the braces stay readable.
+  return edgeBaseUrl === undefined ? path : `${edgeBaseUrl.replace(/\/+$/u, "")}${path}`;
+}
+
+function resolverRows(model: SpaceDetail): string {
+  const id = encodeURIComponent(model.space.policy.id);
+  return model.space.policy.resolvers
+    .map((resolver) => {
+      const credential = model.resolverCredentials.find(
+        (candidate) => candidate.resolverId === resolver.id,
+      );
+      const credentialCell =
+        resolver.type === "s3"
+          ? credential === undefined
+            ? '<span class="pill warn xs">no credential</span>'
+            : `<span class="mono">${htmlEscape(credential.accessKeyId)}</span>`
+          : '<span class="muted">—</span>';
+      const href = `/admin/spaces/${id}/resolvers/${encodeURIComponent(resolver.id)}`;
+      return `<tr><td><a href="${href}">${htmlEscape(resolver.id)}</a></td><td><span class="chip">${htmlEscape(resolver.type)}</span></td><td class="mono">${htmlEscape(resolverSummary(resolver))}</td><td>${credentialCell}</td><td class="r"><a class="btn sm" href="${href}">Edit</a></td></tr>`;
+    })
+    .join("");
+}
+
+function resolverSection(model: SpaceDetail, active: boolean): string {
+  const { policy } = model.space;
+  if (policy.routeClass !== "public") return "";
+  const id = encodeURIComponent(policy.id);
+  const add = active
+    ? `<a class="btn sm" href="/admin/spaces/${id}/resolvers/new?kind=template">+ Template</a><a class="btn sm" href="/admin/spaces/${id}/resolvers/new?kind=template&amp;preset=uploadthing">+ UploadThing</a><a class="btn sm" href="/admin/spaces/${id}/resolvers/new?kind=s3">+ S3 bucket</a>`
+    : "";
+  const rows = resolverRows(model);
+  return `<section class="panel sect" id="resolvers">
+        <div class="head"><h2>Resolvers${hint(HINTS.resolvers)}</h2><span class="sp"></span>${add}</div>
+        <table><thead><tr><th>Resolver</th><th>Kind</th><th>Points at</th><th>Credential</th><th class="r"></th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5" class="muted">No resolvers. Add one to serve v2 Delivery URLs.</td></tr>'}</tbody></table>
+      </section>`;
+}
+
+function testResultBox(result: ResolverTestResult | undefined): string {
+  if (result === undefined) return "";
+  const facts = [
+    result.sourceId === undefined
+      ? ""
+      : `<div><b>Source ID</b><code>${htmlEscape(result.sourceId)}</code></div>`,
+    result.host === undefined
+      ? ""
+      : `<div><b>Host</b><code>${htmlEscape(result.host)}</code></div>`,
+    result.status === undefined
+      ? ""
+      : `<div><b>Status</b><span class="num">${result.status}</span></div>`,
+    result.contentType === undefined
+      ? ""
+      : `<div><b>Content type</b><code>${htmlEscape(result.contentType)}</code></div>`,
+    result.contentLength === undefined
+      ? ""
+      : `<div><b>Length</b><span class="num">${result.contentLength}</span></div>`,
+  ].join("");
+  const box =
+    result.outcome === "ok"
+      ? `<p class="notice">${htmlEscape(result.message)}</p>`
+      : `<p class="warnbox">${htmlEscape(result.message)}</p>`;
+  return `${box}${facts === "" ? "" : `<div class="rot">${facts}</div>`}`;
+}
+
+function templateFields(editor: ResolverEditor): string {
+  const resolver = editor.resolver?.type === "template" ? editor.resolver : undefined;
+  const url =
+    resolver?.url ??
+    (editor.preset === "uploadthing"
+      ? "https://{project}.ufs.sh/f/{file}"
+      : editor.preset === "prefix"
+        ? "https://cdn.example.com/media/{key}"
+        : "");
+  const allowed =
+    resolver === undefined
+      ? editor.preset === "uploadthing"
+        ? "project="
+        : ""
+      : Object.entries(resolver.placeholders)
+          .filter(([, placeholder]) => placeholder.allowed !== undefined)
+          .map(([name, placeholder]) => `${name}=${(placeholder.allowed ?? []).join(",")}`)
+          .join("\n");
+  return `<label class="f wide"><span>URL template${hint(HINTS.templateUrl)}</span>
+      <input name="url" required value="${htmlEscape(url)}" placeholder="https://{project}.ufs.sh/f/{file}"></label>
+    <label class="f wide"><span>Allowed values${hint(HINTS.allowed)}</span>
+      <textarea name="allowed" rows="2" placeholder="project=project_one,project_two">${htmlEscape(allowed)}</textarea></label>`;
+}
+
+function s3Fields(editor: ResolverEditor): string {
+  const resolver = editor.resolver?.type === "s3" ? editor.resolver : undefined;
+  const credentialNote =
+    editor.credential === undefined
+      ? "Required for a new S3 resolver."
+      : `Stored: access key <code>${htmlEscape(editor.credential.accessKeyId)}</code>, supplied ${time(editor.credential.updatedAt)}. Leave empty to keep it.`;
+  return `<label class="f"><span>Endpoint${hint(HINTS.s3Endpoint)}</span>
+      <input name="endpoint" required value="${htmlEscape(resolver?.endpoint ?? "")}" placeholder="https://account.r2.cloudflarestorage.com"></label>
+    <label class="f"><span>Region</span><input name="region" value="${htmlEscape(resolver?.region ?? "auto")}"></label>
+    <label class="f"><span>Bucket</span><input name="bucket" required value="${htmlEscape(resolver?.bucket ?? "")}"></label>
+    <label class="f"><span>Key template${hint(HINTS.keyTemplate)}</span><input name="keyTemplate" required value="${htmlEscape(resolver?.keyTemplate ?? "{key}")}"></label>
+    <label class="f wide"><span><input type="checkbox" name="pathStyle"${(resolver?.pathStyle ?? true) ? " checked" : ""} style="width:auto;margin-right:6px"> Path-style addressing (endpoint/bucket/key; required for R2)</span></label>
+    <label class="f"><span>Access key ID${hint(HINTS.credential)}</span><input name="accessKeyId" autocomplete="off" placeholder="AKIA…"></label>
+    <label class="f"><span>Secret access key</span><input name="secretAccessKey" type="password" autocomplete="new-password"></label>
+    <p class="muted wide" style="margin:0">${credentialNote}</p>`;
+}
+
+export function resolverEditorView(editor: ResolverEditor): string {
+  const { policy } = editor.space;
+  const spaceId = encodeURIComponent(policy.id);
+  const csrf = `<input type="hidden" name="csrf" value="${htmlEscape(editor.csrfToken)}">`;
+  const existing = editor.resolver;
+  const action =
+    existing === undefined
+      ? `/admin/spaces/${spaceId}/resolvers`
+      : `/admin/spaces/${spaceId}/resolvers/${encodeURIComponent(existing.id)}`;
+  const idField =
+    existing === undefined
+      ? `<label class="f"><span>Identifier${hint(HINTS.resolverId)}</span><input name="resolverId" required pattern="[a-z0-9][a-z0-9_-]*" maxlength="64" placeholder="media"></label>`
+      : `<label class="f"><span>Identifier${hint(HINTS.resolverId)}</span><input value="${htmlEscape(existing.id)}" disabled></label>`;
+  const fields = editor.kind === "template" ? templateFields(editor) : s3Fields(editor);
+  const title = existing === undefined ? `New ${editor.kind} resolver` : existing.id;
+  const example =
+    existing === undefined
+      ? ""
+      : `<div class="allow"><span class="lbl">Delivery URL</span><div class="secret">${htmlEscape(exampleDeliveryUrl(policy.id, existing, editor.edgeBaseUrl))}</div><span class="muted">Append <code>?w=640&amp;q=75</code> for an optimized image, or <code>?preview=video&amp;w=640</code> for a stored Master Preview.</span></div>`;
+  const test =
+    existing === undefined
+      ? ""
+      : `<form class="panel sect" method="post" action="${action}/test">${csrf}
+        <div class="head"><h2>Test${hint(HINTS.testResolver)}</h2></div>
+        <div class="allow">${testResultBox(editor.testResult)}</div>
+        <div class="inl"><input name="reference" required placeholder="sample reference, segments separated by /" aria-label="Sample reference" autocomplete="off"><button type="submit">Resolve and fetch</button></div>
+      </form>`;
+  const remove =
+    existing === undefined
+      ? ""
+      : `<form class="panel sect decom" method="post" action="${action}/remove">${csrf}
+        <div class="head"><h2>Remove</h2><span class="muted">orphans every cached byte and Master Preview under <code>${htmlEscape(existing.id)}/</code></span></div>
+        <div class="inl"><input name="confirm" required pattern="${htmlEscape(existing.id)}" placeholder="Type ${htmlEscape(existing.id)} to confirm" aria-label="Type the identifier to confirm" autocomplete="off"><button class="dng" type="submit">Remove resolver</button></div>
+      </form>`;
+  return shell(
+    `${title} · ${policy.id}`,
+    `${header(editor.csrfToken, policy.id)}<main class="page narrow" style="max-width:52rem">
+      ${editor.notice === undefined ? "" : `<p class="notice">${htmlEscape(editor.notice)}</p>`}
+      <form class="panel sect" method="post" action="${action}">${csrf}<input type="hidden" name="kind" value="${editor.kind}">
+        <div class="head"><h1>${htmlEscape(title)}</h1><span class="chip">${editor.kind}</span><span class="sp"></span><span class="muted">saving → generation ${editor.generation + 1}</span><button class="pri sm" type="submit">${existing === undefined ? "Create resolver" : "Save resolver"}</button></div>
+        <div class="grid2">${idField}${fields}</div>
+        ${example}
+      </form>
+      ${test}
+      ${remove}
+      <p class="muted"><a href="/admin/spaces/${spaceId}#resolvers">Back to ${htmlEscape(policy.id)}</a></p>
+    </main>`,
+  );
 }
 
 function policyFields(policy?: SpacePolicy): string {
   const origins = policy?.allowedSourceOrigins.map(sourceOriginPrefix).join("\n");
-  const resolvers = policy?.resolvers.map(resolverLine).join("\n");
   return `<label class="f"><span>Allowed qualities${hint(HINTS.qualities)}</span>
     <input name="qualities" required value="${htmlEscape(policy?.qualities.join(", ") ?? "75")}"></label>
   <label class="f"><span>Default quality${hint(HINTS.defaultQuality)}</span>
     <input name="defaultQuality" type="number" min="1" max="100" required value="${htmlEscape(policy?.defaultQuality ?? 75)}"></label>
   <label class="f wide"><span>Allowed source origins${hint(HINTS.origins)}</span>
-    <textarea name="allowedSourceOrigins" rows="2" required placeholder="https://media.example.com/uploads">${htmlEscape(origins ?? "")}</textarea></label>
-  <label class="f wide"><span>Public-Space resolvers${hint(HINTS.resolvers)}</span>
-    <textarea name="resolvers" rows="1" placeholder="uploadthing:project_one,project_two">${htmlEscape(resolvers ?? "")}</textarea></label>`;
+    <textarea name="allowedSourceOrigins" rows="2" required placeholder="https://media.example.com/uploads">${htmlEscape(origins ?? "")}</textarea></label>`;
 }
 
 export function loginView(error?: string): string {
@@ -502,6 +723,7 @@ export function spaceView(model: SpaceDetail): string {
         <aside class="side">
           <nav class="jump" aria-label="Sections">
             <a href="#policy">Policy</a>
+            ${policy.routeClass === "public" ? `<a href="#resolvers">Resolvers<b>${policy.resolvers.length}</b></a>` : ""}
             <a href="#tokens">API tokens<b>${activeTokens}</b></a>
             <a href="#keys">Capability Keys<b>${acceptingKeys}</b></a>
             ${decommissionJump}
@@ -520,6 +742,7 @@ export function spaceView(model: SpaceDetail): string {
         <div class="col">
           <div class="titlerow"><h1 class="mono">${htmlEscape(policy.id)}</h1>${routeClassChip(policy)}${statusPill(model.space)}</div>
           ${policySection}
+          ${resolverSection(model, active)}
           <section class="panel sect" id="tokens">
             <div class="head"><h2>API tokens${hint(HINTS.apiTokens)}</h2><span class="muted num">${activeTokens} active · ${model.apiTokens.length - activeTokens} revoked</span><span class="sp"></span></div>
             ${

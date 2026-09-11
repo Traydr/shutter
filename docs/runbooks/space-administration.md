@@ -11,21 +11,55 @@ SameSite=Strict session. All pages are non-cacheable.
 2. Enter a new public Space identifier and select its route class. These values
    cannot change and a decommissioned identifier cannot be reused.
 3. Enter allowed qualities, the default quality, and one HTTPS source origin or
-   path prefix per line.
-4. For a public Space, enter each Source Resolver as
-   `resolver-id:project-id,project-id`. Leave the field empty for a private
-   Space.
-5. Create the Space and record the new registry generation.
+   path prefix per line. Every Source Resolver you add later must expand inside
+   these origins, so add the bucket or provider origin here first.
+4. Create the Space and record the new registry generation.
+5. For a public Space, add Source Resolvers from the Resolvers section (see
+   below).
 6. Issue an API token and a Capability Key from the Space page. Each full secret
    appears once. Copy it directly into the consuming application's secret store.
 7. Wait until the latest Edge refresh generation is at least the new registry
    generation. Test one optimized image before you send production traffic.
 
+## Add or change a Source Resolver
+
+A Source Resolver turns the reference in a v2 Delivery URL,
+`/v2/{space}/{resolver}/{reference}`, into a fetch location. Its identifier is
+part of the Source ID of everything it serves, so it cannot change; removing a
+resolver orphans its cached bytes and stored Master Previews. Source Purge
+removes both; the 30-day lifecycle removes only the cached bytes, never a
+Master Preview.
+
+1. On the Space page, choose **+ Template**, **+ UploadThing**, or
+   **+ S3 bucket** in the Resolvers section.
+2. For a template, enter the HTTPS URL with one `{name}` per path segment or
+   hostname label, such as `https://{project}.ufs.sh/f/{file}`. A placeholder
+   in the hostname must list its allowed values in the Allowed values box, one
+   `name=value,value` line per placeholder. The UploadThing preset fills the
+   URL; you add the project ids.
+3. For an S3 bucket, enter the endpoint origin, bucket, region, and key template
+   (`{key}` or `originals/{key}`), keep path-style addressing for R2 and Railway
+   buckets, and paste a read-only access key pair. The pair is sealed with
+   `SHUTTER_ENCRYPTION_KEY`; only the access key ID is shown again. Railway
+   buckets have no public object URLs, so this presigned path is the only way
+   Shutter can read them.
+4. Save. The editor refuses a resolver whose expansions could leave the
+   Space's allowed source origins; add the origin to the policy first.
+5. Type a sample reference into the Test panel. Control resolves it exactly as
+   a request would and fetches its first byte; the panel shows the Source ID,
+   the host, the status, and the content type, never a signed URL.
+6. Wait for the Edge to report the new generation, then request the example
+   Delivery URL shown on the editor page.
+
+To rotate an S3 credential, open the resolver, paste the new pair, and save.
+Presigned URLs live ten minutes, so no overlap window is needed. To retire a
+resolver, type its identifier into the Remove panel.
+
 ## Change policy
 
-Open the Space and edit only its qualities, default quality, source origins, or
-public-Space resolvers. The page does not offer controls for the identifier or
-route class. If either immutable value must change, create a new Space, migrate
+Open the Space and edit only its qualities, default quality, or source origins.
+Resolvers have their own editor and a policy save carries them through
+unchanged. The page does not offer controls for the identifier or route class. If either immutable value must change, create a new Space, migrate
 the application, and decommission the old Space.
 
 After a save, note the new generation. Wait for Edge to report that generation

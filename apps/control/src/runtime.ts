@@ -10,6 +10,7 @@ import type { ControlLogger } from "./logging.js";
 import { createMasterStore } from "./master-store.js";
 import { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
 import { createSourcePurge } from "./source-purge.js";
+import { createS3Presigner, createSourceResolverService } from "./source-resolvers.js";
 import { CapabilityKeyEncryption } from "./spaces/encryption.js";
 import { PostgresSpaceRegistry } from "./spaces/postgres-registry.js";
 
@@ -282,13 +283,20 @@ export function buildControlRuntime(
     edgeConfigToken: () => env.EDGE_CONFIG_TOKEN,
     adminBootstrapToken: () => env.ADMIN_BOOTSTRAP_TOKEN,
     imgproxyAllowedSources: () => env.IMGPROXY_ALLOWED_SOURCES,
+    edgeBaseUrl: () => env.EDGE_BASE_URL,
     imgproxyConfig: () => imgproxyConfig,
     fetch,
     edgeRefreshTracker: new EdgeRefreshTracker(now),
   };
   if (masterStore !== undefined) config.masterStore = masterStore;
   if (jobApiRuntime !== undefined) config.jobApiRuntime = jobApiRuntime;
-  if (spaceRegistry !== undefined) config.spaceRegistry = spaceRegistry;
+  if (spaceRegistry !== undefined) {
+    config.spaceRegistry = spaceRegistry;
+    config.sourceResolvers = createSourceResolverService({
+      credentials: spaceRegistry,
+      presigner: createS3Presigner(),
+    });
+  }
 
   return {
     config,

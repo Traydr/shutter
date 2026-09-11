@@ -19,13 +19,26 @@ import type {
   IssuedCapabilityKey,
   RegistryGeneration,
   RegistryMutation,
+  ResolverChange,
+  ResolverCredential,
+  ResolverCredentialInput,
+  ResolverCredentialSummary,
   SpacePolicyUpdate,
   SpaceRecord,
   SpaceRegistry,
   SpaceRegistryTransaction,
   SpaceRequestAuthorization,
 } from "./registry.js";
-import { SpaceRegistryError } from "./registry.js";
+import {
+  applyResolverChange,
+  planResolverCredentials,
+  rejectRetiredResolvers,
+  SpaceRegistryError,
+} from "./registry.js";
+
+interface StoredResolverCredential extends ResolverCredential {
+  updatedAt: Date;
+}
 
 interface StoredApiToken extends ApiTokenSummary {
   hash: string;
@@ -74,6 +87,7 @@ export class MemorySpaceRegistry implements SpaceRegistry {
   readonly #spaces = new Map<string, SpaceRecord>();
   readonly #tokens = new Map<string, StoredApiToken[]>();
   readonly #keys = new Map<string, StoredCapabilityKey[]>();
+  readonly #resolverCredentials = new Map<string, Map<string, StoredResolverCredential>>();
   readonly #now: () => Date;
   #generation = 0;
   #generatedAt: Date;
@@ -106,6 +120,9 @@ export class MemorySpaceRegistry implements SpaceRegistry {
         values.map((value) => ({ ...value, key: Uint8Array.from(value.key) })),
       ]),
     );
+    const credentials = new Map(
+      [...this.#resolverCredentials].map(([id, values]) => [id, new Map(values)]),
+    );
     const generation = this.#generation;
     const generatedAt = new Date(this.#generatedAt);
     const nextTokenId = this.#nextTokenId;
@@ -116,9 +133,11 @@ export class MemorySpaceRegistry implements SpaceRegistry {
       this.#spaces.clear();
       this.#tokens.clear();
       this.#keys.clear();
+      this.#resolverCredentials.clear();
       for (const entry of spaces) this.#spaces.set(...entry);
       for (const entry of tokens) this.#tokens.set(...entry);
       for (const entry of keys) this.#keys.set(...entry);
+      for (const entry of credentials) this.#resolverCredentials.set(...entry);
       this.#generation = generation;
       this.#generatedAt = generatedAt;
       this.#nextTokenId = nextTokenId;
@@ -192,12 +211,18 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     };
   }
 
-  async createSpace(policy: SpacePolicy): Promise<RegistryMutation<SpaceRecord>> {
+  async createSpace(
+    policy: SpacePolicy,
+    resolverCredentials: readonly ResolverCredentialInput[] = [],
+  ): Promise<RegistryMutation<SpaceRecord>> {
     const parsed = parseSpacePolicy(policy);
+    rejectRetiredResolvers(parsed);
     if (this.#spaces.has(parsed.id)) {
       throw new SpaceRegistryError("conflict", "the Space public identifier is already reserved");
     }
     const now = this.#now();
+    // Validate before anything is stored so a refused create leaves no Space behind.
+    const credentials = this.#credentials(parsed, resolverCredentials, now);
     const record: SpaceRecord = {
       policy: parsed,
       status: "active",
@@ -205,6 +230,7 @@ export class MemorySpaceRegistry implements SpaceRegistry {
       updatedAt: now,
     };
     this.#spaces.set(parsed.id, record);
+    this.#resolverCredentials.set(parsed.id, credentials);
     return this.#mutation(copySpace(record));
   }
 
@@ -213,14 +239,85 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     update: SpacePolicyUpdate,
   ): Promise<RegistryMutation<SpaceRecord>> {
     const current = this.#activeSpace(spaceId);
+    const { resolverCredentials, resolvers, ...policyUpdate } = update;
     const policy = parseSpacePolicy({
-      ...update,
+      ...policyUpdate,
       id: current.policy.id,
       routeClass: current.policy.routeClass,
+      resolvers: resolvers ?? current.policy.resolvers,
     });
-    const record: SpaceRecord = { ...current, policy, updatedAt: this.#now() };
-    this.#spaces.set(spaceId, record);
+    return this.#writePolicy(current, policy, resolverCredentials ?? []);
+  }
+
+  async editResolver(
+    spaceId: string,
+    change: ResolverChange,
+  ): Promise<RegistryMutation<SpaceRecord>> {
+    const current = this.#activeSpace(spaceId);
+    const policy = parseSpacePolicy({
+      ...current.policy,
+      resolvers: applyResolverChange(current.policy, change),
+    });
+    return this.#writePolicy(
+      current,
+      policy,
+      change.credential === undefined ? [] : [change.credential],
+    );
+  }
+
+  #writePolicy(
+    current: SpaceRecord,
+    policy: SpacePolicy,
+    supplied: readonly ResolverCredentialInput[],
+  ): RegistryMutation<SpaceRecord> {
+    rejectRetiredResolvers(policy);
+    const now = this.#now();
+    const credentials = this.#credentials(policy, supplied, now);
+    const record: SpaceRecord = { ...current, policy, updatedAt: now };
+    this.#spaces.set(policy.id, record);
+    this.#resolverCredentials.set(policy.id, credentials);
     return this.#mutation(copySpace(record));
+  }
+
+  /** The credentials a write stores: supplied ones stamped now, kept ones copied from the Space. */
+  #credentials(
+    policy: SpacePolicy,
+    supplied: readonly ResolverCredentialInput[],
+    now: Date,
+  ): Map<string, StoredResolverCredential> {
+    const existing = this.#resolverCredentials.get(policy.id) ?? new Map();
+    const plan = planResolverCredentials(policy, supplied, new Set(existing.keys()));
+    const credentials = new Map<string, StoredResolverCredential>();
+    for (const [resolverId, input] of plan.supplied) {
+      credentials.set(resolverId, {
+        accessKeyId: input.accessKeyId,
+        secretAccessKey: input.secretAccessKey,
+        updatedAt: now,
+      });
+    }
+    for (const resolverId of plan.kept) {
+      const kept = existing.get(resolverId);
+      if (kept !== undefined) credentials.set(resolverId, kept);
+    }
+    return credentials;
+  }
+
+  async listResolverCredentials(spaceId: string): Promise<readonly ResolverCredentialSummary[]> {
+    this.#space(spaceId);
+    return [...(this.#resolverCredentials.get(spaceId) ?? [])].map(([resolverId, credential]) => ({
+      resolverId,
+      accessKeyId: credential.accessKeyId,
+      updatedAt: new Date(credential.updatedAt),
+    }));
+  }
+
+  async getResolverCredential(
+    spaceId: string,
+    resolverId: string,
+  ): Promise<ResolverCredential | undefined> {
+    const credential = this.#resolverCredentials.get(spaceId)?.get(resolverId);
+    if (credential === undefined) return undefined;
+    return { accessKeyId: credential.accessKeyId, secretAccessKey: credential.secretAccessKey };
   }
 
   async decommissionSpace(spaceId: string): Promise<RegistryMutation<SpaceRecord>> {

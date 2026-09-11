@@ -3,6 +3,7 @@ import {
   check,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -69,12 +70,25 @@ export const spaceResolvers = pgTable(
       .references(() => spaces.id, { onDelete: "restrict" }),
     resolverId: text("resolver_id").notNull(),
     resolverType: text("resolver_type").notNull(),
-    allowedProjectIds: text("allowed_project_ids").array().notNull(),
+    /** The kind-specific public fields, validated by the protocol schema on every read. */
+    config: jsonb("config").notNull(),
+    /** The read-only S3 credential, sealed with the registry encryption key; s3 rows only. */
+    credentialAccessKeyId: text("credential_access_key_id"),
+    sealedCredentialNonce: text("sealed_credential_nonce"),
+    sealedCredential: text("sealed_credential"),
+    credentialUpdatedAt: timestamp("credential_updated_at", { withTimezone: true }),
   },
   (table) => [
     uniqueIndex("space_resolvers_space_resolver_unique").on(table.spaceRecordId, table.resolverId),
-    check("space_resolvers_type_check", sql`${table.resolverType} = 'uploadthing'`),
-    check("space_resolvers_projects_check", sql`cardinality(${table.allowedProjectIds}) > 0`),
+    check("space_resolvers_type_check", sql`${table.resolverType} in ('template', 's3')`),
+    check(
+      "space_resolvers_credential_check",
+      sql`(${table.resolverType} = 's3') = (
+        ${table.credentialAccessKeyId} is not null
+        and ${table.sealedCredentialNonce} is not null
+        and ${table.sealedCredential} is not null
+        and ${table.credentialUpdatedAt} is not null)`,
+    ),
   ],
 );
 

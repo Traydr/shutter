@@ -251,6 +251,12 @@ const s3ResolverSchema = z
       context.addIssue("resolvers[].endpoint must be an HTTPS origin without a path");
       return z.NEVER;
     }
+    if (!input.pathStyle && input.bucket.includes(".")) {
+      context.addIssue(
+        "resolvers[].pathStyle must be true for a bucket name with dots; virtual-hosted TLS cannot address it",
+      );
+      return z.NEVER;
+    }
     try {
       parseKeyTemplate(input.keyTemplate);
     } catch (error) {

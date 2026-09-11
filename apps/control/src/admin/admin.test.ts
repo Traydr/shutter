@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { EdgeRefreshTracker } from "../edge-refresh-status.js";
+import { createSourceResolverService } from "../source-resolvers.js";
 import { MemorySpaceRegistry } from "../spaces/memory-registry.js";
 import { type AdminRuntime, createAdminApp } from "./app.js";
 import { deploymentCoverage } from "./deployment-coverage.js";
@@ -166,7 +167,6 @@ describe("Control admin surface", () => {
       qualities: "50,75",
       defaultQuality: "75",
       allowedSourceOrigins: "https://sources.example.com/private",
-      resolvers: "",
     };
 
     expect(
@@ -211,7 +211,6 @@ describe("Control admin surface", () => {
       qualities: "50,75",
       defaultQuality: "75",
       allowedSourceOrigins: "https://sources.example.com/media",
-      resolvers: "uploadthing:example_project",
     });
 
     expect(created.status).toBe(303);
@@ -221,13 +220,13 @@ describe("Control admin surface", () => {
     expect(detailBody).toMatch(/Registry generation<\/dt><dd[^>]*>1</u);
     expect(detailBody).not.toContain('name="spaceId"');
     expect(detailBody).not.toContain('name="routeClass"');
+    expect(detailBody).not.toContain('name="resolvers"');
 
     const edited = await formRequest(app, "/spaces/example-public/policy", cookie, {
       csrf,
       qualities: "60,80",
       defaultQuality: "80",
       allowedSourceOrigins: "https://new.example.com/assets",
-      resolvers: "uploadthing:new_project",
     });
     expect(edited.headers.get("location")).toContain("generation=2");
     await expect(registry.getActiveSpacePolicy("example-public")).resolves.toMatchObject({
@@ -241,9 +240,206 @@ describe("Control admin surface", () => {
       qualities: "80,80",
       defaultQuality: "80",
       allowedSourceOrigins: "https://new.example.com/assets",
-      resolvers: "uploadthing:new_project",
     });
     expect(invalid.status).toBe(400);
+  });
+
+  it("adds, edits, tests, and removes resolvers through their own editor", async () => {
+    const registry = new MemorySpaceRegistry({
+      spaces: [
+        {
+          id: "example-public",
+          routeClass: "public",
+          qualities: [75],
+          defaultQuality: 75,
+          allowedSourceOrigins: [
+            { origin: "https://example-project.ufs.sh", pathPrefix: "/f" },
+            { origin: "https://objects.example.test", pathPrefix: "/example-bucket" },
+          ],
+          resolvers: [],
+        },
+      ],
+    });
+    const probed: string[] = [];
+    const probeLocation = vi.fn(async (locator: string, address: string) => {
+      probed.push(`${locator} via ${address}`);
+      return {
+        status: 206,
+        headers: new Headers({
+          "content-type":
+            'image/jpeg; source="https://objects.example.test/leak?X-Amz-Signature=x"',
+          "content-range": "bytes 0-0/12345",
+        }),
+      };
+    });
+    const resolvers = createSourceResolverService({
+      credentials: registry,
+      presigner: {
+        presign: async ({ key }) =>
+          `https://objects.example.test/example-bucket/${key}?X-Amz-Signature=sealed`,
+      },
+    });
+    const app = createAdminApp({
+      ...runtime(registry),
+      sourceResolvers: resolvers,
+      probeLocation,
+      addressLookup: async () => ["93.184.216.34"],
+      edgeBaseUrl: () => "https://edge.example.test",
+    });
+    const { cookie, csrf } = await login(app);
+
+    // The new-resolver page carries the preset into the form.
+    const preset = await app.request(
+      `${ORIGIN}/spaces/example-public/resolvers/new?kind=template&preset=uploadthing`,
+      { headers: { cookie } },
+    );
+    expect(preset.status).toBe(200);
+    expect(await preset.text()).toContain('value="https://{project}.ufs.sh/f/{file}"');
+
+    // A hostname placeholder without allowed values is refused by name.
+    const unrestricted = await formRequest(app, "/spaces/example-public/resolvers", cookie, {
+      csrf,
+      resolverId: "ut",
+      kind: "template",
+      url: "https://{project}.ufs.sh/f/{file}",
+      allowed: "",
+    });
+    expect(unrestricted.status).toBe(400);
+    expect(await unrestricted.text()).toContain(
+      "hostname placeholder must list its allowed values",
+    );
+
+    const createdTemplate = await formRequest(app, "/spaces/example-public/resolvers", cookie, {
+      csrf,
+      resolverId: "ut",
+      kind: "template",
+      url: "https://{project}.ufs.sh/f/{file}",
+      allowed: "project=example-project",
+    });
+    expect(createdTemplate.status).toBe(303);
+    expect(createdTemplate.headers.get("location")).toBe(
+      "/admin/spaces/example-public/resolvers/ut?generation=1",
+    );
+
+    // An S3 resolver needs its credential; the secret is never shown again.
+    const missingCredential = await formRequest(app, "/spaces/example-public/resolvers", cookie, {
+      csrf,
+      resolverId: "media",
+      kind: "s3",
+      endpoint: "https://objects.example.test",
+      bucket: "example-bucket",
+      keyTemplate: "originals/{key}",
+      pathStyle: "on",
+    });
+    expect(missingCredential.status).toBe(400);
+    expect(await missingCredential.text()).toContain("resolver media needs an S3 credential");
+    const createdS3 = await formRequest(app, "/spaces/example-public/resolvers", cookie, {
+      csrf,
+      resolverId: "media",
+      kind: "s3",
+      endpoint: "https://objects.example.test",
+      bucket: "example-bucket",
+      keyTemplate: "originals/{key}",
+      pathStyle: "on",
+      accessKeyId: "AKIAEXAMPLE",
+      secretAccessKey: "top-secret-value",
+    });
+    expect(createdS3.status).toBe(303);
+    const editor = await app.request(`${ORIGIN}/spaces/example-public/resolvers/media`, {
+      headers: { cookie },
+    });
+    const editorBody = await editor.text();
+    expect(editorBody).toContain("AKIAEXAMPLE");
+    expect(editorBody).not.toContain("top-secret-value");
+    expect(editorBody).toContain("https://edge.example.test/v2/example-public/media/{key}");
+    const detail = await app.request(`${ORIGIN}/spaces/example-public`, { headers: { cookie } });
+    const detailBody = await detail.text();
+    expect(detailBody).toContain("https://{project}.ufs.sh/f/{file}");
+    expect(detailBody).not.toContain("top-secret-value");
+    await expect(registry.getActiveSpacePolicy("example-public")).resolves.toMatchObject({
+      resolvers: [
+        { id: "ut", type: "template" },
+        { id: "media", type: "s3", pathStyle: true },
+      ],
+    });
+
+    // A policy save carries the resolvers through untouched.
+    await formRequest(app, "/spaces/example-public/policy", cookie, {
+      csrf,
+      qualities: "50,75",
+      defaultQuality: "75",
+      allowedSourceOrigins:
+        "https://example-project.ufs.sh/f\nhttps://objects.example.test/example-bucket",
+    });
+    await expect(registry.getActiveSpacePolicy("example-public")).resolves.toMatchObject({
+      qualities: [50, 75],
+      resolvers: [{ id: "ut" }, { id: "media" }],
+    });
+
+    // Editing the S3 resolver without credential fields keeps the stored pair.
+    const editedS3 = await formRequest(app, "/spaces/example-public/resolvers/media", cookie, {
+      csrf,
+      kind: "s3",
+      endpoint: "https://objects.example.test",
+      bucket: "example-bucket",
+      keyTemplate: "{key}",
+      pathStyle: "on",
+    });
+    expect(editedS3.status).toBe(303);
+    await expect(registry.getResolverCredential("example-public", "media")).resolves.toEqual({
+      accessKeyId: "AKIAEXAMPLE",
+      secretAccessKey: "top-secret-value",
+    });
+
+    // Test resolves and fetches one byte, reporting the host but never the signed URL.
+    const tested = await formRequest(app, "/spaces/example-public/resolvers/media/test", cookie, {
+      csrf,
+      reference: "file.one",
+    });
+    expect(tested.status).toBe(200);
+    const testedBody = await tested.text();
+    expect(testedBody).toContain("The location answered with bytes.");
+    expect(testedBody).toContain("media/file.one");
+    expect(testedBody).toContain("objects.example.test");
+    expect(testedBody).toContain("12345");
+    expect(testedBody).not.toContain("X-Amz-Signature");
+    expect(probed).toEqual([
+      "https://objects.example.test/example-bucket/file.one?X-Amz-Signature=sealed via 93.184.216.34",
+    ]);
+    const badReference = await formRequest(
+      app,
+      "/spaces/example-public/resolvers/ut/test",
+      cookie,
+      { csrf, reference: "other/file" },
+    );
+    expect(await badReference.text()).toContain("does not fit this resolver");
+
+    // Removal needs the identifier typed back and drops the credential with the row.
+    const unconfirmed = await formRequest(
+      app,
+      "/spaces/example-public/resolvers/media/remove",
+      cookie,
+      { csrf, confirm: "nope" },
+    );
+    expect(unconfirmed.status).toBe(400);
+    const removed = await formRequest(
+      app,
+      "/spaces/example-public/resolvers/media/remove",
+      cookie,
+      {
+        csrf,
+        confirm: "media",
+      },
+    );
+    expect(removed.status).toBe(303);
+    await expect(registry.listResolverCredentials("example-public")).resolves.toEqual([]);
+    expect(
+      (
+        await app.request(`${ORIGIN}/spaces/example-public/resolvers/media`, {
+          headers: { cookie },
+        })
+      ).status,
+    ).toBe(404);
   });
 
   it("shows generated credentials once and retains only credential summaries", async () => {

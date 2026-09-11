@@ -1,4 +1,4 @@
-import { parseSpacePolicy } from "@shutter/protocol";
+import { type JsonObject, parseSpacePolicy } from "@shutter/protocol";
 import type { Pool, PoolClient } from "pg";
 import { transaction } from "../db/transaction.js";
 import type { SpaceRecord } from "./registry.js";
@@ -25,7 +25,8 @@ interface ResolverRow {
   space_id: number;
   resolver_id: string;
   resolver_type: string;
-  allowed_project_ids: string[];
+  /** The kind-specific public fields; `parseSpacePolicy` is the boundary that validates them. */
+  config: JsonObject;
 }
 
 export interface StoredSpaceRecord {
@@ -79,7 +80,7 @@ export async function loadSpaceRecords(
       [recordIds],
     ),
     database.query<ResolverRow>(
-      `select space_id, resolver_id, resolver_type, allowed_project_ids from space_resolvers
+      `select space_id, resolver_id, resolver_type, config from space_resolvers
        where space_id = any($1::integer[]) order by id`,
       [recordIds],
     ),
@@ -97,9 +98,9 @@ export async function loadSpaceRecords(
       resolvers: resolvers.rows
         .filter((resolver) => resolver.space_id === row.id)
         .map((resolver) => ({
+          ...resolver.config,
           id: resolver.resolver_id,
           type: resolver.resolver_type,
-          allowedProjectIds: resolver.allowed_project_ids,
         })),
     });
     const value: SpaceRecord = {
