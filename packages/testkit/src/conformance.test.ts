@@ -16,6 +16,12 @@ import {
   buildSourceCacheTag,
   buildSourceDeliveryCacheUrl,
   buildSourcePurgeUrl,
+  buildV2DeliveryUrl,
+  buildV2PreviewJobUrl,
+  buildV2SourcePurgeUrl,
+  expandS3Resolver,
+  expandTemplateResolver,
+  parseSourceReference,
   sourceFingerprint,
   verifySourceCapability,
 } from "@shutter/protocol";
@@ -24,9 +30,13 @@ import { describe, expect, it } from "vitest";
 import {
   CACHE_IDENTITY_EXPECTED,
   CACHE_IDENTITY_FIXTURE,
+  RESOLVER_EXPECTED,
   runCapabilityConformance,
+  S3_RESOLVER_FIXTURE,
   SOURCE_DELIVERY_CACHE_IDENTITY_FIXTURE,
+  TEMPLATE_RESOLVER_FIXTURE,
   URL_FIXTURES,
+  V2_URL_FIXTURES,
 } from "./index.js";
 
 describe("Node protocol conformance", () => {
@@ -67,6 +77,57 @@ describe("Node protocol conformance", () => {
       URL_FIXTURES.previewJob,
     );
     expect(buildSourcePurgeUrl("example-private", "source/one")).toBe(URL_FIXTURES.sourcePurge);
+  });
+
+  it("matches the v2 URL fixtures", () => {
+    const reference = ["file.one"];
+    expect(buildV2DeliveryUrl("example-public", "media", reference)).toBe(V2_URL_FIXTURES.delivery);
+    expect(
+      buildV2DeliveryUrl("example-public", "media", reference, { width: 640, quality: 75 }),
+    ).toBe(V2_URL_FIXTURES.optimization);
+    expect(
+      buildV2DeliveryUrl("example-public", "media", reference, {
+        preview: "video",
+        width: 640,
+        quality: 75,
+      }),
+    ).toBe(V2_URL_FIXTURES.preview);
+    expect(
+      buildV2DeliveryUrl("example-public", "ut", ["example-project", "file_9"], {
+        width: 640,
+        quality: 75,
+      }),
+    ).toBe(V2_URL_FIXTURES.twoSegments);
+    expect(buildV2DeliveryUrl("example-private", "media", reference, { token: "v2.token" })).toBe(
+      V2_URL_FIXTURES.privateDelivery,
+    );
+    expect(
+      buildV2DeliveryUrl("example-private", "media", reference, {
+        width: 640,
+        quality: 75,
+        token: "v2.token",
+      }),
+    ).toBe(V2_URL_FIXTURES.privateOptimization);
+    expect(buildV2PreviewJobUrl("example-public", "media/file.one", "video")).toBe(
+      V2_URL_FIXTURES.previewJob,
+    );
+    expect(buildV2SourcePurgeUrl("example-public", "media/file.one")).toBe(
+      V2_URL_FIXTURES.sourcePurge,
+    );
+  });
+
+  it("matches the resolver fixtures", () => {
+    const template = parseSourceReference(TEMPLATE_RESOLVER_FIXTURE, ["example-project", "file_9"]);
+    expect(template?.sourceId).toBe(RESOLVER_EXPECTED.templateSourceId);
+    expect(expandTemplateResolver(TEMPLATE_RESOLVER_FIXTURE, template?.values ?? [])).toBe(
+      RESOLVER_EXPECTED.templateLocator,
+    );
+    const s3 = parseSourceReference(S3_RESOLVER_FIXTURE, ["file.one"]);
+    expect(s3?.sourceId).toBe(RESOLVER_EXPECTED.s3SourceId);
+    expect(expandS3Resolver(S3_RESOLVER_FIXTURE, s3?.values ?? [])).toEqual({
+      key: RESOLVER_EXPECTED.s3Key,
+      url: RESOLVER_EXPECTED.s3Url,
+    });
   });
 
   it("matches the cache identity fixtures", async () => {

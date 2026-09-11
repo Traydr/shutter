@@ -1,8 +1,10 @@
 import type {
   CapabilityKeyMaterial,
   OptimizationCacheIdentity,
+  S3ResolverPolicy,
   SourceCapabilityClaims,
   SourceDeliveryCacheIdentity,
+  TemplateResolverPolicy,
   VerifyCapabilityOptions,
 } from "@shutter/protocol";
 
@@ -95,6 +97,57 @@ export const URL_FIXTURES = Object.freeze({
   privateMaster: "/v1/private/example-private/master/capability.token?w=640&q=75",
   previewJob: "/v1/spaces/example-private/sources/source%2Fone/previews/pdf",
   sourcePurge: "/v1/spaces/example-private/sources/source%2Fone/purge",
+});
+
+/** One v2 Delivery URL per operation and route class, from the same reference. */
+export const V2_URL_FIXTURES = Object.freeze({
+  delivery: "/v2/example-public/media/file.one",
+  optimization: "/v2/example-public/media/file.one?w=640&q=75",
+  preview: "/v2/example-public/media/file.one?preview=video&w=640&q=75",
+  twoSegments: "/v2/example-public/ut/example-project/file_9?w=640&q=75",
+  privateDelivery: "/v2/example-private/media/file.one?token=v2.token",
+  privateOptimization: "/v2/example-private/media/file.one?w=640&q=75&token=v2.token",
+  previewJob: "/v2/spaces/example-public/sources/media%2Ffile.one/previews/video",
+  sourcePurge: "/v2/spaces/example-public/sources/media%2Ffile.one/purge",
+});
+
+/** The template resolver every consumer and service test agrees on, with its allowed origin. */
+export const TEMPLATE_RESOLVER_FIXTURE: Readonly<TemplateResolverPolicy> = Object.freeze({
+  id: "ut",
+  type: "template",
+  url: "https://{project}.ufs.sh/f/{file}",
+  placeholders: Object.freeze({
+    project: Object.freeze({ allowed: Object.freeze(["example-project"]) }),
+    file: Object.freeze({}),
+  }),
+});
+export const TEMPLATE_RESOLVER_ORIGIN = Object.freeze({
+  origin: "https://example-project.ufs.sh",
+  pathPrefix: "/f",
+});
+
+/** The S3 resolver fixture; its credential is whatever the test under way supplies. */
+export const S3_RESOLVER_FIXTURE: Readonly<S3ResolverPolicy> = Object.freeze({
+  id: "media",
+  type: "s3",
+  endpoint: "https://objects.example.test",
+  region: "auto",
+  bucket: "example-bucket",
+  pathStyle: true,
+  keyTemplate: "originals/{key}",
+});
+export const S3_RESOLVER_ORIGIN = Object.freeze({
+  origin: "https://objects.example.test",
+  pathPrefix: "/example-bucket",
+});
+
+/** What the fixtures resolve to; any resolver implementation must agree byte for byte. */
+export const RESOLVER_EXPECTED = Object.freeze({
+  templateSourceId: "ut/example-project/file_9",
+  templateLocator: "https://example-project.ufs.sh/f/file_9",
+  s3SourceId: "media/file.one",
+  s3Key: "originals/file.one",
+  s3Url: "https://objects.example.test/example-bucket/originals/file.one",
 });
 
 export const CACHE_IDENTITY_FIXTURE: Readonly<OptimizationCacheIdentity> = Object.freeze({

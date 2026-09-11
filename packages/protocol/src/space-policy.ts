@@ -1,11 +1,28 @@
 import { z } from "zod";
+import type { JsonObject } from "./json.js";
+import { normalizeSourceOriginPathPrefix } from "./source-locator.js";
+import {
+  isHostLabel,
+  isPlaceholderName,
+  isReferenceSegment,
+  parseKeyTemplate,
+  parseUrlTemplate,
+  ResolverTemplateError,
+  validateResolverOrigins,
+} from "./source-resolver.js";
 import type {
   PrivateSpacePolicy,
   PublicSpacePolicy,
+  ResolverPlaceholderPolicy,
+  S3ResolverPolicy,
   SourceOriginRule,
   SourceResolverPolicy,
   SpacePolicy,
+  TemplateResolverPolicy,
+  UploadThingResolverPolicy,
 } from "./types.js";
+
+export { normalizeSourceOriginPathPrefix };
 
 const IDENTIFIER_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/u;
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
@@ -17,17 +34,14 @@ export class SpacePolicyValidationError extends Error {
   }
 }
 
-/**
- * The one canonical Source Origin path-prefix normalization. The parser, the
- * Postgres storage layer, and locator enforcement must all agree on this form
- * or the Source Locator allowlist breaks: "/" is the canonical root prefix,
- * every other prefix keeps its leading "/" and loses trailing "/" runs.
- */
-export function normalizeSourceOriginPathPrefix(pathPrefix: string | undefined): string {
-  if (pathPrefix === undefined) return "/";
-  const rooted = pathPrefix.startsWith("/") ? pathPrefix : `/${pathPrefix}`;
-  const trimmed = rooted.replace(/\/+$/u, "");
-  return trimmed === "" ? "/" : trimmed;
+const BUCKET_NAME_PATTERN = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u;
+const IP_ADDRESS_PATTERN = /^\d{1,3}(?:\.\d{1,3}){3}$/u;
+
+/** The general-purpose S3 bucket naming rules: 3 to 63 characters, no `..`, and not an IP address. */
+export function isBucketName(value: string): boolean {
+  return (
+    BUCKET_NAME_PATTERN.test(value) && !value.includes("..") && !IP_ADDRESS_PATTERN.test(value)
+  );
 }
 
 function identifier(name: string) {
@@ -100,11 +114,11 @@ const sourceOriginRulesSchema = z
   })
   .readonly();
 
-const resolverSchema = z
+const uploadThingResolverSchema = z
   .strictObject(
     {
       id: identifier("resolvers[].id"),
-      type: z.string({ error: "resolvers[].type is not supported" }),
+      type: z.literal("uploadthing"),
       allowedProjectIds: z
         .array(
           z
@@ -120,17 +134,149 @@ const resolverSchema = z
     },
     { error: "resolvers[] contains missing or unknown fields" },
   )
-  .transform((input, context): SourceResolverPolicy => {
-    if (input.type !== "uploadthing") {
-      context.addIssue("resolvers[].type is not supported");
+  .transform(
+    (input): UploadThingResolverPolicy =>
+      Object.freeze({
+        id: input.id,
+        type: "uploadthing",
+        allowedProjectIds: input.allowedProjectIds,
+      }),
+  );
+
+const allowedValuesSchema = z
+  .array(z.string({ error: "resolvers[].placeholders[].allowed[] must be a string" }), {
+    error: "resolvers[].placeholders[].allowed must be an array",
+  })
+  .nonempty({ error: "resolvers[].placeholders[].allowed must not be empty" })
+  .refine((values) => unique(values, (value) => value), {
+    error: "resolvers[].placeholders[].allowed must be unique",
+  })
+  .readonly();
+
+const placeholderPolicySchema = z
+  .strictObject(
+    { allowed: allowedValuesSchema.optional() },
+    { error: "resolvers[].placeholders[] contains unknown fields" },
+  )
+  .transform((input): ResolverPlaceholderPolicy => {
+    const policy: ResolverPlaceholderPolicy = {};
+    if (input.allowed !== undefined) policy.allowed = input.allowed;
+    return Object.freeze(policy);
+  });
+
+const templateResolverSchema = z
+  .strictObject(
+    {
+      id: identifier("resolvers[].id"),
+      type: z.literal("template"),
+      url: z.string({ error: "resolvers[].url must be a string" }),
+      placeholders: z.record(z.string(), placeholderPolicySchema, {
+        error: "resolvers[].placeholders must be an object",
+      }),
+    },
+    { error: "resolvers[] contains missing or unknown fields" },
+  )
+  .transform((input, context): TemplateResolverPolicy => {
+    let template: ReturnType<typeof parseUrlTemplate>;
+    try {
+      template = parseUrlTemplate(input.url);
+    } catch (error) {
+      context.addIssue(
+        error instanceof ResolverTemplateError
+          ? `resolvers[].url: ${error.message}`
+          : "resolvers[].url is not a valid template",
+      );
+      return z.NEVER;
+    }
+    const names = Object.keys(input.placeholders);
+    if (
+      names.length !== template.placeholders.length ||
+      names.some((name) => !template.placeholders.includes(name))
+    ) {
+      context.addIssue("resolvers[].placeholders must name exactly the placeholders in the url");
+      return z.NEVER;
+    }
+    const placeholders: Record<string, ResolverPlaceholderPolicy> = {};
+    for (const name of template.placeholders) {
+      const placeholder = input.placeholders[name];
+      if (placeholder === undefined) {
+        context.addIssue("resolvers[].placeholders must name exactly the placeholders in the url");
+        return z.NEVER;
+      }
+      placeholders[name] = placeholder;
+      const allowed = placeholder.allowed;
+      if (name === template.hostPlaceholder) {
+        if (allowed === undefined) {
+          context.addIssue("a hostname placeholder must list its allowed values");
+          return z.NEVER;
+        }
+        if (!allowed.every(isHostLabel)) {
+          context.addIssue("a hostname placeholder value must be a hostname label");
+          return z.NEVER;
+        }
+      } else if (allowed !== undefined && !allowed.every(isReferenceSegment)) {
+        context.addIssue("a placeholder value must be a reference segment");
+        return z.NEVER;
+      }
+    }
+    return Object.freeze({
+      id: input.id,
+      type: "template",
+      url: input.url,
+      placeholders: Object.freeze(placeholders),
+    });
+  });
+
+const s3ResolverSchema = z
+  .strictObject(
+    {
+      id: identifier("resolvers[].id"),
+      type: z.literal("s3"),
+      endpoint: z.string({ error: "resolvers[].endpoint must be a string" }),
+      region: z
+        .string({ error: "resolvers[].region must be a non-empty string" })
+        .min(1, { error: "resolvers[].region must be a non-empty string" })
+        .max(64, { error: "resolvers[].region must be a non-empty string" }),
+      bucket: z
+        .string({ error: "resolvers[].bucket must be an S3 bucket name" })
+        .refine(isBucketName, { error: "resolvers[].bucket must be an S3 bucket name" }),
+      pathStyle: z.boolean({ error: "resolvers[].pathStyle must be a boolean" }),
+      keyTemplate: z.string({ error: "resolvers[].keyTemplate must be a string" }),
+    },
+    { error: "resolvers[] contains missing or unknown fields" },
+  )
+  .transform((input, context): S3ResolverPolicy => {
+    const endpoint = parseHttpsOrigin(input.endpoint);
+    if (endpoint === undefined) {
+      context.addIssue("resolvers[].endpoint must be an HTTPS origin without a path");
+      return z.NEVER;
+    }
+    try {
+      parseKeyTemplate(input.keyTemplate);
+    } catch (error) {
+      context.addIssue(
+        error instanceof ResolverTemplateError
+          ? `resolvers[].keyTemplate: ${error.message}`
+          : "resolvers[].keyTemplate is not a valid template",
+      );
       return z.NEVER;
     }
     return Object.freeze({
       id: input.id,
-      type: "uploadthing",
-      allowedProjectIds: input.allowedProjectIds,
+      type: "s3",
+      endpoint: endpoint.origin,
+      region: input.region,
+      bucket: input.bucket,
+      pathStyle: input.pathStyle,
+      keyTemplate: input.keyTemplate,
     });
   });
+
+const resolverSchema = z.discriminatedUnion(
+  "type",
+  [uploadThingResolverSchema, templateResolverSchema, s3ResolverSchema],
+  { error: "resolvers[].type is not supported" },
+);
 
 const qualitiesSchema = z
   .array(z.int({ error: "qualities[] must be an integer from 1 to 100" }).min(1).max(100), {
@@ -158,6 +304,18 @@ const spacePolicyCandidateSchema = z.strictObject(
  */
 export type SpacePolicyInput = z.input<typeof spacePolicyCandidateSchema>;
 
+function resolverOriginIssue(
+  resolver: SourceResolverPolicy,
+  rules: readonly SourceOriginRule[],
+): string | undefined {
+  try {
+    validateResolverOrigins(resolver, rules);
+    return undefined;
+  } catch {
+    return `resolver ${resolver.id} can produce a location outside allowedSourceOrigins`;
+  }
+}
+
 const spacePolicySchema = spacePolicyCandidateSchema.transform((input, context): SpacePolicy => {
   if (!input.qualities.includes(input.defaultQuality)) {
     context.addIssue("defaultQuality must be one of the permitted qualities");
@@ -166,6 +324,16 @@ const spacePolicySchema = spacePolicyCandidateSchema.transform((input, context):
   if (!unique(input.resolvers, (resolver) => resolver.id)) {
     context.addIssue("resolver IDs must be unique inside a Space");
     return z.NEVER;
+  }
+  for (const resolver of input.resolvers) {
+    // The retired UploadThing kind predates the allowlist rule; migration 0003
+    // adds the matching origins when it rewrites those rows into templates.
+    if (resolver.type === "uploadthing") continue;
+    const issue = resolverOriginIssue(resolver, input.allowedSourceOrigins);
+    if (issue !== undefined) {
+      context.addIssue(issue);
+      return z.NEVER;
+    }
   }
   const common = {
     id: input.id,
@@ -199,6 +367,8 @@ const spacePolicySchema = spacePolicyCandidateSchema.transform((input, context):
 export const SPACE_POLICY_SCHEMA = spacePolicySchema;
 /** The schema for a Source Origin allowlist; embed it in wire schemas that carry one. */
 export const SOURCE_ORIGIN_RULES_SCHEMA = sourceOriginRulesSchema;
+/** The schema for one Source Resolver; the admin editor parses a single resolver with it. */
+export const SOURCE_RESOLVER_SCHEMA = resolverSchema;
 
 function firstIssueMessage(error: z.ZodError): string {
   return error.issues[0]?.message ?? "Space policy is invalid";
@@ -213,8 +383,15 @@ export function parseSourceOriginRules(value: SourceOriginRulesInput): readonly 
   return result.data;
 }
 
-export function parseSpacePolicy(value: SpacePolicyInput): SpacePolicy {
+/**
+ * Parses a policy from typed input or from a JSON document such as a
+ * database row set; both are boundaries the schema owns.
+ */
+export function parseSpacePolicy(value: SpacePolicyInput | JsonObject): SpacePolicy {
   const result = spacePolicySchema.safeParse(value);
   if (!result.success) throw new SpacePolicyValidationError(firstIssueMessage(result.error));
   return result.data;
 }
+
+/** Whether `isPlaceholderName` accepts the name; exported for the admin editor's field checks. */
+export { isPlaceholderName };

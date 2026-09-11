@@ -1,4 +1,4 @@
-import type { SpacePolicy } from "@shutter/protocol";
+import type { SourceResolverPolicy, SpacePolicy } from "@shutter/protocol";
 import type { EdgeRefreshStatus } from "../edge-refresh-status.js";
 import type { ApiTokenSummary, CapabilityKeySummary, SpaceRecord } from "../spaces/registry.js";
 import { type DeploymentCoverage, sourceOriginPrefix } from "./deployment-coverage.js";
@@ -251,11 +251,21 @@ function routeClassChip(policy: SpacePolicy): string {
   return `<span class="chip${policy.routeClass === "public" ? " pub" : ""}">${policy.routeClass}</span>`;
 }
 
+/** One resolver as the textarea spells it; the editor replacing the textarea lands with migration 0003. */
+function resolverLine(resolver: SourceResolverPolicy): string {
+  switch (resolver.type) {
+    case "uploadthing":
+      return `${resolver.id}:${resolver.allowedProjectIds.join(",")}`;
+    case "template":
+      return `${resolver.id}:template:${resolver.url}`;
+    case "s3":
+      return `${resolver.id}:s3:${resolver.bucket}`;
+  }
+}
+
 function policyFields(policy?: SpacePolicy): string {
   const origins = policy?.allowedSourceOrigins.map(sourceOriginPrefix).join("\n");
-  const resolvers = policy?.resolvers
-    .map((resolver) => `${resolver.id}:${resolver.allowedProjectIds.join(",")}`)
-    .join("\n");
+  const resolvers = policy?.resolvers.map(resolverLine).join("\n");
   return `<label class="f"><span>Allowed qualities${hint(HINTS.qualities)}</span>
     <input name="qualities" required value="${htmlEscape(policy?.qualities.join(", ") ?? "75")}"></label>
   <label class="f"><span>Default quality${hint(HINTS.defaultQuality)}</span>
@@ -462,7 +472,7 @@ export function spaceView(model: SpaceDetail): string {
         <dl class="kv">
           <dt>Qualities</dt><dd>${htmlEscape(policy.qualities.join(", "))} · default ${policy.defaultQuality}</dd>
           <dt>Source origins</dt><dd class="mono">${policy.allowedSourceOrigins.map((rule) => htmlEscape(sourceOriginPrefix(rule))).join("<br>") || "—"}</dd>
-          <dt>Resolvers</dt><dd class="mono">${policy.resolvers.map((resolver) => htmlEscape(`${resolver.id}:${resolver.allowedProjectIds.join(",")}`)).join("<br>") || "—"}</dd>
+          <dt>Resolvers</dt><dd class="mono">${policy.resolvers.map((resolver) => htmlEscape(resolverLine(resolver))).join("<br>") || "—"}</dd>
         </dl>
       </section>`;
 

@@ -48,13 +48,57 @@ export interface SourceOriginRule {
   pathPrefix?: string;
 }
 
+/**
+ * The v1 UploadThing adapter. Retired by ADR 0025: the migration that lands
+ * with the Control resolver editor rewrites every row into a template, after
+ * which this member leaves the union.
+ */
 export interface UploadThingResolverPolicy {
   id: string;
   type: "uploadthing";
   allowedProjectIds: readonly string[];
 }
 
-export type SourceResolverPolicy = UploadThingResolverPolicy;
+/** What one `{name}` in a resolver template accepts beyond the reference grammar. */
+export interface ResolverPlaceholderPolicy {
+  /** The only values the placeholder accepts; required for a hostname placeholder. */
+  allowed?: readonly string[];
+}
+
+/**
+ * An HTTPS URL with one placeholder per path segment or hostname label, such
+ * as `https://{project}.ufs.sh/f/{file}`. Resolved at the Edge from the
+ * snapshot, no credential involved.
+ */
+export interface TemplateResolverPolicy {
+  id: string;
+  type: "template";
+  url: string;
+  placeholders: Readonly<Record<string, ResolverPlaceholderPolicy>>;
+}
+
+/**
+ * An S3-compatible bucket read with a resolver-scoped credential that only
+ * Control holds. These are the public fields; the credential lives in the
+ * Space Registry beside the resolver and never in a policy or snapshot.
+ */
+export interface S3ResolverPolicy {
+  id: string;
+  type: "s3";
+  /** HTTPS origin of the S3 endpoint, without a path. */
+  endpoint: string;
+  region: string;
+  bucket: string;
+  /** `true` addresses `{endpoint}/{bucket}/{key}`; `false` addresses `https://{bucket}.{host}/{key}`. */
+  pathStyle: boolean;
+  /** An object key with `{name}` placeholders, one per `/`-separated segment. */
+  keyTemplate: string;
+}
+
+export type SourceResolverPolicy =
+  | UploadThingResolverPolicy
+  | TemplateResolverPolicy
+  | S3ResolverPolicy;
 
 interface BaseSpacePolicy {
   id: string;
