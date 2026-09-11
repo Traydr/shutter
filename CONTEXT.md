@@ -30,17 +30,35 @@ providers changes the locator, not the Source ID.
 _Avoid_: Source identity, permanent bucket credential
 
 **Source Resolver**:
-A trusted Shutter Space mapping from a public provider locator to an allowlisted
-HTTPS fetch location, such as UploadThing project and file keys.
-_Avoid_: Arbitrary URL proxy, media catalog
+Space configuration that turns the reference in a v2 Delivery URL into an
+allowlisted HTTPS fetch location. A `template` resolver expands an HTTPS URL
+with one placeholder per path segment or hostname label; an `s3` resolver
+presigns a GET against an S3-compatible bucket with a read-only credential held
+only by Control. Its identifier is immutable and part of the Source ID.
+_Avoid_: Arbitrary URL proxy, media catalog, UploadThing adapter
+
+**Source Reference**:
+The path segments after the resolver identifier in a v2 Delivery URL, one per
+placeholder, each a single token. Joined to the resolver identifier it is the
+Source ID of a resolver source.
+_Avoid_: Source Locator, file path, object key (it may equal one, but Shutter
+does not know that)
 
 **Source Capability**:
 A time-limited, encrypted, and authenticated credential issued by a consuming
 application that binds one Source ID to exactly one purpose: optimize a private
 Source Object, read a stored Master Preview, or run a bounded Preview Job. A
 capability contains a Source Locator only when its purpose must fetch an
-application-owned Source Object.
+application-owned Source Object. It is the v1 credential; v2 resolver sources
+need none on public Spaces and use an Access Token on private ones.
 _Avoid_: Shared bucket credential, permanent source URL, Source Grant
+
+**Access Token**:
+The v2 private-Space credential: the Source Capability envelope with no
+locator, binding one Source ID to one purpose and an expiry. A private v2
+Delivery URL carries it as the `token` query parameter and the Worker validates
+it before every cache lookup.
+_Avoid_: Session cookie, Shutter-minted token, bucket credential
 
 **Capability Key**:
 A shared symmetric credential that a consuming application uses to issue Source

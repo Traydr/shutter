@@ -17,10 +17,11 @@ Open the [interactive plan](./index.html) for the visual explanation.
 | [04 — Deployment portability](./04-deployment-portability.md) | Fresh-deploy inputs and deletion of two obsolete scripts. | Later |
 | [05 — Media delivery](./05-media-delivery.md) | One Shutter hostname for original images, videos, PDFs, and optional image optimization. | After configuration |
 | [06 — Deferred operations](./06-deferred.md) | Operator accounts, encryption-key tooling, and measured scaling work. | Not scheduled |
-| [07 — Space Registry authorization](./07-space-registry-authorization.md) | One Capability Key loader, `authorizeSpaceRequest` in the adapter contract, `getSpace` for admin. | Next |
-| [08 — Optimize-source wire](./08-optimize-source-wire.md) | Send the Space ID, not a Delivery Cache key; delete Control's key parser. | Next |
-| [09 — Control runtime](./09-control-runtime.md) | `buildControlRuntime(env)` with reported feature availability; proxies leave `app.ts`. | After 07 |
-| [10 — Edge optimization routes](./10-edge-optimization-routes.md) | One registration module and one capability gate for the five optimization routes. | After 08 |
+| [07 — Space Registry authorization](./07-space-registry-authorization.md) | One Capability Key loader, `authorizeSpaceRequest` in the adapter contract, `getSpace` for admin. | Landed (PR #17) |
+| [08 — Optimize-source wire](./08-optimize-source-wire.md) | Send the Space ID, not a Delivery Cache key; delete Control's key parser. | Landed (PR #17) |
+| [09 — Control runtime](./09-control-runtime.md) | `buildControlRuntime(env)` with reported feature availability; proxies leave `app.ts`. | Landed (PR #17) |
+| [10 — Edge optimization routes](./10-edge-optimization-routes.md) | One registration module and one capability gate for the five optimization routes. | Landed (PR #17) |
+| [11 — API v2 and Source Resolvers](./11-api-v2.md) | `/v2/{space}/{resolver}/{reference}`, template and S3 resolvers in the admin UI, capability-free jobs, locator-free private tokens. Eight stacked PRs. | Now |
 
 ## Why
 
