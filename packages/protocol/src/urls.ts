@@ -15,15 +15,6 @@ function optimizationQuery({ width, quality }: OptimizationParameters): string {
   return `w=${width}&q=${quality}`;
 }
 
-export function buildPublicResolverUrl(
-  spaceId: string,
-  resolverId: string,
-  sourceRef: string,
-  parameters: OptimizationParameters,
-): string {
-  return `/v1/public/${segment(spaceId)}/resolver/${segment(resolverId)}/${segment(sourceRef)}?${optimizationQuery(parameters)}`;
-}
-
 export function buildPublicLocatedSourceUrl(
   spaceId: string,
   sourceId: string,
@@ -31,14 +22,6 @@ export function buildPublicLocatedSourceUrl(
   parameters: OptimizationParameters,
 ): string {
   return `/v1/public/${segment(spaceId)}/located/${segment(sourceId)}/${segment(capability)}?${optimizationQuery(parameters)}`;
-}
-
-export function buildPublicResolverDeliveryUrl(
-  spaceId: string,
-  resolverId: string,
-  sourceRef: string,
-): string {
-  return `/v1/public/${segment(spaceId)}/delivery/resolver/${segment(resolverId)}/${segment(sourceRef)}`;
 }
 
 export function buildPublicLocatedDeliveryUrl(

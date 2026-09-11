@@ -1,5 +1,6 @@
 import {
   buildCanonicalCacheUrl,
+  buildMasterPreviewKey,
   buildOptimizeSourceQuery,
   buildR2CacheKey,
   buildSourceCacheTag,
@@ -15,13 +16,11 @@ import {
 import type { Context, Hono } from "hono";
 import { edgeBrowserResponse, internalEdgeCacheResponse } from "./edge-cache-policy.js";
 import { notFound } from "./http-responses.js";
-import { resolverSourceRef, resolveUploadThingSource } from "./source-resolution.js";
 import { type SpaceRouteAccess, spaceRoute } from "./space-route.js";
 
 type EdgeEnv = { Bindings: CloudflareBindings };
 type EdgeApp = Hono<EdgeEnv>;
 
-const PUBLIC_RESOLVER_ROUTE = "/v1/public/:spaceId/resolver/:resolverId/*";
 const PUBLIC_LOCATED_ROUTE = "/v1/public/:spaceId/located/:sourceId/:capability";
 const PUBLIC_MASTER_ROUTE = "/v1/public/:spaceId/master/:kind/:sourceId";
 const PRIVATE_SOURCE_ROUTE = "/v1/private/:spaceId/source/:capability";
@@ -30,13 +29,27 @@ const OPTIMIZATION_METHODS = ["GET"] as const;
 
 /**
  * What Control optimizes on a miss: a Source Object the origin fetches from a
- * locator, or a stored Master Preview addressed by kind. The locator is
- * resolved only when the origin must be fetched, so a route may defer work
- * (such as verifying a capability) until then.
+ * locator, a resolver source Control resolves itself (the v2 routes), or a
+ * stored Master Preview addressed by kind. The locator is resolved only when
+ * the origin must be fetched, so a route may defer work (such as verifying a
+ * capability) until then.
  */
-type OptimizationOrigin =
+export type OptimizationOrigin =
   | { type: "source"; locate(): Promise<string> }
-  | { type: "master"; kind: PreviewKind };
+  | { type: "resolved"; resolverId: string; reference: readonly string[] }
+  | {
+      type: "master";
+      kind: PreviewKind;
+      /**
+       * Answer 404 when the Master Store has no object, instead of asking
+       * Control to render one that does not exist. The v2 contract requires it;
+       * the v1 master routes keep their origin-failure behaviour.
+       */
+      requireStored?: boolean;
+    };
+
+/** Which Delivery URL grammar a request used, for the `edge.delivery` event. */
+type ApiVersion = "v1" | "v2";
 
 /** What one Image Optimization is about: the Source ID and where its bytes come from. */
 interface OptimizationSubject {
@@ -45,7 +58,7 @@ interface OptimizationSubject {
 }
 
 function inputOf(origin: OptimizationOrigin): OptimizationInput {
-  return origin.type === "source" ? { type: "source" } : { type: "master", kind: origin.kind };
+  return origin.type === "master" ? { type: "master", kind: origin.kind } : { type: "source" };
 }
 
 /**
@@ -69,6 +82,7 @@ type CapabilityGate =
 async function emitDeliveryEvent(
   identity: OptimizationCacheIdentity,
   cacheOutcome: "edge-hit" | "r2-hit" | "origin",
+  apiVersion: ApiVersion,
 ): Promise<void> {
   emitOperationalEvent(
     "info",
@@ -78,8 +92,8 @@ async function emitDeliveryEvent(
       sourceId: identity.sourceId,
       fields:
         identity.input.type === "master"
-          ? { routeClass: identity.routeClass, cacheOutcome, kind: identity.input.kind }
-          : { routeClass: identity.routeClass, cacheOutcome },
+          ? { routeClass: identity.routeClass, apiVersion, cacheOutcome, kind: identity.input.kind }
+          : { routeClass: identity.routeClass, apiVersion, cacheOutcome },
     }),
   );
 }
@@ -124,6 +138,30 @@ async function fetchOrigin(
   return response;
 }
 
+/** The v2 optimize wire: Control resolves the reference itself, so no locator crosses. */
+async function fetchResolvedOrigin(
+  bindings: CloudflareBindings,
+  identity: OptimizationCacheIdentity,
+  origin: { resolverId: string; reference: readonly string[] },
+): Promise<Response> {
+  const response = await fetch(new URL(CONTROL_HTTP_ROUTES.optimize, bindings.ORIGIN_BASE_URL), {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${bindings.ORIGIN_AUTH_TOKEN}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      spaceId: identity.spaceId,
+      input: { type: "resolved", resolverId: origin.resolverId, reference: origin.reference },
+      width: identity.width,
+      quality: identity.quality,
+    }),
+    redirect: "manual",
+  });
+  if (!response.ok) throw new Error(`origin returned ${response.status}`);
+  return response;
+}
+
 async function fetchMasterOrigin(
   bindings: CloudflareBindings,
   identity: OptimizationCacheIdentity,
@@ -151,17 +189,40 @@ async function fetchMasterOrigin(
   return response;
 }
 
+/** Renders at the origin; `undefined` means the Master Preview the request named does not exist. */
+async function renderAtOrigin(
+  bindings: CloudflareBindings,
+  identity: OptimizationCacheIdentity,
+  origin: OptimizationOrigin,
+): Promise<Response | undefined> {
+  switch (origin.type) {
+    case "master": {
+      if (origin.requireStored === true) {
+        const masterKey = await buildMasterPreviewKey(
+          identity.spaceId,
+          identity.sourceId,
+          origin.kind,
+        );
+        if ((await bindings.MEDIA_STORE.head(masterKey)) === null) return undefined;
+      }
+      return fetchMasterOrigin(bindings, identity, origin.kind);
+    }
+    case "resolved":
+      return fetchResolvedOrigin(bindings, identity, origin);
+    case "source":
+      return fetchOrigin(bindings, identity, await origin.locate());
+  }
+}
+
 async function populateCaches(
   bindings: CloudflareBindings,
   identity: OptimizationCacheIdentity,
   cacheTag: string,
   origin: OptimizationOrigin,
-): Promise<Response> {
+): Promise<Response | undefined> {
   const key = await buildR2CacheKey(identity);
-  const rendered =
-    origin.type === "master"
-      ? await fetchMasterOrigin(bindings, identity, origin.kind)
-      : await fetchOrigin(bindings, identity, await origin.locate());
+  const rendered = await renderAtOrigin(bindings, identity, origin);
+  if (rendered === undefined) return undefined;
   const bytes = await rendered.arrayBuffer();
   const contentType = rendered.headers.get("content-type") ?? "application/octet-stream";
   await bindings.MEDIA_STORE.put(key, bytes, {
@@ -171,17 +232,23 @@ async function populateCaches(
   return new Response(bytes, { headers: { "content-type": contentType } });
 }
 
-async function deliverOptimizedImage(
+/**
+ * Delivers one Image Optimization under one cache identity: the Edge cache,
+ * then R2, then the origin. Every optimization route, v1 or v2, ends here
+ * after it has settled its subject and canonical parameters.
+ */
+export async function deliverOptimization(
   bindings: CloudflareBindings,
   identity: OptimizationCacheIdentity,
   origin: OptimizationOrigin,
+  apiVersion: ApiVersion,
 ): Promise<Response> {
   const canonicalUrl = await buildCanonicalCacheUrl(identity);
   const cacheKey = new Request(canonicalUrl);
   const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
   const cached = await caches.default.match(cacheKey);
   if (cached !== undefined) {
-    await emitDeliveryEvent(identity, "edge-hit");
+    await emitDeliveryEvent(identity, "edge-hit", apiVersion);
     return edgeBrowserResponse(cached, {
       routeClass: identity.routeClass,
       cacheStatus: "edge-hit",
@@ -194,12 +261,13 @@ async function deliverOptimizedImage(
   let response = stored;
   if (response === undefined) {
     response = await populateCaches(bindings, identity, cacheTag, origin);
+    if (response === undefined) return notFound();
   }
   const outcome = stored === undefined ? "origin" : "r2-hit";
 
   const internal = internalEdgeCacheResponse(response, identity.routeClass, cacheTag);
   await caches.default.put(cacheKey, internal.clone());
-  await emitDeliveryEvent(identity, outcome);
+  await emitDeliveryEvent(identity, outcome, apiVersion);
   return edgeBrowserResponse(internal, {
     routeClass: identity.routeClass,
     cacheStatus: outcome,
@@ -233,7 +301,7 @@ async function optimize(
     width: query.width,
     quality: query.quality,
   };
-  return deliverOptimizedImage(context.env, identity, subject.origin);
+  return deliverOptimization(context.env, identity, subject.origin, "v1");
 }
 
 function resolveSubject(gate: CapabilityGate): Promise<OptimizationSubject> {
@@ -251,27 +319,6 @@ function resolveSubject(gate: CapabilityGate): Promise<OptimizationSubject> {
 }
 
 export function registerOptimizationRoutes(app: EdgeApp): void {
-  spaceRoute(
-    app,
-    { methods: OPTIMIZATION_METHODS, path: PUBLIC_RESOLVER_ROUTE, routeClass: "public" },
-    async (context, access) => {
-      const resolverId = context.req.param("resolverId") ?? "";
-      const resolver = access.policy.resolvers.find((candidate) => candidate.id === resolverId);
-      if (resolver === undefined || resolver.type !== "uploadthing") return notFound();
-      const sourceRef = resolverSourceRef(context.req.url, resolverId);
-      if (sourceRef === undefined) return notFound();
-      const source = resolveUploadThingSource(sourceRef, resolver.allowedProjectIds);
-      if (source === undefined) return notFound();
-      return optimize(context, access, {
-        verify: "none",
-        subject: {
-          sourceId: source.sourceId,
-          origin: { type: "source", locate: async () => source.sourceUrl },
-        },
-      });
-    },
-  );
-
   spaceRoute(
     app,
     { methods: OPTIMIZATION_METHODS, path: PUBLIC_LOCATED_ROUTE, routeClass: "public" },

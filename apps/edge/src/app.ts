@@ -2,6 +2,7 @@ import { faviconIcoResponse, faviconSvgResponse } from "@shutter/assets";
 import type { JsonValue } from "@shutter/protocol";
 import { Hono } from "hono";
 import { z } from "zod";
+import { registerV2DeliveryRoutes } from "./delivery-v2-routes.js";
 import { registerOptimizationRoutes } from "./optimization-routes.js";
 import { registerSourceDeliveryRoutes } from "./source-delivery-routes.js";
 
@@ -46,6 +47,7 @@ app.get("/favicon.ico", faviconIcoResponse);
 app.get("/healthz", (context) => context.json({ ok: true, service: "edge" }));
 
 registerSourceDeliveryRoutes(app);
+registerV2DeliveryRoutes(app);
 
 app.post("/internal/v1/cache/purge", async (context) => {
   if (

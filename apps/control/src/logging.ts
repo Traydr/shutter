@@ -68,6 +68,7 @@ const EVENT_FIELD_PROJECTIONS = {
   sourceHash: "shutter.source.hash",
   processingTokenHash: "shutter.processing_token.hash",
   routeClass: "shutter.route_class",
+  apiVersion: "shutter.api.version",
   cacheOutcome: "shutter.cache.outcome",
   mediaClass: "shutter.media.class",
   byteRangeOutcome: "shutter.byte_range.outcome",

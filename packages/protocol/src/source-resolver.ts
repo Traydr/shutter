@@ -4,6 +4,7 @@ import type {
   SourceOriginRule,
   SourceResolverPolicy,
   TemplateResolverPolicy,
+  UploadThingResolverPolicy,
 } from "./types.js";
 
 /**
@@ -249,6 +250,20 @@ export function expandTemplateResolver(
   const host = substitute(template.hostLabels, named, identity).join(".");
   const path = substitute(template.pathSegments, named, encodeURIComponent).join("/");
   return `https://${host}/${path}`;
+}
+
+/**
+ * The fetch location of a resolver that needs no credential: a template, or
+ * the retired UploadThing kind, which is the template
+ * `https://{project}.ufs.sh/f/{file}` with its project allowlist.
+ */
+export function expandPublicResolver(
+  resolver: TemplateResolverPolicy | UploadThingResolverPolicy,
+  values: readonly string[],
+): string {
+  if (resolver.type === "template") return expandTemplateResolver(resolver, values);
+  const named = valuesByName(["project", "file"], values);
+  return `https://${named.get("project") ?? ""}.ufs.sh/f/${encodeURIComponent(named.get("file") ?? "")}`;
 }
 
 /** Where an S3 resolver's object lives for one reference, before signing. */

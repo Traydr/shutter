@@ -231,10 +231,8 @@ describe("delivery URLs", () => {
   it("returns relative paths when no edge base URL is configured", () => {
     const { instance } = client();
 
-    expect(
-      instance.publicResolverUrl("uploadthing", "project/file", { width: 640, quality: 75 }),
-    ).toBe(
-      `/v1/public/${SPACE}/resolver/uploadthing/${encodeURIComponent("project/file")}?w=640&q=75`,
+    expect(instance.publicMasterUrl("video", "source/one", { width: 640, quality: 75 })).toBe(
+      `/v1/public/${SPACE}/master/video/${encodeURIComponent("source/one")}?w=640&q=75`,
     );
   });
 });

@@ -41,6 +41,8 @@ export type OperationalEventName = (typeof OPERATIONAL_EVENT_NAMES)[number];
 
 export interface OperationalEventFields {
   routeClass?: RouteClass;
+  /** Which Delivery URL grammar served the request, so v1 and v2 hit rates compare. */
+  apiVersion?: "v1" | "v2";
   cacheOutcome?: "edge-hit" | "r2-hit" | "origin";
   mediaClass?: "image" | "video" | "pdf";
   byteRangeOutcome?: "none" | "edge-hit" | "origin" | "unsatisfied";
@@ -111,6 +113,7 @@ const FIELD_SCHEMAS = {
   sourceHash: z.string().regex(HASH),
   processingTokenHash: z.string().regex(HASH),
   routeClass: z.enum(["public", "private"]),
+  apiVersion: z.enum(["v1", "v2"]),
   cacheOutcome: z.enum(["edge-hit", "r2-hit", "origin"]),
   mediaClass: z.enum(["image", "video", "pdf"]),
   byteRangeOutcome: z.enum(["none", "edge-hit", "origin", "unsatisfied"]),

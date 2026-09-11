@@ -3,17 +3,16 @@
 ## Routes
 
 ```text
-GET /v1/public/{space}/resolver/{resolver}/{sourceRef}?w={width}&q={quality}
 GET /v1/public/{space}/located/{sourceId}/{capability}?w={width}&q={quality}
 GET /v1/public/{space}/master/{kind}/{sourceId}?w={width}&q={quality}
 GET /v1/private/{space}/source/{capability}?w={width}&q={quality}
 GET /v1/private/{space}/master/{capability}?w={width}&q={quality}
 ```
 
-`sourceRef` is one percent-encoded path segment interpreted only by the named,
-Space-configured Source Resolver. It is never accepted as an arbitrary URL.
+The v1 `resolver` routes were removed by ADR 0026; a Source Resolver is
+addressed through the [v2 Delivery URL](../v2/delivery-urls.md).
 
-`sourceId` is likewise one percent-encoded path segment. On the public located
+`sourceId` is one percent-encoded path segment. On the public located
 route it must equal the `image_source` claim. Edge cache and R2 are checked
 before capability decryption; the capability is required and validated only
 when Shutter must fetch the application-owned original. The capability is not
@@ -25,7 +24,8 @@ source-fetch capability expires.
 The public master route accepts `kind` values `video` and `pdf` and requires no
 capability. The private source route accepts only `image_source`. The private
 master route accepts only `master_preview`; its kind is taken from authenticated
-claims. Every route class must match configured Space policy.
+claims. Every route class must match configured Space policy. The v1 routes
+have no v2-style operation selection: `w` is required on every route above.
 
 ## Parameters
 

@@ -3,7 +3,6 @@
 ## Routes
 
 ```text
-GET|HEAD /v1/public/{space}/delivery/resolver/{resolver}/{sourceRef}
 GET|HEAD /v1/public/{space}/delivery/located/{sourceId}/{capability}
 GET|HEAD /v1/private/{space}/delivery/{capability}
 ```
@@ -12,9 +11,10 @@ Source Delivery returns unchanged Source Object bytes. It accepts only `GET` and
 `HEAD`. Other methods return `405 Method Not Allowed` with `Allow: GET, HEAD`.
 Every query parameter is invalid, including Image Optimization parameters.
 
-The resolver route derives a Source Locator from trusted Space policy. The
-located and private routes accept only a `source_delivery` capability with an
-allowlisted HTTPS locator. The public located Source ID must equal the
+Resolver sources are delivered through the [v2 Delivery URL](../v2/delivery-urls.md);
+the v1 resolver delivery route was removed by ADR 0026. The located and private
+routes accept only a `source_delivery` capability with an allowlisted HTTPS
+locator. The public located Source ID must equal the
 capability claim. Private delivery validates the capability before every cache
 lookup. A Source Capability never enters cache identity.
 
