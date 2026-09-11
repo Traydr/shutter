@@ -21,14 +21,16 @@ import {
   expandTemplateResolver,
   parseSourceReference,
   sourceFingerprint,
+  verifyAccessToken,
   verifySourceCapability,
 } from "@shutter/protocol";
-import { issueSourceCapabilityWithIv } from "@shutter/protocol/testing";
+import { issueAccessTokenWithIv, issueSourceCapabilityWithIv } from "@shutter/protocol/testing";
 import { describe, expect, it } from "vitest";
 import {
   CACHE_IDENTITY_EXPECTED,
   CACHE_IDENTITY_FIXTURE,
   RESOLVER_EXPECTED,
+  runAccessTokenConformance,
   runCapabilityConformance,
   S3_RESOLVER_FIXTURE,
   SOURCE_DELIVERY_CACHE_IDENTITY_FIXTURE,
@@ -69,6 +71,13 @@ describe("Node protocol conformance", () => {
       URL_FIXTURES.previewJob,
     );
     expect(buildSourcePurgeUrl("example-private", "source/one")).toBe(URL_FIXTURES.sourcePurge);
+  });
+
+  it("matches the shared access token fixtures", async () => {
+    await runAccessTokenConformance({
+      issueWithIv: issueAccessTokenWithIv,
+      verify: verifyAccessToken,
+    });
   });
 
   it("matches the v2 URL fixtures", () => {

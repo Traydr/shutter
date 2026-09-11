@@ -114,7 +114,8 @@ export interface PublicSpacePolicy extends BaseSpacePolicy {
 
 export interface PrivateSpacePolicy extends BaseSpacePolicy {
   routeClass: "private";
-  resolvers: readonly [];
+  /** Served on v2 behind an access token (ADR 0028); the v1 private routes ignore them. */
+  resolvers: readonly SourceResolverPolicy[];
 }
 
 export type SpacePolicy = PublicSpacePolicy | PrivateSpacePolicy;

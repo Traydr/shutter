@@ -3,10 +3,12 @@ import {
   buildMasterPreviewKey,
   buildR2CacheKey,
   buildSourceCacheTag,
+  verifyAccessToken,
   verifySourceCapability,
 } from "@shutter/protocol";
-import { issueSourceCapabilityWithIv } from "@shutter/protocol/testing";
+import { issueAccessTokenWithIv, issueSourceCapabilityWithIv } from "@shutter/protocol/testing";
 import {
+  runAccessTokenConformance,
   runCapabilityConformance,
   TEST_CAPABILITY_KEY,
   TEST_CAPABILITY_KID,
@@ -62,7 +64,14 @@ function snapshotResponse(): Response {
         qualities: [30, 75, 80],
         defaultQuality: 75,
         allowedSourceOrigins: [{ origin: "https://sources.example.com", pathPrefix: "/private" }],
-        resolvers: [],
+        resolvers: [
+          {
+            id: "media",
+            type: "template",
+            url: "https://sources.example.com/private/originals/{key}",
+            placeholders: { key: {} },
+          },
+        ],
       },
     ],
     capabilityKeys: {
@@ -493,7 +502,6 @@ describe("edge app", () => {
       "/v2/example-public/ut/example-project/%2e%2e",
       "/v2/example-public/ut/example-project/bad%2",
       "/v2/example-public/nope/file_key-1",
-      "/v2/example-private/media/file_key-1",
       "/v2/missing/media/file_key-1",
     ]) {
       const missing = await SELF.fetch(`https://edge.shutter.test${path}?w=640&q=75`);
@@ -674,11 +682,145 @@ describe("edge app", () => {
   });
 });
 
+async function accessToken(
+  purpose: "source_delivery" | "image_source" | "master_preview",
+  sourceId: string,
+  ivSeed: number,
+  kind?: "video" | "pdf",
+  lifetime: { iat: number; exp: number } = {
+    iat: Math.floor(Date.now() / 1000) - 60,
+    exp: Math.floor(Date.now() / 1000) + 3_600,
+  },
+): Promise<string> {
+  const claims = {
+    space_id: "example-private",
+    source_id: sourceId,
+    purpose,
+    iat: lifetime.iat,
+    exp: lifetime.exp,
+  };
+  return issueAccessTokenWithIv(
+    kind === undefined ? claims : { ...claims, kind },
+    { kid: TEST_CAPABILITY_KID, key: TEST_CAPABILITY_KEY },
+    Uint8Array.from({ length: 12 }, (_, index) => (index + ivSeed) % 256),
+  );
+}
+
+describe("private v2 delivery", () => {
+  const base = "https://edge.shutter.test/v2/example-private/media/key-1";
+
+  it("requires a token before any cache read and never redirects", async () => {
+    const identity = {
+      routeClass: "private" as const,
+      spaceId: "example-private",
+      sourceId: "media/key-1",
+      input: { type: "source" as const },
+      width: 640,
+      quality: 75,
+    };
+    await env.MEDIA_STORE.put(await buildR2CacheKey(identity), "private-v2-image", {
+      httpMetadata: { contentType: "image/webp" },
+    });
+    const missing = await SELF.fetch(`${base}?w=640&q=75`);
+    expect(missing.status).toBe(403);
+    expect(missing.headers.get("cache-control")).toBe("private, no-store");
+
+    const token = await accessToken("image_source", "media/key-1", 100);
+    const tampered = await SELF.fetch(`${base}?w=640&q=75&token=${tamper(token)}`);
+    expect(tampered.status).toBe(403);
+    expect(await tampered.text()).not.toContain("private-v2-image");
+
+    const first = await SELF.fetch(`${base}?w=639&token=${token}`, { redirect: "manual" });
+    expect(first.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store");
+    expect(first.headers.get("cache-tag")).toBeNull();
+    expect(first.headers.get("x-shutter-cache")).toBe("r2-hit");
+    expect(await first.text()).toBe("private-v2-image");
+
+    const warm = await SELF.fetch(`${base}?w=640&q=75&token=${token}`);
+    expect(warm.headers.get("x-shutter-cache")).toBe("edge-hit");
+    const warmWithoutToken = await SELF.fetch(`${base}?w=640&q=75`);
+    expect(warmWithoutToken.status).toBe(403);
+
+    // An expired token is refused on the warm cache too: the gate runs before
+    // every cache read, with the Worker's own clock.
+    const now = Math.floor(Date.now() / 1000);
+    const expired = await accessToken("image_source", "media/key-1", 130, undefined, {
+      iat: now - 7_200,
+      exp: now - 1,
+    });
+    const stale = await SELF.fetch(`${base}?w=640&q=75&token=${expired}`);
+    expect(stale.status).toBe(403);
+    expect(await stale.text()).not.toContain("private-v2-image");
+
+    // Without a token, an unknown resolver answers exactly like a known one.
+    const swept = await SELF.fetch("https://edge.shutter.test/v2/example-private/nope/key-1");
+    expect(swept.status).toBe(403);
+    const sweptWithToken = await SELF.fetch(
+      `https://edge.shutter.test/v2/example-private/nope/key-1?token=${token}`,
+    );
+    expect(sweptWithToken.status).toBe(404);
+  });
+
+  it("binds the token purpose to the operation and the kind to the preview", async () => {
+    const deliveryToken = await accessToken("source_delivery", "media/key-1", 110);
+    const imageToken = await accessToken("image_source", "media/key-1", 120);
+    const masterToken = await accessToken("master_preview", "media/key-1", 130, "video");
+    const otherSource = await accessToken("image_source", "media/key-2", 140);
+
+    expect((await SELF.fetch(`${base}?w=640&q=75&token=${deliveryToken}`)).status).toBe(403);
+    expect((await SELF.fetch(`${base}?token=${imageToken}`)).status).toBe(403);
+    expect((await SELF.fetch(`${base}?preview=pdf&w=640&q=75&token=${masterToken}`)).status).toBe(
+      403,
+    );
+    expect((await SELF.fetch(`${base}?w=640&q=75&token=${otherSource}`)).status).toBe(403);
+    expect(
+      (await SELF.fetch("https://edge.shutter.test/v2/example-private/media/key-1/x?w=640&token=x"))
+        .status,
+    ).toBe(404);
+
+    const origin = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const body = JSON.parse(await request.text());
+      expect(body.input).toEqual({ type: "resolved", resolverId: "media", reference: ["key-1"] });
+      return new Response("rendered-private-v2", { headers: { "content-type": "image/webp" } });
+    });
+    vi.stubGlobal("fetch", configFetch(origin));
+    const rendered = await SELF.fetch(`${base}?w=640&q=75&token=${imageToken}`);
+    expect(rendered.status).toBe(200);
+    expect(rendered.headers.get("x-shutter-cache")).toBe("origin");
+    expect(await rendered.text()).toBe("rendered-private-v2");
+  });
+
+  it("delivers the original behind a delivery token and drops cache tags", async () => {
+    const origin = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("private-bytes", {
+          headers: { "content-type": "image/jpeg", "content-length": "13" },
+        }),
+    );
+    vi.stubGlobal("fetch", configFetch(origin));
+    const token = await accessToken("source_delivery", "media/key-1", 150);
+    const response = await SELF.fetch(`${base}?token=${token}`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("cache-tag")).toBeNull();
+    expect(await response.text()).toBe("private-bytes");
+    expect(String(origin.mock.calls[0]?.[0])).toBe(
+      "https://sources.example.com/private/originals/key-1",
+    );
+  });
+});
+
 describe("workerd protocol conformance", () => {
   it("matches the shared AES-GCM fixtures", async () => {
     await runCapabilityConformance({
       issueWithIv: issueSourceCapabilityWithIv,
       verify: verifySourceCapability,
+    });
+    await runAccessTokenConformance({
+      issueWithIv: issueAccessTokenWithIv,
+      verify: verifyAccessToken,
     });
   });
 

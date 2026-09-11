@@ -227,19 +227,22 @@ describe("PostgresSpaceRegistry", () => {
     ).rejects.toThrow("route class is immutable");
   });
 
-  it("rejects a Source Resolver for a private Space in direct SQL", async () => {
+  it("stores a Source Resolver on a private Space since migration 0004", async () => {
     await registry.createSpace(privatePolicy);
-    const space = await test.pool.query<{ id: number }>(
-      `select id from spaces where space_id = $1`,
-      [privatePolicy.id],
-    );
-    await expect(
-      test.pool.query(
-        `insert into space_resolvers (space_id, resolver_id, resolver_type, config)
-         values ($1, 'media', 'template', '{}'::jsonb)`,
-        [space.rows[0]?.id],
-      ),
-    ).rejects.toThrow("private Space cannot have a Source Resolver");
+    await registry.editResolver(privatePolicy.id, {
+      resolverId: "media",
+      resolver: {
+        id: "media",
+        type: "template",
+        url: "https://private.example.com/{key}",
+        placeholders: { key: {} },
+      },
+      create: true,
+    });
+    await expect(registry.getActiveSpacePolicy(privatePolicy.id)).resolves.toMatchObject({
+      routeClass: "private",
+      resolvers: [{ id: "media" }],
+    });
   });
 
   it("issues, verifies, and revokes a globally unique hashed API token", async () => {

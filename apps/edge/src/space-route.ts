@@ -20,7 +20,12 @@ export interface SpaceRouteAccess {
  */
 export function spaceRoute(
   app: Hono<EdgeEnv>,
-  options: { methods: readonly string[]; path: string; routeClass: RouteClass },
+  options: {
+    methods: readonly string[];
+    path: string;
+    /** The one route class the path serves; absent when it serves both. */
+    routeClass?: RouteClass;
+  },
   handler: (context: Context<EdgeEnv>, access: SpaceRouteAccess) => Promise<Response>,
 ): void {
   app.on([...options.methods], options.path, async (context) => {
@@ -32,7 +37,10 @@ export function spaceRoute(
       if (spaceId === undefined || spaceId === "") return notFound();
       const snapshot = await getEdgeConfig(context.env, context.executionCtx);
       const policy = snapshot.policyFor(spaceId);
-      if (policy === undefined || policy.routeClass !== options.routeClass) return notFound();
+      if (policy === undefined) return notFound();
+      if (options.routeClass !== undefined && policy.routeClass !== options.routeClass) {
+        return notFound();
+      }
       return await handler(context, { spaceId, policy, snapshot });
     } catch (error) {
       return protocolFailure(error);

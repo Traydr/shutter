@@ -1,6 +1,7 @@
 import {
   type JsonValue,
   parsePreviewJobSubmission,
+  verifyAccessToken,
   verifySourceCapability,
 } from "@shutter/protocol";
 import { describe, expect, it } from "vitest";
@@ -382,5 +383,40 @@ describe("v2 polling and problems", () => {
     await expect(
       instance.purgeV2Source({ resolverId: "media", reference: "k" }),
     ).rejects.toMatchObject({ status: 503, code: "service_unavailable", requestId: "req-42" });
+  });
+});
+
+describe("v2 private delivery", () => {
+  it("mints a token whose purpose and kind follow the requested operation", async () => {
+    const { instance } = client({ edgeBaseUrl: "https://edge.example.test" });
+    const source = { resolverId: "media", reference: "tour.mp4" };
+    const cases = [
+      { options: {}, purpose: "source_delivery" as const, kind: undefined },
+      { options: { width: 640, quality: 75 }, purpose: "image_source" as const, kind: undefined },
+      {
+        options: { preview: "video" as const, width: 640 },
+        purpose: "master_preview" as const,
+        kind: "video" as const,
+      },
+    ];
+    for (const item of cases) {
+      const url = new URL(await instance.v2PrivateDeliveryUrl(source, item.options));
+      expect(url.pathname).toBe(`/v2/${SPACE}/media/tour.mp4`);
+      const token = url.searchParams.get("token") ?? "";
+      expect(token.startsWith("v2.")).toBe(true);
+      const verification = {
+        spaceId: SPACE,
+        expectedPurpose: item.purpose,
+        expectedSourceId: "media/tour.mp4",
+        keys: KEYS,
+        now: nowSeconds(),
+      };
+      const claims = await verifyAccessToken(
+        token,
+        item.kind === undefined ? verification : { ...verification, expectedKind: item.kind },
+      );
+      expect(claims.purpose).toBe(item.purpose);
+      expect(claims.kind).toBe(item.kind);
+    }
   });
 });

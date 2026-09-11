@@ -94,7 +94,7 @@ const HINTS = {
   generation:
     "The registry generation increments on every Space or policy change. The Edge Worker reports which generation it last loaded, so equal numbers mean the Edge serves current policy.",
   routeClass:
-    "Fixed at creation. A public Space serves allowlisted provider files through its resolvers. A private Space requires a Source Capability on every request.",
+    "Fixed at creation. A public Space serves its resolver sources to anyone. A private Space requires an access token (v2) or a Source Capability (v1) on every request.",
   identifier:
     "Lowercase letters, digits, - and _, up to 64 characters. It appears in every Delivery URL, cannot change, and is never reused after decommissioning.",
   qualities:
@@ -357,7 +357,6 @@ function resolverRows(model: SpaceDetail): string {
 
 function resolverSection(model: SpaceDetail, active: boolean): string {
   const { policy } = model.space;
-  if (policy.routeClass !== "public") return "";
   const id = encodeURIComponent(policy.id);
   const add = active
     ? `<a class="btn sm" href="/admin/spaces/${id}/resolvers/new?kind=template">+ Template</a><a class="btn sm" href="/admin/spaces/${id}/resolvers/new?kind=template&amp;preset=uploadthing">+ UploadThing</a><a class="btn sm" href="/admin/spaces/${id}/resolvers/new?kind=s3">+ S3 bucket</a>`
@@ -723,7 +722,7 @@ export function spaceView(model: SpaceDetail): string {
         <aside class="side">
           <nav class="jump" aria-label="Sections">
             <a href="#policy">Policy</a>
-            ${policy.routeClass === "public" ? `<a href="#resolvers">Resolvers<b>${policy.resolvers.length}</b></a>` : ""}
+            <a href="#resolvers">Resolvers<b>${policy.resolvers.length}</b></a>
             <a href="#tokens">API tokens<b>${activeTokens}</b></a>
             <a href="#keys">Capability Keys<b>${acceptingKeys}</b></a>
             ${decommissionJump}

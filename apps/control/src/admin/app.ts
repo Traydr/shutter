@@ -447,8 +447,8 @@ export function createAdminApp(runtime: AdminRuntime): Hono<AdminEnv> {
       currentSpace(registry, context.req.param("spaceId")),
       registry.getGeneration(),
     ]);
-    if (space.status !== "active" || space.policy.routeClass !== "public") {
-      throw new SpaceRegistryError("invalid", "Only an active public Space takes resolvers.");
+    if (space.status !== "active") {
+      throw new SpaceRegistryError("invalid", "Only an active Space takes resolvers.");
     }
     const model: ResolverEditor = {
       csrfToken: session.csrfToken,

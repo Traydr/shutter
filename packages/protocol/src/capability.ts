@@ -1,9 +1,14 @@
 import { z } from "zod";
+import {
+  type CapabilityKeyMaterial,
+  importAesGcmKey,
+  KEY_ID_PATTERN,
+  utf8Decoder,
+} from "./aes-key.js";
 import { decodeBase64Url, encodeBase64Url } from "./base64url.js";
 import { copyBytes, encodeUtf8, frameStrings } from "./binary.js";
 import {
   CAPABILITY_IV_BYTES,
-  CAPABILITY_KEY_BYTES,
   CAPABILITY_MAX_BYTES,
   CAPABILITY_MAX_LIFETIME_SECONDS,
   CAPABILITY_TAG_BITS,
@@ -15,10 +20,7 @@ import type { JsonValue } from "./json.js";
 import { validateSourceLocator } from "./source-locator.js";
 import type { CapabilityPurpose, SourceCapabilityClaims, SourceOriginRule } from "./types.js";
 
-const KEY_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
-const textDecoder = new TextDecoder("utf-8", { fatal: true });
-
-export type CapabilityKeyMaterial = Uint8Array | CryptoKey;
+export type { CapabilityKeyMaterial };
 
 export interface IssueCapabilityOptions {
   kid: string;
@@ -39,18 +41,6 @@ type ClaimsForPurpose<Purpose extends CapabilityPurpose> = Extract<
   SourceCapabilityClaims,
   { purpose: Purpose }
 >;
-
-function isCryptoKey(value: CapabilityKeyMaterial): value is CryptoKey {
-  return "algorithm" in value && "usages" in value;
-}
-
-async function importKey(key: CapabilityKeyMaterial, usage: KeyUsage): Promise<CryptoKey> {
-  if (isCryptoKey(key)) return key;
-  if (key.byteLength !== CAPABILITY_KEY_BYTES) {
-    throw new ProtocolError("claims_invalid", "capability keys must be 256 bits");
-  }
-  return crypto.subtle.importKey("raw", copyBytes(key), { name: "AES-GCM" }, false, [usage]);
-}
 
 function associatedData(
   spaceId: string,
@@ -255,7 +245,7 @@ export async function issueSourceCapabilityWithIvInternal(
     allowedSourceOrigins: fields.locator ? [{ origin: issuanceOrigin }] : [],
   });
 
-  const key = await importKey(options.key, "encrypt");
+  const key = await importAesGcmKey(options.key, "encrypt");
   const iv = copyBytes(ivInput);
   const ciphertext = await crypto.subtle.encrypt(
     {
@@ -304,7 +294,7 @@ export async function verifySourceCapability<Purpose extends CapabilityPurpose>(
     throw new ProtocolError("capability_malformed", "capability IV must be 96 bits");
   }
   const ciphertext = decodeBase64Url(ciphertextValue);
-  const key = await importKey(keyMaterial, "decrypt");
+  const key = await importAesGcmKey(keyMaterial, "decrypt");
 
   let plaintext: ArrayBuffer;
   try {
@@ -324,7 +314,7 @@ export async function verifySourceCapability<Purpose extends CapabilityPurpose>(
 
   let parsed: JsonValue;
   try {
-    parsed = JSON.parse(textDecoder.decode(plaintext));
+    parsed = JSON.parse(utf8Decoder.decode(plaintext));
   } catch {
     throw new ProtocolError("claims_invalid", "capability plaintext is not valid UTF-8 JSON");
   }

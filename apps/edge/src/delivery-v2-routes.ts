@@ -9,6 +9,7 @@ import {
   type SourceReference,
   type SourceResolverPolicy,
   validateSourceLocator,
+  verifyAccessToken,
 } from "@shutter/protocol";
 import type { Context, Hono } from "hono";
 import { methodNotAllowed, notFound } from "./http-responses.js";
@@ -22,8 +23,9 @@ type EdgeApp = Hono<EdgeEnv>;
 /**
  * `/v2/{space}/{resolver}/{reference}`: one route, every operation. The query
  * selects Source Delivery, Image Optimization, or the Master Preview; the
- * resolver and reference name the source (ADR 0026). Private Spaces gain the
- * same route with a token gate in a later PR; until then they answer 404 here.
+ * resolver and reference name the source (ADR 0026). A private Space takes
+ * the same route and requires an access token whose purpose matches the
+ * operation, validated before any cache read (ADR 0028).
  */
 const V2_ROUTE = "/v2/:spaceId/:resolverId/*";
 const V2_METHODS = ["GET", "HEAD"] as const;
@@ -87,6 +89,51 @@ async function resolveThroughControl(
   return parseResolveResponse(await response.json()).locator;
 }
 
+/**
+ * The private gate: the token must name this Source ID and the purpose the
+ * query selected, with the kind for a Master Preview. Any failure is a
+ * ProtocolError, which the route prologue turns into a 403.
+ */
+async function authorizePrivate(
+  access: SpaceRouteAccess,
+  sourceId: string,
+  operation: DeliveryOperation,
+  token: string,
+): Promise<void> {
+  const keys = access.snapshot.keysFor(access.spaceId);
+  const now = Math.floor(Date.now() / 1000);
+  switch (operation.type) {
+    case "source_delivery":
+      await verifyAccessToken(token, {
+        spaceId: access.spaceId,
+        expectedPurpose: "source_delivery",
+        expectedSourceId: sourceId,
+        keys,
+        now,
+      });
+      return;
+    case "image_optimization":
+      await verifyAccessToken(token, {
+        spaceId: access.spaceId,
+        expectedPurpose: "image_source",
+        expectedSourceId: sourceId,
+        keys,
+        now,
+      });
+      return;
+    case "master_preview":
+      await verifyAccessToken(token, {
+        spaceId: access.spaceId,
+        expectedPurpose: "master_preview",
+        expectedSourceId: sourceId,
+        expectedKind: operation.kind,
+        keys,
+        now,
+      });
+      return;
+  }
+}
+
 function canonicalRedirect(requestUrl: string, operation: DeliveryOperation): Response {
   const canonical = new URL(requestUrl);
   canonical.search = `?${canonicalDeliveryQuery(operation)}`;
@@ -97,6 +144,15 @@ function canonicalRedirect(requestUrl: string, operation: DeliveryOperation): Re
 }
 
 async function serveV2(context: Context<EdgeEnv>, access: SpaceRouteAccess): Promise<Response> {
+  const search = new URL(context.req.url).searchParams;
+  // On a private Space the query, token included, is checked before the
+  // resolver is looked up, so a request without a token learns nothing about
+  // which resolvers and references the Space has.
+  const grant =
+    access.policy.routeClass === "private"
+      ? parseDeliveryQuery(search, access.policy, { token: "required" })
+      : undefined;
+
   const resolverId = context.req.param("resolverId") ?? "";
   const resolver = access.policy.resolvers.find((candidate) => candidate.id === resolverId);
   if (resolver === undefined) return notFound();
@@ -105,9 +161,10 @@ async function serveV2(context: Context<EdgeEnv>, access: SpaceRouteAccess): Pro
   const reference = parseSourceReference(resolver, segments);
   if (reference === undefined) return notFound();
 
-  const { operation } = parseDeliveryQuery(new URL(context.req.url).searchParams, access.policy, {
-    token: "forbidden",
-  });
+  const { operation } = grant ?? parseDeliveryQuery(search, access.policy, { token: "forbidden" });
+  if (grant !== undefined) {
+    await authorizePrivate(access, reference.sourceId, grant.operation, grant.token);
+  }
   const identity = { routeClass: access.policy.routeClass, spaceId: access.spaceId };
 
   if (operation.type === "source_delivery") {
@@ -123,7 +180,10 @@ async function serveV2(context: Context<EdgeEnv>, access: SpaceRouteAccess): Pro
   // The contract permits HEAD on Source Delivery only; an optimization is
   // refused before any redirect, cache read, or origin render.
   if (context.req.method !== "GET") return methodNotAllowed("GET");
-  if (!operation.isCanonical) return canonicalRedirect(context.req.url, operation);
+  // A private URL is never redirected: the normalized values feed cache identity directly.
+  if (grant === undefined && !operation.isCanonical) {
+    return canonicalRedirect(context.req.url, operation);
+  }
   return deliverOptimization(
     context.env,
     {
@@ -150,6 +210,6 @@ function allowedMethods(requestUrl: string): string {
 }
 
 export function registerV2DeliveryRoutes(app: EdgeApp): void {
-  spaceRoute(app, { methods: V2_METHODS, path: V2_ROUTE, routeClass: "public" }, serveV2);
+  spaceRoute(app, { methods: V2_METHODS, path: V2_ROUTE }, serveV2);
   app.all(V2_ROUTE, (context) => methodNotAllowed(allowedMethods(context.req.url)));
 }
