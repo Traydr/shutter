@@ -17,6 +17,7 @@ import { type ControlLogger, operationalErrorType } from "./logging.js";
 import type { MasterStore } from "./master-store.js";
 import { registerOptimizeRoutes } from "./optimize-routes.js";
 import { bearerAuthorized } from "./origin-auth.js";
+import { problemResponse } from "./problems.js";
 import type { SourceResolverService } from "./source-resolvers.js";
 import type { SpaceRegistry } from "./spaces/registry.js";
 
@@ -181,6 +182,11 @@ export function createControlApp(
       CONTROL_HTTP_ROUTES.executorFail,
     ]) {
       control.all(route, () => unavailable());
+    }
+    for (const route of [CONTROL_HTTP_ROUTES.sourcePurgeV2, CONTROL_HTTP_ROUTES.previewJobV2]) {
+      control.all(route, (context) =>
+        problemResponse("service_unavailable", context.get("requestId")),
+      );
     }
   }
 

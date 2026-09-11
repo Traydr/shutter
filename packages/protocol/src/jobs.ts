@@ -30,6 +30,9 @@ const previewJobSubmissionSchema = z.strictObject({
   sourceCapability: nonEmptyString,
 });
 
+/** A v2 submission names its resolver source in the URL and carries nothing in the body. */
+const previewJobSubmissionV2Schema = z.strictObject({});
+
 const executorClaimSchema = z.strictObject({
   spaceId: nonEmptyString,
   sourceId: nonEmptyString,
@@ -103,4 +106,8 @@ export function parseExecutorFailRequest(input: JsonValue): ExecutorFailRequest 
   };
   if (parsed.code !== undefined) request.code = parsed.code;
   return request;
+}
+
+export function parsePreviewJobSubmissionV2(input: JsonValue): void {
+  parseWith(previewJobSubmissionV2Schema, input, "submission_invalid", "v2 submission");
 }

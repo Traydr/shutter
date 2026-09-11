@@ -60,9 +60,19 @@ describe("control app", () => {
       "http://shutter.test/v1/spaces/example-private/sources/source/previews/video",
     );
 
+    const v2Job = await control.request(
+      "http://shutter.test/v2/spaces/example-public/sources/media%2Fx/previews/video",
+    );
+
     expect(optimization.status).toBe(503);
     expect(job.status).toBe(503);
     expect(job.headers.get("cache-control")).toBe("private, no-store");
+    expect(v2Job.status).toBe(503);
+    expect(v2Job.headers.get("content-type")).toBe("application/problem+json");
+    await expect(v2Job.json()).resolves.toMatchObject({
+      code: "service_unavailable",
+      requestId: expect.any(String),
+    });
   });
 
   it("issues a server-generated request ID and ignores caller-controlled ones", async () => {

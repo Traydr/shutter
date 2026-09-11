@@ -253,8 +253,13 @@ export function buildControlRuntime(
     logger.emit("info", { event: "control.executor.delegated", kind, outcome: "ready" });
   });
 
+  const sourceResolvers =
+    spaceRegistry === undefined
+      ? undefined
+      : createSourceResolverService({ credentials: spaceRegistry, presigner: createS3Presigner() });
+
   let jobApiRuntime: JobApiRuntime | undefined;
-  if (lifecycle !== undefined && spaceRegistry !== undefined) {
+  if (lifecycle !== undefined && spaceRegistry !== undefined && sourceResolvers !== undefined) {
     jobApiRuntime = {
       logger,
       lifecycle,
@@ -262,6 +267,7 @@ export function buildControlRuntime(
       spaceRegistry,
       executorToken: (kind) => executorTokens[kind],
       dispatch,
+      sourceResolvers,
     };
     if (sourcePurge !== undefined) jobApiRuntime.sourcePurge = sourcePurge;
   }
@@ -290,13 +296,8 @@ export function buildControlRuntime(
   };
   if (masterStore !== undefined) config.masterStore = masterStore;
   if (jobApiRuntime !== undefined) config.jobApiRuntime = jobApiRuntime;
-  if (spaceRegistry !== undefined) {
-    config.spaceRegistry = spaceRegistry;
-    config.sourceResolvers = createSourceResolverService({
-      credentials: spaceRegistry,
-      presigner: createS3Presigner(),
-    });
-  }
+  if (spaceRegistry !== undefined) config.spaceRegistry = spaceRegistry;
+  if (sourceResolvers !== undefined) config.sourceResolvers = sourceResolvers;
 
   return {
     config,
