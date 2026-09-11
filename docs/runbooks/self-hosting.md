@@ -59,10 +59,13 @@ pnpm deploy:edge
 curl --fail --silent --show-error https://EDGE_DOMAIN/healthz
 ```
 
-The Worker and Control share the internal optimize wire
-(`/internal/v1/optimize-source` and `/internal/v1/optimize-master`), so a change
-to either side of that wire deploys both in the same release: Control first,
-then the Worker.
+The Worker and Control share the internal wire (`/internal/v2/optimize` and
+`/internal/v2/resolve`), so a change to either side of that wire deploys both
+in the same release, and the Worker goes first: an older Worker rejects a
+snapshot with resolver kinds it does not know and calls internal routes this
+Control no longer serves, whereas a newer Worker only answers 503 on cache
+misses until Control follows. Keep the gap between the two deploys short (see
+`docs/plans/11-api-v2.md`).
 
 Cloudflare Workers Builds needs no build variables: its non-production command
 is `pnpm --filter @shutter/edge deploy:preview` (`wrangler versions upload`)

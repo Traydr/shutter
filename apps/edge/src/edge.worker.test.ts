@@ -260,8 +260,14 @@ describe("edge app", () => {
     expect(await response.text()).toBe("rendered-private-master");
     expect(origin).toHaveBeenCalledOnce();
     expect(origin.mock.calls[0]?.[0].toString()).toBe(
-      "https://origin.shutter.test/internal/v1/optimize-master",
+      "https://origin.shutter.test/internal/v2/optimize",
     );
+    expect(JSON.parse(String(origin.mock.calls[0]?.[1]?.body))).toEqual({
+      spaceId: "example-private",
+      input: { type: "master", sourceId: "private-master-miss", kind: "pdf" },
+      width: 640,
+      quality: 75,
+    });
   });
 
   it("serves public video and PDF masters with canonical public cache identities", async () => {
@@ -409,19 +415,34 @@ describe("edge app", () => {
       "origin",
     ]);
     expect(origin).toHaveBeenCalledTimes(2);
-    const originUrls = origin.mock.calls.map(([input]) => new URL(input.toString()));
-    for (const url of originUrls) {
-      expect(url.pathname).toBe("/internal/v1/optimize-source");
-      expect(url.searchParams.has("key")).toBe(false);
-      expect([...url.searchParams.keys()].sort()).toEqual(["q", "source", "space", "w"]);
+    const originCalls = origin.mock.calls.map(([input, init]) => ({
+      url: new URL(input.toString()),
+      body: JSON.parse(String(init?.body)),
+    }));
+    for (const call of originCalls) {
+      expect(call.url.pathname).toBe("/internal/v2/optimize");
+      expect(call.url.search).toBe("");
     }
-    expect(originUrls.map((url) => url.searchParams.get("space"))).toEqual([
-      "example-private",
-      "example-public",
+    expect(originCalls.map((call) => call.body)).toEqual([
+      {
+        spaceId: "example-private",
+        input: {
+          type: "located",
+          sourceUrl: "https://sources.example.com/private/originals/private-source-miss.webp",
+        },
+        width: 640,
+        quality: 75,
+      },
+      {
+        spaceId: "example-public",
+        input: {
+          type: "located",
+          sourceUrl: "https://example-project.ufs.sh/f/public-located-miss",
+        },
+        width: 640,
+        quality: 75,
+      },
     ]);
-    expect(originUrls[0]?.searchParams.get("source")).toBe(
-      "https://sources.example.com/private/originals/private-source-miss.webp",
-    );
   });
 
   it("serves a v2 template reference from canonical public cache identity and refuses HEAD on it", async () => {
@@ -533,12 +554,11 @@ describe("edge app", () => {
         width: 640,
         quality: 75,
       })}`,
-      `POST /internal/v1/optimize-master ${JSON.stringify({
+      `POST /internal/v2/optimize ${JSON.stringify({
         spaceId: "example-public",
-        sourceId: "media/clip.mp4",
-        kind: "video",
-        w: 640,
-        q: 75,
+        input: { type: "master", sourceId: "media/clip.mp4", kind: "video" },
+        width: 640,
+        quality: 75,
       })}`,
     ]);
     const stored = (await env.MEDIA_STORE.list()).objects.map((object) => object.key);

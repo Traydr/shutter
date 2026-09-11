@@ -1,8 +1,4 @@
-import {
-  buildOptimizeSourceQuery,
-  type EdgeConfigSnapshotWire,
-  parseEdgeConfigSnapshot,
-} from "@shutter/protocol";
+import { type EdgeConfigSnapshotWire, parseEdgeConfigSnapshot } from "@shutter/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { createControlApp } from "./app.js";
 import { EdgeRefreshTracker } from "./edge-refresh-status.js";
@@ -31,15 +27,21 @@ const SPACE_REGISTRY = new MemorySpaceRegistry({
   ],
 });
 
-function spikeUrl(): string {
-  const url = new URL("http://shutter.test/internal/v1/optimize-source");
-  url.search = buildOptimizeSourceQuery({
-    spaceId: "example-private",
-    sourceUrl: "https://sources.example.com/private/originals/test.jpg",
-    width: 640,
-    quality: 75,
-  }).toString();
-  return url.href;
+const OPTIMIZE_URL = "http://shutter.test/internal/v2/optimize";
+
+function optimizeInit(spaceId: string, sourceUrl: string, authorized = true): RequestInit {
+  const headers = new Headers({ "content-type": "application/json" });
+  if (authorized) headers.set("authorization", `Bearer ${TOKEN}`);
+  return {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      spaceId,
+      input: { type: "located", sourceUrl },
+      width: 640,
+      quality: 75,
+    }),
+  };
 }
 
 describe("control app", () => {
@@ -50,9 +52,10 @@ describe("control app", () => {
       imgproxyConfig: () => IMGPROXY,
       fetch: vi.fn(),
     });
-    const optimization = await control.request(spikeUrl(), {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
+    const optimization = await control.request(
+      OPTIMIZE_URL,
+      optimizeInit("example-private", "https://sources.example.com/private/originals/test.jpg"),
+    );
     const job = await control.request(
       "http://shutter.test/v1/spaces/example-private/sources/source/previews/video",
     );
@@ -70,7 +73,8 @@ describe("control app", () => {
       imgproxyConfig: () => IMGPROXY,
       fetch: vi.fn(),
     });
-    const response = await control.request("http://shutter.test/internal/v1/optimize-source", {
+    const response = await control.request(OPTIMIZE_URL, {
+      method: "POST",
       headers: { "x-request-id": "caller-controlled-secret" },
     });
 
@@ -256,16 +260,10 @@ describe("control app", () => {
       ).status,
     ).toBe(204);
 
-    const deliveryUrl = new URL("https://shutter.test/internal/v1/optimize-source");
-    deliveryUrl.search = buildOptimizeSourceQuery({
-      spaceId: "admin-created",
-      sourceUrl: "https://sources.example.com/media/image.jpg",
-      width: 640,
-      quality: 75,
-    }).toString();
-    const optimization = await control.request(deliveryUrl, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-    });
+    const optimization = await control.request(
+      "https://shutter.test/internal/v2/optimize",
+      optimizeInit("admin-created", "https://sources.example.com/media/image.jpg"),
+    );
     expect(optimization.status).toBe(200);
     expect(fetch).toHaveBeenCalledOnce();
 
@@ -290,7 +288,7 @@ describe("control app", () => {
       fetch: vi.fn(),
     });
 
-    const response = await control.request("http://shutter.test/internal/v1/optimize-source");
+    const response = await control.request(OPTIMIZE_URL, { method: "POST" });
     const body = await response.text();
 
     expect(response.status).toBe(500);

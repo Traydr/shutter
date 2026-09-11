@@ -3,18 +3,15 @@ import {
   CONTROL_HTTP_ROUTES,
   type JsonValue,
   type OptimizeRequest,
-  type OptimizeSourceQuery,
   type PreviewKind,
   ProtocolError,
   parseOptimizeRequest,
-  parseOptimizeSourceQuery,
   parseResolveRequest,
   type ResolveRequest,
   type SpacePolicy,
   validateSourceLocator,
 } from "@shutter/protocol";
 import type { Context, Hono } from "hono";
-import { z } from "zod";
 import type { ControlRuntimeConfig } from "./app.js";
 import { buildImgproxyRequest } from "./imgproxy.js";
 import { bearerAuthorized } from "./origin-auth.js";
@@ -52,8 +49,8 @@ interface OptimizeDelegation {
 /**
  * The one imgproxy delegation: active policy or 404/503, build the signed
  * imgproxy request, fetch with redirects forbidden, then stream the bytes or
- * answer 502 with the `control.optimize.*` events. Both optimize routes are a
- * parse step in front of this.
+ * answer 502 with the `control.optimize.*` events. The optimize route parses
+ * its tagged input and settles the source URL in front of this.
  */
 async function delegateOptimization(
   runtime: ControlRuntimeConfig,
@@ -110,33 +107,6 @@ async function delegateOptimization(
     });
     return failure(502, "optimization_failed");
   }
-}
-
-/**
- * The master route's body validation stays local until a second consumer
- * appears; the source route's query already parses through the protocol.
- */
-const optimizeMasterBodySchema = z
-  .strictObject({
-    spaceId: z.string(),
-    sourceId: z.string(),
-    kind: z.enum(["video", "pdf"]),
-    w: z.int().positive(),
-    q: z.int().min(1).max(100),
-  })
-  .transform((body) => ({
-    spaceId: body.spaceId,
-    sourceId: body.sourceId,
-    kind: body.kind,
-    width: body.w,
-    quality: body.q,
-  }));
-
-type OptimizeMasterBody = z.output<typeof optimizeMasterBodySchema>;
-
-function parseOptimizeMasterBody(body: JsonValue): OptimizeMasterBody | undefined {
-  const parsed = optimizeMasterBodySchema.safeParse(body);
-  return parsed.success ? parsed.data : undefined;
 }
 
 async function jsonBody(context: Context): Promise<JsonValue | undefined> {
@@ -263,57 +233,5 @@ export function registerOptimizeRoutes(app: ControlApp, runtime: ControlRuntimeC
       { locator: resolution.locator, expiresAt: resolution.expiresAt.toISOString() },
       { status: 200, headers: NO_STORE },
     );
-  });
-
-  app.get(CONTROL_HTTP_ROUTES.optimizeSource, async (context) => {
-    if (!authorizedOrigin(context.req.header("authorization"))) return unauthorized();
-    let query: OptimizeSourceQuery;
-    try {
-      query = parseOptimizeSourceQuery(new URL(context.req.url).searchParams);
-    } catch (error) {
-      if (!(error instanceof ProtocolError)) throw error;
-      return failure(400, "request_invalid");
-    }
-    return delegateOptimization(runtime, {
-      spaceId: query.spaceId,
-      width: query.width,
-      quality: query.quality,
-      async sourceUrl(policy) {
-        try {
-          validateSourceLocator(query.sourceUrl, policy.allowedSourceOrigins);
-        } catch (error) {
-          if (error instanceof ProtocolError) return failure(403, error.code);
-          throw error;
-        }
-        return query.sourceUrl;
-      },
-    });
-  });
-
-  app.post(CONTROL_HTTP_ROUTES.optimizeMaster, async (context) => {
-    if (!authorizedOrigin(context.req.header("authorization"))) return unauthorized();
-    let body: JsonValue;
-    try {
-      if (!context.req.header("content-type")?.toLowerCase().startsWith("application/json")) {
-        throw new Error("invalid content type");
-      }
-      body = await context.req.json();
-    } catch {
-      return failure(400, "request_invalid");
-    }
-    const parsed = parseOptimizeMasterBody(body);
-    if (parsed === undefined) return failure(400, "request_invalid");
-    const masterStore = runtime.masterStore;
-    if (masterStore === undefined) return failure(503, "service_unavailable");
-    return delegateOptimization(runtime, {
-      spaceId: parsed.spaceId,
-      width: parsed.width,
-      quality: parsed.quality,
-      kind: parsed.kind,
-      async sourceUrl() {
-        const key = await buildMasterPreviewKey(parsed.spaceId, parsed.sourceId, parsed.kind);
-        return masterStore.presignGet(key);
-      },
-    });
   });
 }

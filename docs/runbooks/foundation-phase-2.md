@@ -67,7 +67,7 @@ Cloudflare values only after the new snapshot path is stable.
 
 ## Live evidence
 
-- Direct requests to `/internal/v1/optimize-source` without the Worker origin
+- Direct requests to `/internal/v2/optimize` without the Worker origin
   bearer return `401` and no bytes. imgproxy does the same without its separate
   bearer and rejects unsigned paths.
 - A private master request with a tampered, expired, wrong-Space, or
