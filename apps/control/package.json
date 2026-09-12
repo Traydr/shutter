@@ -21,6 +21,7 @@
     "@opentelemetry/exporter-logs-otlp-http": "0.221.0",
     "@opentelemetry/resources": "2.10.0",
     "@opentelemetry/sdk-logs": "0.221.0",
+    "@shutter/admin-api": "workspace:*",
     "@shutter/assets": "workspace:*",
     "@shutter/protocol": "workspace:*",
     "@t3-oss/env-core": "^0.13.11",

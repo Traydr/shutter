@@ -24,6 +24,7 @@ export type ControlFeatureName =
   | "imgproxy"
   | "executorDispatch"
   | "admin"
+  | "adminApi"
   | "edgeConfig";
 
 /** `ready`, or the environment variables whose absence disabled the feature. */
@@ -61,6 +62,7 @@ const FEATURE_INPUTS = {
   jobApi: REGISTRY_INPUTS,
   edgeConfig: [...REGISTRY_INPUTS, "EDGE_CONFIG_TOKEN"],
   admin: [...REGISTRY_INPUTS, "ADMIN_BOOTSTRAP_TOKEN"],
+  adminApi: [...REGISTRY_INPUTS, "ADMIN_API_TOKEN"],
   masterStore: [...S3_INPUTS, "S3_BUCKET"],
   sourcePurge: [
     ...REGISTRY_INPUTS,
@@ -277,6 +279,7 @@ export function buildControlRuntime(
     jobApi: statusOf(registryInputs.missing),
     edgeConfig: statusOf(readInputs(env, FEATURE_INPUTS.edgeConfig).missing),
     admin: statusOf(readInputs(env, FEATURE_INPUTS.admin).missing),
+    adminApi: statusOf(readInputs(env, FEATURE_INPUTS.adminApi).missing),
     masterStore: statusOf(masterStoreInputs.missing),
     sourcePurge: statusOf(purgeInputs.missing),
     imgproxy: statusOf(imgproxyInputs.missing),
@@ -288,6 +291,7 @@ export function buildControlRuntime(
     originAuthToken: () => env.ORIGIN_AUTH_TOKEN,
     edgeConfigToken: () => env.EDGE_CONFIG_TOKEN,
     adminBootstrapToken: () => env.ADMIN_BOOTSTRAP_TOKEN,
+    adminApiToken: () => env.ADMIN_API_TOKEN,
     imgproxyAllowedSources: () => env.IMGPROXY_ALLOWED_SOURCES,
     edgeBaseUrl: () => env.EDGE_BASE_URL,
     imgproxyConfig: () => imgproxyConfig,

@@ -166,6 +166,11 @@ write with a same-origin CSRF check. The interface calls the same Space Registry
 contract as runtime code. Full API tokens and Capability Keys appear only in the
 response that creates them; later pages show only their audit summaries.
 
+The same registry operations are JSON routes under `/v1/admin`, guarded by one
+machine credential (`ADMIN_API_TOKEN`) and documented in
+`docs/contracts/v1/admin-api.md`. The admin application calls them from its
+server; the browser never holds that credential.
+
 Decommissioning blocks new Space-scoped requests and removes the Space from
 Edge snapshots. Executor claims for jobs accepted before decommissioning can
 still read the retained policy and currently accepted Capability Keys, so the

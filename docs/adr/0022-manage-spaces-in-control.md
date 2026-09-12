@@ -1,3 +1,7 @@
+---
+status: superseded by ADR-0029
+---
+
 # Manage Spaces in Control
 
 Control owns the Postgres Space Registry and serves a small, server-rendered

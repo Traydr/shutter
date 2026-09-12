@@ -11,6 +11,7 @@ import type {
   SpaceRecord,
 } from "../spaces/registry.js";
 import { type DeploymentCoverage, sourceOriginPrefix } from "./deployment-coverage.js";
+import type { ResolverTestResult } from "./resolver-test.js";
 
 export interface AdminOverview {
   csrfToken: string;
@@ -34,17 +35,6 @@ export interface SpaceDetail {
   edgeBaseUrl?: string;
   notice?: string;
   secret?: { label: string; value: string };
-}
-
-/** What the Test panel reports; the locator itself never reaches the page. */
-export interface ResolverTestResult {
-  outcome: "ok" | "failed";
-  message: string;
-  sourceId?: string;
-  host?: string;
-  status?: number;
-  contentType?: string;
-  contentLength?: number;
 }
 
 export interface ResolverEditor {

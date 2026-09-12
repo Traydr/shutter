@@ -10,6 +10,7 @@ import {
 import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
 import { type AdminRuntime, createAdminApp } from "./admin/app.js";
+import { type AdminApiRuntime, createAdminApi } from "./admin-api.js";
 import type { EdgeRefreshTracker } from "./edge-refresh-status.js";
 import type { ImgproxyConfig } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
@@ -26,6 +27,8 @@ export interface ControlRuntimeConfig {
   originAuthToken(): string | undefined;
   edgeConfigToken?(): string | undefined;
   adminBootstrapToken?(): string | undefined;
+  /** The machine credential of the `/v1/admin` JSON routes. */
+  adminApiToken?(): string | undefined;
   imgproxyAllowedSources?(): string | undefined;
   /** Where the Edge serves from; the admin pages show complete Delivery URLs with it. */
   edgeBaseUrl?(): string | undefined;
@@ -41,12 +44,14 @@ export interface ControlRuntimeConfig {
 function safeRouteTemplate(
   context: Parameters<typeof matchedRoutes>[0],
 ): ControlHttpRoute | "<unmatched>" {
-  const matchedRoute = matchedRoutes(context)
-    .map((matched) => matched.path)
-    .filter((path) => path !== "*" && path !== "/*")
-    .at(-1);
+  // The last allowlisted template wins: a prefix middleware or a catch-all
+  // that also matched is not the route the request was served by.
+  const templates = Object.values(CONTROL_HTTP_ROUTES);
   return (
-    Object.values(CONTROL_HTTP_ROUTES).find((route) => route === matchedRoute) ?? "<unmatched>"
+    matchedRoutes(context)
+      .map((matched) => templates.find((route) => route === matched.path))
+      .filter((route) => route !== undefined)
+      .at(-1) ?? "<unmatched>"
   );
 }
 
@@ -170,6 +175,15 @@ export function createControlApp(
   if (runtime.spaceRegistry !== undefined) adminOptions.registry = runtime.spaceRegistry;
   if (runtime.sourceResolvers !== undefined) adminOptions.sourceResolvers = runtime.sourceResolvers;
   control.route("/admin", createAdminApp(adminOptions));
+  const adminApiOptions: AdminApiRuntime = {
+    token: () => runtime.adminApiToken?.(),
+    registry: runtime.spaceRegistry,
+    sourceResolvers: runtime.sourceResolvers,
+    imgproxyAllowedSources: () => runtime.imgproxyAllowedSources?.(),
+    edgeRefreshStatus: () => runtime.edgeRefreshTracker?.latest(),
+    edgeBaseUrl: () => runtime.edgeBaseUrl?.(),
+  };
+  control.route("/", createAdminApi(adminApiOptions));
   if (runtime.jobApiRuntime !== undefined) {
     control.route("/", createJobApi(runtime.jobApiRuntime));
   } else {

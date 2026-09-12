@@ -306,3 +306,52 @@ describe("control app", () => {
     expect(body).not.toContain("sentinel-secret-error-message");
   });
 });
+
+describe("control app admin API", () => {
+  it("mounts the admin routes, logs their templates, and answers unknown admin paths as problems", async () => {
+    const emit = vi.fn();
+    const control = createControlApp({
+      logger: { emit, async shutdown() {} },
+      originAuthToken: () => TOKEN,
+      adminApiToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch: vi.fn(),
+      spaceRegistry: new MemorySpaceRegistry(),
+      edgeRefreshTracker: new EdgeRefreshTracker(),
+    });
+    const headers = { authorization: `Bearer ${TOKEN}` };
+
+    const overview = await control.request("http://shutter.test/v1/admin/overview", { headers });
+    expect(overview.status).toBe(200);
+    await expect(overview.json()).resolves.toMatchObject({ generation: 0, spaces: [] });
+    expect(emit).toHaveBeenLastCalledWith(
+      "info",
+      expect.objectContaining({
+        event: "control.http.completed",
+        httpRoute: "/v1/admin/overview",
+        httpStatusCode: 200,
+      }),
+    );
+
+    const missing = await control.request("http://shutter.test/v1/admin/spaces/nobody", {
+      headers,
+    });
+    expect(missing.status).toBe(404);
+    expect(emit).toHaveBeenLastCalledWith(
+      "info",
+      expect.objectContaining({ httpRoute: "/v1/admin/spaces/:spaceId", httpStatusCode: 404 }),
+    );
+
+    const unknown = await control.request("http://shutter.test/v1/admin/nothing", { headers });
+    expect(unknown.status).toBe(404);
+    expect(unknown.headers.get("content-type")).toBe("application/problem+json");
+    await expect(unknown.json()).resolves.toMatchObject({
+      code: "not_found",
+      requestId: expect.any(String),
+    });
+    expect(emit).toHaveBeenLastCalledWith(
+      "info",
+      expect.objectContaining({ httpRoute: "<unmatched>", httpStatusCode: 404 }),
+    );
+  });
+});
