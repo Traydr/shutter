@@ -279,6 +279,7 @@ server from booting.
 | `SHUTTER_ENCRYPTION_KEY` | Master key for Capability Keys stored in the Space Registry |
 | `EDGE_CONFIG_TOKEN` | Dedicated credential shared by Control and Edge for snapshot reads |
 | `ADMIN_BOOTSTRAP_TOKEN` | Bootstrap login for Control's server-rendered `/admin` interface |
+| `ADMIN_API_TOKEN` | Machine credential for the `/v1/admin` JSON routes the admin application and operator scripts call |
 | `S3_ENDPOINT`, `S3_BUCKET`, `S3_*` | Media Store, shared verbatim with imgproxy and both Executors |
 | `IMGPROXY_BASE_URL`, `IMGPROXY_KEY`, `IMGPROXY_SALT`, `IMGPROXY_SECRET` | On-demand image rendering |
 | `EDGE_BASE_URL`, `ORIGIN_AUTH_TOKEN` | Delivery edge; the token must match the Worker's value exactly |

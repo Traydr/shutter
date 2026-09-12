@@ -73,6 +73,16 @@ always Secure, so use an HTTPS local proxy or exercise the interface through
 the tests. Set `IMGPROXY_ALLOWED_SOURCES` on Control to let the dashboard compare
 the deployed imgproxy guard with active Space origins.
 
+The same operations are available as JSON under `/v1/admin` when
+`ADMIN_API_TOKEN` (also at least 32 characters) is set; the contract is in
+`docs/contracts/v1/admin-api.md` and `@shutter/admin-api` has a typed client.
+From a shell:
+
+```sh
+curl -sS -H "Authorization: Bearer $ADMIN_API_TOKEN" \
+  http://localhost:3000/v1/admin/overview
+```
+
 The video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
 `poppler-utils`.
 

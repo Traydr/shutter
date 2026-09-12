@@ -104,6 +104,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
 
   const controlSecretEnv: Record<string, VariableValue> = seeded
     ? preserved([
+        "ADMIN_API_TOKEN",
         "ADMIN_BOOTSTRAP_TOKEN",
         "CLOUDFLARE_CACHE_PURGE_TOKEN",
         "EDGE_CONFIG_TOKEN",
@@ -149,7 +150,12 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
       builder: "RAILPACK",
       buildEnvironment: "V3",
       buildCommand: "pnpm --filter @shutter/control... build",
-      watchPatterns: ["/apps/control/**", "/packages/protocol/**", ...workspaceWatchPatterns],
+      watchPatterns: [
+        "/apps/control/**",
+        "/packages/admin-api/**",
+        "/packages/protocol/**",
+        ...workspaceWatchPatterns,
+      ],
     },
     start: "pnpm --filter @shutter/control start",
     preDeploy: "pnpm --filter @shutter/control db:migrate",

@@ -124,6 +124,8 @@ const STATUS = {
   service_unavailable: 503,
   configuration_error: 503,
   internal_invariant: 409,
+  conflict: 409,
+  payload_too_large: 413,
 } as const satisfies Record<ProblemCode, number>;
 
 const RESOLVER_ID_PATTERN = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/u;

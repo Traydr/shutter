@@ -35,7 +35,7 @@ pnpm deployment:apply
 ```
 
 Credentials (`SHUTTER_ENCRYPTION_KEY`, `ADMIN_BOOTSTRAP_TOKEN`,
-`ORIGIN_AUTH_TOKEN`, `EDGE_CONFIG_TOKEN`, the executor tokens, imgproxy
+`ADMIN_API_TOKEN`, `ORIGIN_AUTH_TOKEN`, `EDGE_CONFIG_TOKEN`, the executor tokens, imgproxy
 key/salt/secret, S3 keys, the Cloudflare purge token, and OTLP settings) are set
 directly on the Railway services and never enter this repository. Once they
 exist, set `SHUTTER_SECRETS_SEEDED=true` in the input so later plans

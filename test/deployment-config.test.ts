@@ -53,6 +53,7 @@ describe("deployment configuration", () => {
       "control.example.com": { port: 8080 },
     });
     expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toBeUndefined();
+    expect(control.variables.ADMIN_API_TOKEN).toBeUndefined();
     expect(control.variables.S3_ACCESS_KEY_ID).toBeUndefined();
     expect(control.variables.S3_BUCKET).toMatchObject({
       type: "literal",
@@ -87,6 +88,7 @@ describe("deployment configuration", () => {
       ),
     ).toBe(true);
     expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toEqual({ type: "preserve" });
+    expect(control.variables.ADMIN_API_TOKEN).toEqual({ type: "preserve" });
     expect(control.variables.SHUTTER_ENCRYPTION_KEY).toEqual({ type: "preserve" });
     expect(control.variables.S3_ACCESS_KEY_ID).toEqual({ type: "preserve" });
     // Non-secret values stay literals: changing the input must change the plan

@@ -17,6 +17,18 @@ export const CONTROL_HTTP_ROUTES = {
   executorHeartbeat: "/internal/v1/executors/:kind/jobs/:spaceId/:sourceId/heartbeat",
   executorComplete: "/internal/v1/executors/:kind/jobs/:spaceId/:sourceId/complete",
   executorFail: "/internal/v1/executors/:kind/jobs/:spaceId/:sourceId/fail",
+  adminOverview: "/v1/admin/overview",
+  adminSpaces: "/v1/admin/spaces",
+  adminSpace: "/v1/admin/spaces/:spaceId",
+  adminSpacePolicy: "/v1/admin/spaces/:spaceId/policy",
+  adminSpaceDecommission: "/v1/admin/spaces/:spaceId/decommission",
+  adminResolvers: "/v1/admin/spaces/:spaceId/resolvers",
+  adminResolver: "/v1/admin/spaces/:spaceId/resolvers/:resolverId",
+  adminResolverTest: "/v1/admin/spaces/:spaceId/resolvers/:resolverId/test",
+  adminApiTokens: "/v1/admin/spaces/:spaceId/api-tokens",
+  adminApiTokenRevoke: "/v1/admin/spaces/:spaceId/api-tokens/:tokenId/revoke",
+  adminCapabilityKeys: "/v1/admin/spaces/:spaceId/capability-keys",
+  adminCapabilityKeyDisable: "/v1/admin/spaces/:spaceId/capability-keys/:keyId/disable",
 } as const;
 
 export type ControlHttpRoute = (typeof CONTROL_HTTP_ROUTES)[keyof typeof CONTROL_HTTP_ROUTES];

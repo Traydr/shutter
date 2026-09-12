@@ -4,14 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import type { EdgeRefreshStatus } from "../edge-refresh-status.js";
 import type { SourceResolverService } from "../source-resolvers.js";
 import { type SpaceRecord, type SpaceRegistry, SpaceRegistryError } from "../spaces/registry.js";
-import {
-  type AddressLookup,
-  assertPublicHost,
-  displayMediaType,
-  type LocationProbe,
-  type ProbeLocation,
-  probeLocation as probeOverHttps,
-} from "./address-guard.js";
+import type { AddressLookup, ProbeLocation } from "./address-guard.js";
 import { deploymentCoverage } from "./deployment-coverage.js";
 import {
   AdminInputError,
@@ -22,6 +15,7 @@ import {
   parseTestReference,
   resolverKind,
 } from "./input.js";
+import { testResolver } from "./resolver-test.js";
 import { type AdminSession, AdminSessionManager } from "./session.js";
 import {
   type AdminOverview,
@@ -29,7 +23,6 @@ import {
   loginView,
   overviewView,
   type ResolverEditor,
-  type ResolverTestResult,
   resolverEditorView,
   type SpaceDetail,
   spaceView,
@@ -50,9 +43,6 @@ export interface AdminRuntime {
   edgeBaseUrl?(): string | undefined;
   now?(): number;
 }
-
-const RESOLVER_TEST_TIMEOUT_MS = 5_000;
-const RESOLVER_TEST_LIFETIME_SECONDS = 60;
 
 type AdminEnv = { Variables: { session: AdminSession; form: FormData } };
 
@@ -141,92 +131,6 @@ async function existingResolver(registry: SpaceRegistry, spaceId: string, resolv
     throw new SpaceRegistryError("not_found", "The resolver does not exist.");
   }
   return { space, resolver };
-}
-
-/**
- * Resolves a sample reference exactly as a request would and fetches its first
- * byte. The location is reported by host only, so a presigned URL never lands
- * on an admin page.
- */
-async function testResolver(
-  runtime: AdminRuntime,
-  space: SpaceRecord,
-  resolverId: string,
-  reference: readonly string[],
-): Promise<ResolverTestResult> {
-  const resolvers = runtime.sourceResolvers;
-  const probeLocation = runtime.probeLocation ?? probeOverHttps;
-  if (resolvers === undefined) {
-    return { outcome: "failed", message: "Resolver testing is not configured on this Control." };
-  }
-  const resolution = await resolvers.resolve({
-    policy: space.policy,
-    resolverId,
-    reference,
-    lifetimeSeconds: RESOLVER_TEST_LIFETIME_SECONDS,
-    now: new Date(),
-  });
-  switch (resolution.outcome) {
-    case "not_found":
-      return {
-        outcome: "failed",
-        message:
-          "The reference does not fit this resolver: wrong segment count, grammar, or value.",
-      };
-    case "not_allowed":
-      return { outcome: "failed", message: "The location is outside the allowed source origins." };
-    case "configuration_error":
-      return { outcome: "failed", message: "The resolver has no usable credential." };
-    case "resolved":
-      break;
-  }
-  const host = new URL(resolution.locator).host;
-  let addresses: readonly string[];
-  try {
-    addresses = await assertPublicHost(new URL(resolution.locator).hostname, runtime.addressLookup);
-  } catch {
-    return {
-      outcome: "failed",
-      message:
-        "The location resolves to a private or loopback address, which Control will not fetch.",
-      sourceId: resolution.sourceId,
-      host,
-    };
-  }
-  // The connection goes to an address the guard accepted, never to a fresh DNS answer.
-  let response: LocationProbe;
-  try {
-    response = await probeLocation(
-      resolution.locator,
-      addresses[0] ?? "",
-      RESOLVER_TEST_TIMEOUT_MS,
-    );
-  } catch {
-    return {
-      outcome: "failed",
-      message: "The location could not be fetched within five seconds.",
-      sourceId: resolution.sourceId,
-      host,
-    };
-  }
-  const result: ResolverTestResult = {
-    outcome: response.status === 200 || response.status === 206 ? "ok" : "failed",
-    message:
-      response.status === 200 || response.status === 206
-        ? "The location answered with bytes."
-        : `The location answered ${response.status}.`,
-    sourceId: resolution.sourceId,
-    host,
-    status: response.status,
-  };
-  const contentType = displayMediaType(response.headers.get("content-type"));
-  if (contentType !== undefined) result.contentType = contentType;
-  const total = /\/(\d{1,16})$/u.exec(response.headers.get("content-range") ?? "")?.[1];
-  const contentLength = total ?? response.headers.get("content-length") ?? undefined;
-  if (contentLength !== undefined && /^\d{1,16}$/u.test(contentLength)) {
-    result.contentLength = Number(contentLength);
-  }
-  return result;
 }
 
 /**

@@ -11,6 +11,7 @@ const FULL_ENVIRONMENT = {
   SHUTTER_ENCRYPTION_KEY: "a".repeat(64),
   EDGE_CONFIG_TOKEN: TOKEN,
   ADMIN_BOOTSTRAP_TOKEN: TOKEN,
+  ADMIN_API_TOKEN: TOKEN,
   S3_ENDPOINT: "https://account.r2.cloudflarestorage.com",
   S3_BUCKET: "shutter-media",
   S3_ACCESS_KEY_ID: "access",
@@ -70,14 +71,15 @@ describe("control runtime", () => {
       sourcePurge: { missing: ["DATABASE_URL"] },
       edgeConfig: { missing: ["DATABASE_URL"] },
       admin: { missing: ["DATABASE_URL"] },
+      adminApi: { missing: ["DATABASE_URL"] },
       masterStore: "ready",
       imgproxy: "ready",
       executorDispatch: "ready",
     });
     expect(featureReport(runtime.features)).toEqual({
-      count: 5,
+      count: 6,
       features:
-        "spaceRegistry=DATABASE_URL jobApi=DATABASE_URL edgeConfig=DATABASE_URL admin=DATABASE_URL sourcePurge=DATABASE_URL",
+        "spaceRegistry=DATABASE_URL jobApi=DATABASE_URL edgeConfig=DATABASE_URL admin=DATABASE_URL adminApi=DATABASE_URL sourcePurge=DATABASE_URL",
     });
     await runtime.close();
   });
@@ -92,6 +94,7 @@ describe("control runtime", () => {
       sourcePurge: { missing: ["SHUTTER_ENCRYPTION_KEY"] },
       edgeConfig: { missing: ["SHUTTER_ENCRYPTION_KEY"] },
       admin: { missing: ["SHUTTER_ENCRYPTION_KEY"] },
+      adminApi: { missing: ["SHUTTER_ENCRYPTION_KEY"] },
       masterStore: "ready",
     });
     await runtime.close();
