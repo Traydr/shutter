@@ -98,7 +98,8 @@ describe("deployment configuration", () => {
         (entry) => entry.type === "volume" && entry.name === "existing-jobs-volume",
       ),
     ).toBe(true);
-    expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toEqual({ type: "preserve" });
+    // The operator login lives on the admin service; Control keeps only the machine credential.
+    expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toBeUndefined();
     expect(control.variables.ADMIN_API_TOKEN).toEqual({ type: "preserve" });
     expect(control.variables.SHUTTER_ENCRYPTION_KEY).toEqual({ type: "preserve" });
     // The admin application reads Control's admin credential by reference, never a copy.

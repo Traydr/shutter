@@ -5,13 +5,12 @@ The operator interface is the admin application (`apps/admin`), deployed as
 its `CONTROL_ADMIN_TOKEN` and its own `ADMIN_BOOTSTRAP_TOKEN` of at least 32
 random characters. A login creates a Secure, HttpOnly, SameSite=Strict session
 that slides for eight hours of activity and ends after seven days. All pages
-are non-cacheable. Control's own server-rendered `/admin` pages remain until
-the admin application has run alongside them; the steps below are the same on
-both.
+are non-cacheable. Control itself renders no operator pages; every step below
+is also one `/v1/admin` call (`docs/contracts/v1/admin-api.md`) for scripts.
 
 ## Create a Space
 
-1. Open the public HTTPS Control URL at `/admin` and enter the bootstrap token.
+1. Open the admin application at its hostname and enter the bootstrap token.
 2. Enter a new public Space identifier and select its route class. These values
    cannot change and a decommissioned identifier cannot be reused.
 3. Enter allowed qualities, the default quality, and one HTTPS source origin or

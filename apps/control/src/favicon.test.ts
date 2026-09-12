@@ -13,14 +13,6 @@ const control = createControlApp({
 const services = [control, createVideoExecutorApp(), createPdfExecutorApp()];
 
 describe("shared service favicons", () => {
-  it("advertises the SVG on admin pages and permits it through CSP", async () => {
-    const page = await control.request("/admin");
-    expect(page.headers.get("content-security-policy")).toContain("img-src 'self'");
-    expect(await page.text()).toContain(
-      '<link rel="icon" href="/favicon.svg" type="image/svg+xml">',
-    );
-  });
-
   it("serves the canonical SVG and ICO without service credentials", async () => {
     const svg = await readFile(new URL("../../../assets/favicon.svg", import.meta.url), "utf8");
     const ico = await readFile(new URL("../../../assets/favicon.ico", import.meta.url));

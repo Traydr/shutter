@@ -23,7 +23,6 @@ export type ControlFeatureName =
   | "sourcePurge"
   | "imgproxy"
   | "executorDispatch"
-  | "admin"
   | "adminApi"
   | "edgeConfig";
 
@@ -61,7 +60,6 @@ const FEATURE_INPUTS = {
   spaceRegistry: REGISTRY_INPUTS,
   jobApi: REGISTRY_INPUTS,
   edgeConfig: [...REGISTRY_INPUTS, "EDGE_CONFIG_TOKEN"],
-  admin: [...REGISTRY_INPUTS, "ADMIN_BOOTSTRAP_TOKEN"],
   adminApi: [...REGISTRY_INPUTS, "ADMIN_API_TOKEN"],
   masterStore: [...S3_INPUTS, "S3_BUCKET"],
   sourcePurge: [
@@ -278,7 +276,6 @@ export function buildControlRuntime(
     spaceRegistry: statusOf(registryInputs.missing),
     jobApi: statusOf(registryInputs.missing),
     edgeConfig: statusOf(readInputs(env, FEATURE_INPUTS.edgeConfig).missing),
-    admin: statusOf(readInputs(env, FEATURE_INPUTS.admin).missing),
     adminApi: statusOf(readInputs(env, FEATURE_INPUTS.adminApi).missing),
     masterStore: statusOf(masterStoreInputs.missing),
     sourcePurge: statusOf(purgeInputs.missing),
@@ -290,7 +287,6 @@ export function buildControlRuntime(
     logger,
     originAuthToken: () => env.ORIGIN_AUTH_TOKEN,
     edgeConfigToken: () => env.EDGE_CONFIG_TOKEN,
-    adminBootstrapToken: () => env.ADMIN_BOOTSTRAP_TOKEN,
     adminApiToken: () => env.ADMIN_API_TOKEN,
     imgproxyAllowedSources: () => env.IMGPROXY_ALLOWED_SOURCES,
     edgeBaseUrl: () => env.EDGE_BASE_URL,

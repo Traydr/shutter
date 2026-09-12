@@ -2,8 +2,8 @@
 
 Control exposes the Space Registry to operators as JSON under `/v1/admin`. The
 admin application calls it from its server; an operator script can call it
-with `curl`. It is the same registry contract the server-rendered `/admin`
-pages use, so the two cannot disagree about what a Space is.
+with `curl`. It is the same Space Registry contract Control's runtime routes
+use, so the two cannot disagree about what a Space is.
 
 ## Authentication
 

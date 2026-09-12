@@ -105,7 +105,6 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
   const controlSecretEnv: Record<string, VariableValue> = seeded
     ? preserved([
         "ADMIN_API_TOKEN",
-        "ADMIN_BOOTSTRAP_TOKEN",
         "CLOUDFLARE_CACHE_PURGE_TOKEN",
         "EDGE_CONFIG_TOKEN",
         "IMGPROXY_KEY",

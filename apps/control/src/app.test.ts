@@ -188,25 +188,9 @@ describe("control app", () => {
     });
   });
 
-  it("mounts the separately authenticated admin application", async () => {
-    const control = createControlApp({
-      logger: NOOP_LOGGER,
-      originAuthToken: () => TOKEN,
-      adminBootstrapToken: () => "admin_bootstrap_token_abcdefghijklmnopqrstuvwxyz",
-      imgproxyAllowedSources: () => "https://sources.example.com",
-      imgproxyConfig: () => IMGPROXY,
-      fetch: vi.fn(),
-      spaceRegistry: SPACE_REGISTRY,
-    });
-    const response = await control.request("https://shutter.test/admin");
-    expect(response.status).toBe(200);
-    expect(await response.text()).toContain("Bootstrap token");
-  });
-
-  it("creates a Space through admin, observes Edge refresh, and renders without code configuration", async () => {
+  it("creates a Space through the admin API, observes Edge refresh, and renders without code configuration", async () => {
     const registry = new MemorySpaceRegistry();
     const tracker = new EdgeRefreshTracker(() => new Date("2026-08-11T12:00:00.000Z"));
-    const adminToken = "admin_bootstrap_token_abcdefghijklmnopqrstuvwxyz";
     const fetch = vi.fn(
       async () =>
         new Response(Uint8Array.from([82, 73, 70, 70]), {
@@ -217,40 +201,26 @@ describe("control app", () => {
       logger: NOOP_LOGGER,
       originAuthToken: () => TOKEN,
       edgeConfigToken: () => TOKEN,
-      adminBootstrapToken: () => adminToken,
+      adminApiToken: () => TOKEN,
       imgproxyAllowedSources: () => "https://sources.example.com",
       edgeRefreshTracker: tracker,
       imgproxyConfig: () => IMGPROXY,
       fetch,
       spaceRegistry: registry,
     });
-    const login = await control.request("https://shutter.test/admin/login", {
+    const admin = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" };
+    const created = await control.request("https://shutter.test/v1/admin/spaces", {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ token: adminToken }),
-    });
-    const cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
-    const dashboard = await control.request("https://shutter.test/admin", {
-      headers: { cookie },
-    });
-    const csrf = /name="csrf" value="([^"]+)"/u.exec(await dashboard.text())?.[1] ?? "";
-    const created = await control.request("https://shutter.test/admin/spaces", {
-      method: "POST",
-      headers: {
-        cookie,
-        origin: "https://shutter.test",
-        "content-type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        csrf,
-        spaceId: "admin-created",
+      headers: admin,
+      body: JSON.stringify({
+        id: "admin-created",
         routeClass: "public",
-        qualities: "75",
-        defaultQuality: "75",
-        allowedSourceOrigins: "https://sources.example.com/media",
+        qualities: [75],
+        defaultQuality: 75,
+        allowedSourceOrigins: [{ origin: "https://sources.example.com", pathPrefix: "/media" }],
       }),
     });
-    expect(created.status).toBe(303);
+    expect(created.status).toBe(201);
 
     const snapshotResponse = await control.request("https://shutter.test/internal/v1/edge/config", {
       headers: { authorization: `Bearer ${TOKEN}` },
@@ -277,14 +247,13 @@ describe("control app", () => {
     expect(optimization.status).toBe(200);
     expect(fetch).toHaveBeenCalledOnce();
 
-    const refreshedDashboard = await control.request("https://shutter.test/admin", {
-      headers: { cookie },
+    const overview = await control.request("https://shutter.test/v1/admin/overview", {
+      headers: admin,
     });
-    const refreshedBody = await refreshedDashboard.text();
-    expect(refreshedBody).toContain("Latest Edge refresh");
-    expect(refreshedBody).toContain(
-      `Registry generation <span class="num">${snapshot.generation}</span>`,
-    );
+    await expect(overview.json()).resolves.toMatchObject({
+      generation: snapshot.generation,
+      edgeRefresh: { generation: snapshot.generation, refreshedAt: "2026-08-11T12:00:00.000Z" },
+    });
   });
 
   it("contains uncaught failures behind a generic error body", async () => {

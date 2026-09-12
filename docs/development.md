@@ -61,22 +61,17 @@ Create a Space, API token, and Capability Key in the Space Registry before you
 submit a job — either through one-shot import
 (`DATABASE_URL=... SHUTTER_ENCRYPTION_KEY=... pnpm --filter @shutter/control
 db:import-spaces <input.json>`, input format in
-`docs/runbooks/foundation-phase-2.md`) or through the `/admin` surface once it
-is configured. Mint Source Capabilities with `issueSourceCapability` from
+`docs/runbooks/foundation-phase-2.md`) or through the admin application (see
+below). Mint Source Capabilities with `issueSourceCapability` from
 `@shutter/protocol`. A capability's `locator` origin must be allowed by the
 target Space record.
 
-For local operator flows, set an `ADMIN_BOOTSTRAP_TOKEN` with at least 32
-characters alongside `DATABASE_URL` and `SHUTTER_ENCRYPTION_KEY`, then open
-`https://<control-origin>/admin`. The session cookie is
-always Secure, so use an HTTPS local proxy or exercise the interface through
-the tests. Set `IMGPROXY_ALLOWED_SOURCES` on Control to let the dashboard compare
-the deployed imgproxy guard with active Space origins.
-
-The same operations are available as JSON under `/v1/admin` when
-`ADMIN_API_TOKEN` (also at least 32 characters) is set; the contract is in
-`docs/contracts/v1/admin-api.md` and `@shutter/admin-api` has a typed client.
-From a shell:
+The registry operations are JSON under `/v1/admin` when `ADMIN_API_TOKEN` (at
+least 32 characters) is set alongside `DATABASE_URL` and
+`SHUTTER_ENCRYPTION_KEY`; the contract is in `docs/contracts/v1/admin-api.md`
+and `@shutter/admin-api` has a typed client. Set `IMGPROXY_ALLOWED_SOURCES` on
+Control to let the overview compare the deployed imgproxy guard with active
+Space origins. From a shell:
 
 ```sh
 curl -sS -H "Authorization: Bearer $ADMIN_API_TOKEN" \
