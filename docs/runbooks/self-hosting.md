@@ -34,8 +34,8 @@ pnpm deployment:plan
 pnpm deployment:apply
 ```
 
-Credentials (`SHUTTER_ENCRYPTION_KEY`, `ADMIN_BOOTSTRAP_TOKEN`,
-`ADMIN_API_TOKEN`, `ORIGIN_AUTH_TOKEN`, `EDGE_CONFIG_TOKEN`, the executor tokens, imgproxy
+Credentials (`SHUTTER_ENCRYPTION_KEY`, `ADMIN_API_TOKEN`, the admin
+application's `ADMIN_BOOTSTRAP_TOKEN`, `ORIGIN_AUTH_TOKEN`, `EDGE_CONFIG_TOKEN`, the executor tokens, imgproxy
 key/salt/secret, S3 keys, the Cloudflare purge token, and OTLP settings) are set
 directly on the Railway services and never enter this repository. Once they
 exist, set `SHUTTER_SECRETS_SEEDED=true` in the input so later plans
@@ -73,7 +73,7 @@ and its production command is `pnpm --filter @shutter/edge deploy`.
 
 ## Registry and route acceptance
 
-Open `https://CONTROL_DOMAIN/admin`. Create one public Space and one private
+Open `https://ADMIN_DOMAIN` and sign in. Create one public Space and one private
 Space. Give each Space an API token and Capability Key. Use distinct test
 sources whose origins are in the configured imgproxy allowlist.
 

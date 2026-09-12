@@ -11,7 +11,6 @@ const server = {
   DATABASE_URL: optionalUrl,
   SHUTTER_ENCRYPTION_KEY: optionalString,
   EDGE_CONFIG_TOKEN: optionalString,
-  ADMIN_BOOTSTRAP_TOKEN: optionalString,
   ADMIN_API_TOKEN: optionalString,
 
   S3_ENDPOINT: optionalUrl,

@@ -279,7 +279,6 @@ server from booting.
 | `DATABASE_URL` | Postgres for the Space Registry and Preview Job ledger |
 | `SHUTTER_ENCRYPTION_KEY` | Master key for Capability Keys stored in the Space Registry |
 | `EDGE_CONFIG_TOKEN` | Dedicated credential shared by Control and Edge for snapshot reads |
-| `ADMIN_BOOTSTRAP_TOKEN` | Bootstrap login for Control's server-rendered `/admin` interface |
 | `ADMIN_API_TOKEN` | Machine credential for the `/v1/admin` JSON routes the admin application and operator scripts call |
 | `S3_ENDPOINT`, `S3_BUCKET`, `S3_*` | Media Store, shared verbatim with imgproxy and both Executors |
 | `IMGPROXY_BASE_URL`, `IMGPROXY_KEY`, `IMGPROXY_SALT`, `IMGPROXY_SECRET` | On-demand image rendering |
@@ -296,8 +295,8 @@ See [`.env.example`](./.env.example) for the annotated full set.
 <summary>Spaces and deployment values</summary>
 
 Space policies, API tokens, and Capability Keys are records in Postgres. Manage
-them at Control's `/admin` page; they are not deployment variables or checked-in
-tenant configuration. The [Space administration
+them in the admin application (`apps/admin`, deployed as Shutter-Admin); they
+are not deployment variables or checked-in tenant configuration. The [Space administration
 runbook](./docs/runbooks/space-administration.md) covers creation, policy
 changes, credential rotation, decommissioning, and imgproxy allowlist updates.
 

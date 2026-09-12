@@ -13,7 +13,7 @@ tested database backup.
 4. Perform all row updates in one database transaction. Read every active key
    back with the new master key before that transaction commits.
 5. Set the new `SHUTTER_ENCRYPTION_KEY` in Railway and start one Control replica.
-6. Load `/admin`, fetch one Edge snapshot, and verify one private capability for
+6. Load the admin application, fetch one Edge snapshot, and verify one private capability for
    each active key generation.
 7. Start the remaining traffic and retain the protected database backup through
    the observation window.

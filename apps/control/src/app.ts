@@ -9,7 +9,6 @@ import {
 } from "@shutter/protocol";
 import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
-import { type AdminRuntime, createAdminApp } from "./admin/app.js";
 import { type AdminApiRuntime, createAdminApi } from "./admin-api.js";
 import type { EdgeRefreshTracker } from "./edge-refresh-status.js";
 import type { ImgproxyConfig } from "./imgproxy.js";
@@ -26,11 +25,10 @@ export interface ControlRuntimeConfig {
   logger: ControlLogger;
   originAuthToken(): string | undefined;
   edgeConfigToken?(): string | undefined;
-  adminBootstrapToken?(): string | undefined;
   /** The machine credential of the `/v1/admin` JSON routes. */
   adminApiToken?(): string | undefined;
   imgproxyAllowedSources?(): string | undefined;
-  /** Where the Edge serves from; the admin pages show complete Delivery URLs with it. */
+  /** Where the Edge serves from; the admin API reports it so pages can show complete Delivery URLs. */
   edgeBaseUrl?(): string | undefined;
   imgproxyConfig(): ImgproxyConfig | undefined;
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
@@ -166,15 +164,6 @@ export function createControlApp(
     runtime.edgeRefreshTracker.report(report.generation);
     return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
   });
-  const adminOptions: AdminRuntime = {
-    bootstrapToken: () => runtime.adminBootstrapToken?.(),
-    imgproxyAllowedSources: () => runtime.imgproxyAllowedSources?.(),
-    edgeRefreshStatus: () => runtime.edgeRefreshTracker?.latest(),
-    edgeBaseUrl: () => runtime.edgeBaseUrl?.(),
-  };
-  if (runtime.spaceRegistry !== undefined) adminOptions.registry = runtime.spaceRegistry;
-  if (runtime.sourceResolvers !== undefined) adminOptions.sourceResolvers = runtime.sourceResolvers;
-  control.route("/admin", createAdminApp(adminOptions));
   const adminApiOptions: AdminApiRuntime = {
     token: () => runtime.adminApiToken?.(),
     registry: runtime.spaceRegistry,

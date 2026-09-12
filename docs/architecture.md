@@ -160,18 +160,17 @@ credential history belong in the Postgres Space Registry. Tenant values are not
 source code or deployment variables. Control reads Postgres for every
 Space-scoped request and does not keep a policy cache.
 
-Control also renders the small `/admin` operator surface. It uses a short-lived
-session derived from an operator-managed bootstrap credential and protects every
-write with a same-origin CSRF check. The interface calls the same Space Registry
-contract as runtime code. Full API tokens and Capability Keys appear only in the
-response that creates them; later pages show only their audit summaries.
+Control exposes the registry operations as JSON routes under `/v1/admin`,
+guarded by one machine credential (`ADMIN_API_TOKEN`) and documented in
+`docs/contracts/v1/admin-api.md`. They call the same Space Registry contract as
+runtime code. Full API tokens and Capability Keys appear only in the response
+that creates them; later responses carry only their audit summaries.
 
-The same registry operations are JSON routes under `/v1/admin`, guarded by one
-machine credential (`ADMIN_API_TOKEN`) and documented in
-`docs/contracts/v1/admin-api.md`. The admin application (`apps/admin`, a
-TanStack Start app deployed as its own Railway service) calls them from its
-server functions; the browser holds only the application's own session cookie,
-signed with the operator's bootstrap token and slid on activity (ADR 0029).
+The operator interface is the admin application (`apps/admin`, a TanStack Start
+app deployed as its own Railway service). Its server functions hold the machine
+credential and call Control; the browser holds only the application's own
+session cookie, signed with the operator's bootstrap token and slid on activity
+(ADR 0029). Control renders no operator pages.
 
 Decommissioning blocks new Space-scoped requests and removes the Space from
 Edge snapshots. Executor claims for jobs accepted before decommissioning can
