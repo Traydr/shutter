@@ -8,6 +8,7 @@ export default defineConfig({
           name: "services",
           globalSetup: ["./apps/control/src/postgres-test-global.ts"],
           include: [
+            "apps/admin/src/**/*.test.ts",
             "apps/control/src/**/*.test.ts",
             "apps/executor-video/src/**/*.test.ts",
             "apps/executor-pdf/src/**/*.test.ts",

@@ -9,6 +9,7 @@
     "db:import-spaces": "node dist/import-spaces.js",
     "db:migrate": "node dist/migrate.js",
     "dev": "tsx watch src/index.ts",
+    "dev:admin-api": "tsx src/admin-api-dev.ts",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

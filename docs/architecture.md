@@ -168,8 +168,10 @@ response that creates them; later pages show only their audit summaries.
 
 The same registry operations are JSON routes under `/v1/admin`, guarded by one
 machine credential (`ADMIN_API_TOKEN`) and documented in
-`docs/contracts/v1/admin-api.md`. The admin application calls them from its
-server; the browser never holds that credential.
+`docs/contracts/v1/admin-api.md`. The admin application (`apps/admin`, a
+TanStack Start app deployed as its own Railway service) calls them from its
+server functions; the browser holds only the application's own session cookie,
+signed with the operator's bootstrap token and slid on activity (ADR 0029).
 
 Decommissioning blocks new Space-scoped requests and removes the Space from
 Edge snapshots. Executor claims for jobs accepted before decommissioning can

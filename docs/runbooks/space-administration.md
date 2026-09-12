@@ -1,9 +1,13 @@
 # Space administration
 
-Control serves the operator interface at `/admin`. Configure Postgres,
-`SHUTTER_ENCRYPTION_KEY`, and an `ADMIN_BOOTSTRAP_TOKEN` of at least 32 random
-characters before you use it. A login creates a 15-minute Secure, HttpOnly,
-SameSite=Strict session. All pages are non-cacheable.
+The operator interface is the admin application (`apps/admin`), deployed as
+`Shutter-Admin` at the admin hostname. It needs Control's `ADMIN_API_TOKEN` as
+its `CONTROL_ADMIN_TOKEN` and its own `ADMIN_BOOTSTRAP_TOKEN` of at least 32
+random characters. A login creates a Secure, HttpOnly, SameSite=Strict session
+that slides for eight hours of activity and ends after seven days. All pages
+are non-cacheable. Control's own server-rendered `/admin` pages remain until
+the admin application has run alongside them; the steps below are the same on
+both.
 
 ## Create a Space
 

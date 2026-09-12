@@ -9,6 +9,7 @@ const commonEnvironment = {
   SHUTTER_GITHUB_REPOSITORY: "example/shutter",
   SHUTTER_RAILWAY_REGION: "us-west2",
   SHUTTER_CONTROL_DOMAIN: "control.example.com",
+  SHUTTER_ADMIN_DOMAIN: "admin.example.com",
   SHUTTER_EDGE_DOMAIN: "media.example.com",
   SHUTTER_R2_BUCKET: "example-media",
   SHUTTER_R2_ENDPOINT: "https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.r2.cloudflarestorage.com",
@@ -55,6 +56,16 @@ describe("deployment configuration", () => {
     expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toBeUndefined();
     expect(control.variables.ADMIN_API_TOKEN).toBeUndefined();
     expect(control.variables.S3_ACCESS_KEY_ID).toBeUndefined();
+
+    const admin = service(graph, "Shutter-Admin");
+    expect(admin.networking.customDomains).toEqual({ "admin.example.com": { port: 8080 } });
+    expect(admin.variables.ADMIN_BOOTSTRAP_TOKEN).toBeUndefined();
+    expect(admin.variables.CONTROL_ADMIN_TOKEN).toBeUndefined();
+    expect(admin.variables.CONTROL_BASE_URL).toMatchObject({ type: "literal" });
+    expect(admin.variables.ADMIN_TRUST_PROXY_HEADERS).toMatchObject({
+      type: "literal",
+      value: "true",
+    });
     expect(control.variables.S3_BUCKET).toMatchObject({
       type: "literal",
       value: "example-media",
@@ -90,6 +101,10 @@ describe("deployment configuration", () => {
     expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toEqual({ type: "preserve" });
     expect(control.variables.ADMIN_API_TOKEN).toEqual({ type: "preserve" });
     expect(control.variables.SHUTTER_ENCRYPTION_KEY).toEqual({ type: "preserve" });
+    // The admin application reads Control's admin credential by reference, never a copy.
+    const admin = service(graph, "Shutter-Admin");
+    expect(admin.variables.ADMIN_BOOTSTRAP_TOKEN).toEqual({ type: "preserve" });
+    expect(admin.variables.CONTROL_ADMIN_TOKEN).toMatchObject({ type: "reference" });
     expect(control.variables.S3_ACCESS_KEY_ID).toEqual({ type: "preserve" });
     // Non-secret values stay literals: changing the input must change the plan
     // even after bootstrap, or Source purge targets a dead host.
