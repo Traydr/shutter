@@ -83,6 +83,24 @@ curl -sS -H "Authorization: Bearer $ADMIN_API_TOKEN" \
   http://localhost:3000/v1/admin/overview
 ```
 
+### The admin application
+
+`apps/admin` is the operator interface, a TanStack Start app that calls
+Control's `/v1/admin` routes from its server. It needs no database. For UI
+work, run a Control that serves only the admin API over an in-memory registry
+and point the app at it:
+
+```sh
+pnpm --filter @shutter/control dev:admin-api      # http://localhost:3200, seeded
+cp apps/admin/.env.example apps/admin/.env         # matches the dev Control's token
+pnpm --filter @shutter/admin dev                   # http://localhost:3100
+```
+
+Sign in with the `ADMIN_BOOTSTRAP_TOKEN` from `.env`. The same app pointed at
+a deployed Control (`CONTROL_BASE_URL=https://<control-domain>` and its real
+`ADMIN_API_TOKEN`) works against production data; the session cookie is
+Secure, which browsers accept on `localhost`.
+
 The video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
 `poppler-utils`.
 

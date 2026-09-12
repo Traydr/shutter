@@ -10,6 +10,7 @@ interface CommonDeploymentInput {
   repository: string;
   railwayRegion: string;
   controlDomain: string;
+  adminDomain: string;
   edgeDomain: string;
   r2Bucket: string;
   r2Endpoint: string;
@@ -148,6 +149,7 @@ export function parseDeploymentInput(environment: Environment): DeploymentInput 
     repository: repository(environment),
     railwayRegion: identifier(environment, "SHUTTER_RAILWAY_REGION"),
     controlDomain: hostname(environment, "SHUTTER_CONTROL_DOMAIN"),
+    adminDomain: hostname(environment, "SHUTTER_ADMIN_DOMAIN"),
     edgeDomain: hostname(environment, "SHUTTER_EDGE_DOMAIN"),
     r2Bucket: r2Bucket(environment),
     r2Endpoint: r2.endpoint,

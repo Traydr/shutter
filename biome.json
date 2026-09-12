@@ -4,7 +4,11 @@
     "ignoreUnknown": true,
     "includes": [
       "**",
+      "!!**/.nitro",
+      "!!**/.output",
+      "!!**/.tanstack",
       "!!**/.vite",
+      "!!**/routeTree.gen.ts",
       "!!**/.wrangler",
       "!!**/dist",
       "!!**/node_modules",
@@ -12,6 +16,11 @@
       "!tools/oxlint/anti-slop",
       "!!assets/generated.ts"
     ]
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
+    }
   },
   "formatter": {
     "enabled": true,

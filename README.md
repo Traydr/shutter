@@ -233,7 +233,8 @@ A few properties fall out of those decisions:
 | Path | What lives there |
 |---|---|
 | `apps/edge` | Cloudflare Worker: capability validation, private cache, R2 reads |
-| `apps/control` | Control plane: job API, ledger, purge, imgproxy signing |
+| `apps/control` | Control plane: job API, ledger, purge, imgproxy signing, admin API |
+| `apps/admin` | Operator interface (TanStack Start); talks to Control's admin API |
 | `apps/executor-video`, `apps/executor-pdf` | Isolated Master Preview executors |
 | `packages/protocol` | Capability crypto, URL construction, cache identity |
 | `packages/client` | Server-side client for consuming applications: capabilities, delivery URLs, Preview Jobs, purge |

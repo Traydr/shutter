@@ -168,6 +168,39 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
     env: controlEnv,
   });
 
+  // The admin application holds two secrets: its operator login, and Control's
+  // admin credential, which it reads from Control's own variable so the two
+  // can never drift. It sleeps when idle; an operator visit wakes it.
+  const adminSecretEnv: ServiceEnv = seeded
+    ? { ADMIN_BOOTSTRAP_TOKEN: preserve(), CONTROL_ADMIN_TOKEN: ref(Control, "ADMIN_API_TOKEN") }
+    : {};
+  const Admin = service("Shutter-Admin", {
+    source: repository,
+    build: {
+      builder: "RAILPACK",
+      buildEnvironment: "V3",
+      buildCommand: "pnpm --filter @shutter/admin... build",
+      watchPatterns: [
+        "/apps/admin/**",
+        "/packages/admin-api/**",
+        "/packages/protocol/**",
+        ...workspaceWatchPatterns,
+      ],
+    },
+    start: "pnpm --filter @shutter/admin start",
+    replicas: { [input.railwayRegion]: 1 },
+    deploy: { sleepApplication: true },
+    networking: { privateNetworkEndpoint: "shutter-admin" },
+    domains: [{ domain: input.adminDomain, port: nodePort }],
+    env: {
+      ADMIN_TRUST_PROXY_HEADERS: "true",
+      CONTROL_BASE_URL: `http://\${{Shutter-Control.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
+      NODE_ENV: "production",
+      PORT: String(nodePort),
+      ...adminSecretEnv,
+    },
+  });
+
   const executorEnvironment = (roleToken: "PDF_EXECUTOR_TOKEN" | "VIDEO_EXECUTOR_TOKEN") => {
     const values: ServiceEnv = {
       CONTROL_BASE_URL: `http://\${{Shutter-Control.RAILWAY_PRIVATE_DOMAIN}}:${nodePort}`,
@@ -219,7 +252,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
     },
   });
 
-  const Delivery = group("Delivery", [Control, Imgproxy, VideoExecutor, PdfExecutor]);
+  const Delivery = group("Delivery", [Control, Admin, Imgproxy, VideoExecutor, PdfExecutor]);
   return project(input.projectName, {
     resources: [Delivery, Jobs, ...(JobsVolume ? [JobsVolume] : [])],
   });

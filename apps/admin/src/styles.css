@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+@theme {
+  --color-paper: #eef0ee;
+  --color-panel: #ffffff;
+  --color-panel-2: #fafbfa;
+  --color-ink: #151a18;
+  --color-ink-2: #4d5652;
+  --color-ink-3: #8a938e;
+  --color-rule: #d5dad6;
+  --color-rule-2: #e7eae7;
+  --color-brand: #0b6b52;
+  --color-brand-ink: #05483a;
+  --color-brand-bg: #e4f2ec;
+  --color-amber: #b8670f;
+  --color-amber-bg: #fff3df;
+  --color-amber-ink: #6e3d05;
+  --color-red: #a83232;
+  --color-red-bg: #fbe9e9;
+  --color-red-rule: #e6c4c4;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  body {
+    @apply m-0 bg-paper text-ink font-sans text-[13px] leading-[1.45];
+  }
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+  time,
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* The Space page's jump list: the section in the URL hash is the active one. */
+.jump a {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-radius: 5px;
+  color: var(--color-ink-2);
+}
+.jump a b {
+  font: 600 10.5px var(--font-mono);
+  color: var(--color-ink-3);
+}
+body:has(#policy:target) .jump a[href="#policy"],
+body:has(#resolvers:target) .jump a[href="#resolvers"],
+body:has(#tokens:target) .jump a[href="#tokens"],
+body:has(#keys:target) .jump a[href="#keys"],
+body:has(#decommission:target) .jump a[href="#decommission"] {
+  background: var(--color-panel);
+  color: var(--color-ink);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--color-brand);
+}
