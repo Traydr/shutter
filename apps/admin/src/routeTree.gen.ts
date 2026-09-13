@@ -12,11 +12,17 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as AdminRouteImport } from './routes/_admin'
 import { Route as AdminIndexRouteImport } from './routes/_admin/index'
+import { Route as ApiThemeRouteImport } from './routes/api.theme'
 import { Route as ApiAuthLogoutRouteImport } from './routes/api.auth.logout'
 import { Route as ApiAuthLoginRouteImport } from './routes/api.auth.login'
+import { Route as AdminSpacesNewRouteImport } from './routes/_admin/spaces.new'
+import { Route as AdminSpacesSpaceIdRouteImport } from './routes/_admin/spaces.$spaceId'
 import { Route as AdminSpacesSpaceIdIndexRouteImport } from './routes/_admin/spaces.$spaceId.index'
-import { Route as AdminSpacesSpaceIdResolversNewRouteImport } from './routes/_admin/spaces.$spaceId.resolvers.new'
-import { Route as AdminSpacesSpaceIdResolversResolverIdRouteImport } from './routes/_admin/spaces.$spaceId.resolvers.$resolverId'
+import { Route as AdminSpacesSpaceIdSettingsRouteImport } from './routes/_admin/spaces.$spaceId.settings'
+import { Route as AdminSpacesSpaceIdAccessRouteImport } from './routes/_admin/spaces.$spaceId.access'
+import { Route as AdminSpacesSpaceIdSourcesIndexRouteImport } from './routes/_admin/spaces.$spaceId.sources.index'
+import { Route as AdminSpacesSpaceIdSourcesNewRouteImport } from './routes/_admin/spaces.$spaceId.sources.new'
+import { Route as AdminSpacesSpaceIdSourcesResolverIdRouteImport } from './routes/_admin/spaces.$spaceId.sources.$resolverId'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -32,6 +38,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminRoute,
 } as any)
+const ApiThemeRoute = ApiThemeRouteImport.update({
+  id: '/api/theme',
+  path: '/api/theme',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthLogoutRoute = ApiAuthLogoutRouteImport.update({
   id: '/api/auth/logout',
   path: '/api/auth/logout',
@@ -42,87 +53,150 @@ const ApiAuthLoginRoute = ApiAuthLoginRouteImport.update({
   path: '/api/auth/login',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminSpacesSpaceIdIndexRoute = AdminSpacesSpaceIdIndexRouteImport.update({
-  id: '/spaces/$spaceId/',
-  path: '/spaces/$spaceId/',
+const AdminSpacesNewRoute = AdminSpacesNewRouteImport.update({
+  id: '/spaces/new',
+  path: '/spaces/new',
   getParentRoute: () => AdminRoute,
 } as any)
-const AdminSpacesSpaceIdResolversNewRoute =
-  AdminSpacesSpaceIdResolversNewRouteImport.update({
-    id: '/spaces/$spaceId/resolvers/new',
-    path: '/spaces/$spaceId/resolvers/new',
-    getParentRoute: () => AdminRoute,
+const AdminSpacesSpaceIdRoute = AdminSpacesSpaceIdRouteImport.update({
+  id: '/spaces/$spaceId',
+  path: '/spaces/$spaceId',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminSpacesSpaceIdIndexRoute = AdminSpacesSpaceIdIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminSpacesSpaceIdRoute,
+} as any)
+const AdminSpacesSpaceIdSettingsRoute =
+  AdminSpacesSpaceIdSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => AdminSpacesSpaceIdRoute,
   } as any)
-const AdminSpacesSpaceIdResolversResolverIdRoute =
-  AdminSpacesSpaceIdResolversResolverIdRouteImport.update({
-    id: '/spaces/$spaceId/resolvers/$resolverId',
-    path: '/spaces/$spaceId/resolvers/$resolverId',
-    getParentRoute: () => AdminRoute,
+const AdminSpacesSpaceIdAccessRoute =
+  AdminSpacesSpaceIdAccessRouteImport.update({
+    id: '/access',
+    path: '/access',
+    getParentRoute: () => AdminSpacesSpaceIdRoute,
+  } as any)
+const AdminSpacesSpaceIdSourcesIndexRoute =
+  AdminSpacesSpaceIdSourcesIndexRouteImport.update({
+    id: '/sources/',
+    path: '/sources/',
+    getParentRoute: () => AdminSpacesSpaceIdRoute,
+  } as any)
+const AdminSpacesSpaceIdSourcesNewRoute =
+  AdminSpacesSpaceIdSourcesNewRouteImport.update({
+    id: '/sources/new',
+    path: '/sources/new',
+    getParentRoute: () => AdminSpacesSpaceIdRoute,
+  } as any)
+const AdminSpacesSpaceIdSourcesResolverIdRoute =
+  AdminSpacesSpaceIdSourcesResolverIdRouteImport.update({
+    id: '/sources/$resolverId',
+    path: '/sources/$resolverId',
+    getParentRoute: () => AdminSpacesSpaceIdRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AdminIndexRoute
   '/login': typeof LoginRoute
+  '/api/theme': typeof ApiThemeRoute
+  '/spaces/$spaceId': typeof AdminSpacesSpaceIdRouteWithChildren
+  '/spaces/new': typeof AdminSpacesNewRoute
   '/api/auth/login': typeof ApiAuthLoginRoute
   '/api/auth/logout': typeof ApiAuthLogoutRoute
+  '/spaces/$spaceId/access': typeof AdminSpacesSpaceIdAccessRoute
+  '/spaces/$spaceId/settings': typeof AdminSpacesSpaceIdSettingsRoute
   '/spaces/$spaceId/': typeof AdminSpacesSpaceIdIndexRoute
-  '/spaces/$spaceId/resolvers/$resolverId': typeof AdminSpacesSpaceIdResolversResolverIdRoute
-  '/spaces/$spaceId/resolvers/new': typeof AdminSpacesSpaceIdResolversNewRoute
+  '/spaces/$spaceId/sources/$resolverId': typeof AdminSpacesSpaceIdSourcesResolverIdRoute
+  '/spaces/$spaceId/sources/new': typeof AdminSpacesSpaceIdSourcesNewRoute
+  '/spaces/$spaceId/sources/': typeof AdminSpacesSpaceIdSourcesIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
+  '/api/theme': typeof ApiThemeRoute
   '/': typeof AdminIndexRoute
+  '/spaces/new': typeof AdminSpacesNewRoute
   '/api/auth/login': typeof ApiAuthLoginRoute
   '/api/auth/logout': typeof ApiAuthLogoutRoute
+  '/spaces/$spaceId/access': typeof AdminSpacesSpaceIdAccessRoute
+  '/spaces/$spaceId/settings': typeof AdminSpacesSpaceIdSettingsRoute
   '/spaces/$spaceId': typeof AdminSpacesSpaceIdIndexRoute
-  '/spaces/$spaceId/resolvers/$resolverId': typeof AdminSpacesSpaceIdResolversResolverIdRoute
-  '/spaces/$spaceId/resolvers/new': typeof AdminSpacesSpaceIdResolversNewRoute
+  '/spaces/$spaceId/sources/$resolverId': typeof AdminSpacesSpaceIdSourcesResolverIdRoute
+  '/spaces/$spaceId/sources/new': typeof AdminSpacesSpaceIdSourcesNewRoute
+  '/spaces/$spaceId/sources': typeof AdminSpacesSpaceIdSourcesIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_admin': typeof AdminRouteWithChildren
   '/login': typeof LoginRoute
+  '/api/theme': typeof ApiThemeRoute
   '/_admin/': typeof AdminIndexRoute
+  '/_admin/spaces/$spaceId': typeof AdminSpacesSpaceIdRouteWithChildren
+  '/_admin/spaces/new': typeof AdminSpacesNewRoute
   '/api/auth/login': typeof ApiAuthLoginRoute
   '/api/auth/logout': typeof ApiAuthLogoutRoute
+  '/_admin/spaces/$spaceId/access': typeof AdminSpacesSpaceIdAccessRoute
+  '/_admin/spaces/$spaceId/settings': typeof AdminSpacesSpaceIdSettingsRoute
   '/_admin/spaces/$spaceId/': typeof AdminSpacesSpaceIdIndexRoute
-  '/_admin/spaces/$spaceId/resolvers/$resolverId': typeof AdminSpacesSpaceIdResolversResolverIdRoute
-  '/_admin/spaces/$spaceId/resolvers/new': typeof AdminSpacesSpaceIdResolversNewRoute
+  '/_admin/spaces/$spaceId/sources/$resolverId': typeof AdminSpacesSpaceIdSourcesResolverIdRoute
+  '/_admin/spaces/$spaceId/sources/new': typeof AdminSpacesSpaceIdSourcesNewRoute
+  '/_admin/spaces/$spaceId/sources/': typeof AdminSpacesSpaceIdSourcesIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/login'
+    | '/api/theme'
+    | '/spaces/$spaceId'
+    | '/spaces/new'
     | '/api/auth/login'
     | '/api/auth/logout'
+    | '/spaces/$spaceId/access'
+    | '/spaces/$spaceId/settings'
     | '/spaces/$spaceId/'
-    | '/spaces/$spaceId/resolvers/$resolverId'
-    | '/spaces/$spaceId/resolvers/new'
+    | '/spaces/$spaceId/sources/$resolverId'
+    | '/spaces/$spaceId/sources/new'
+    | '/spaces/$spaceId/sources/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
+    | '/api/theme'
     | '/'
+    | '/spaces/new'
     | '/api/auth/login'
     | '/api/auth/logout'
+    | '/spaces/$spaceId/access'
+    | '/spaces/$spaceId/settings'
     | '/spaces/$spaceId'
-    | '/spaces/$spaceId/resolvers/$resolverId'
-    | '/spaces/$spaceId/resolvers/new'
+    | '/spaces/$spaceId/sources/$resolverId'
+    | '/spaces/$spaceId/sources/new'
+    | '/spaces/$spaceId/sources'
   id:
     | '__root__'
     | '/_admin'
     | '/login'
+    | '/api/theme'
     | '/_admin/'
+    | '/_admin/spaces/$spaceId'
+    | '/_admin/spaces/new'
     | '/api/auth/login'
     | '/api/auth/logout'
+    | '/_admin/spaces/$spaceId/access'
+    | '/_admin/spaces/$spaceId/settings'
     | '/_admin/spaces/$spaceId/'
-    | '/_admin/spaces/$spaceId/resolvers/$resolverId'
-    | '/_admin/spaces/$spaceId/resolvers/new'
+    | '/_admin/spaces/$spaceId/sources/$resolverId'
+    | '/_admin/spaces/$spaceId/sources/new'
+    | '/_admin/spaces/$spaceId/sources/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   AdminRoute: typeof AdminRouteWithChildren
   LoginRoute: typeof LoginRoute
+  ApiThemeRoute: typeof ApiThemeRoute
   ApiAuthLoginRoute: typeof ApiAuthLoginRoute
   ApiAuthLogoutRoute: typeof ApiAuthLogoutRoute
 }
@@ -150,6 +224,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/api/theme': {
+      id: '/api/theme'
+      path: '/api/theme'
+      fullPath: '/api/theme'
+      preLoaderRoute: typeof ApiThemeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/auth/logout': {
       id: '/api/auth/logout'
       path: '/api/auth/logout'
@@ -164,43 +245,97 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthLoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_admin/spaces/new': {
+      id: '/_admin/spaces/new'
+      path: '/spaces/new'
+      fullPath: '/spaces/new'
+      preLoaderRoute: typeof AdminSpacesNewRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/_admin/spaces/$spaceId': {
+      id: '/_admin/spaces/$spaceId'
+      path: '/spaces/$spaceId'
+      fullPath: '/spaces/$spaceId'
+      preLoaderRoute: typeof AdminSpacesSpaceIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/_admin/spaces/$spaceId/': {
       id: '/_admin/spaces/$spaceId/'
-      path: '/spaces/$spaceId'
+      path: '/'
       fullPath: '/spaces/$spaceId/'
       preLoaderRoute: typeof AdminSpacesSpaceIdIndexRouteImport
-      parentRoute: typeof AdminRoute
+      parentRoute: typeof AdminSpacesSpaceIdRoute
     }
-    '/_admin/spaces/$spaceId/resolvers/new': {
-      id: '/_admin/spaces/$spaceId/resolvers/new'
-      path: '/spaces/$spaceId/resolvers/new'
-      fullPath: '/spaces/$spaceId/resolvers/new'
-      preLoaderRoute: typeof AdminSpacesSpaceIdResolversNewRouteImport
-      parentRoute: typeof AdminRoute
+    '/_admin/spaces/$spaceId/settings': {
+      id: '/_admin/spaces/$spaceId/settings'
+      path: '/settings'
+      fullPath: '/spaces/$spaceId/settings'
+      preLoaderRoute: typeof AdminSpacesSpaceIdSettingsRouteImport
+      parentRoute: typeof AdminSpacesSpaceIdRoute
     }
-    '/_admin/spaces/$spaceId/resolvers/$resolverId': {
-      id: '/_admin/spaces/$spaceId/resolvers/$resolverId'
-      path: '/spaces/$spaceId/resolvers/$resolverId'
-      fullPath: '/spaces/$spaceId/resolvers/$resolverId'
-      preLoaderRoute: typeof AdminSpacesSpaceIdResolversResolverIdRouteImport
-      parentRoute: typeof AdminRoute
+    '/_admin/spaces/$spaceId/access': {
+      id: '/_admin/spaces/$spaceId/access'
+      path: '/access'
+      fullPath: '/spaces/$spaceId/access'
+      preLoaderRoute: typeof AdminSpacesSpaceIdAccessRouteImport
+      parentRoute: typeof AdminSpacesSpaceIdRoute
+    }
+    '/_admin/spaces/$spaceId/sources/': {
+      id: '/_admin/spaces/$spaceId/sources/'
+      path: '/sources'
+      fullPath: '/spaces/$spaceId/sources/'
+      preLoaderRoute: typeof AdminSpacesSpaceIdSourcesIndexRouteImport
+      parentRoute: typeof AdminSpacesSpaceIdRoute
+    }
+    '/_admin/spaces/$spaceId/sources/new': {
+      id: '/_admin/spaces/$spaceId/sources/new'
+      path: '/sources/new'
+      fullPath: '/spaces/$spaceId/sources/new'
+      preLoaderRoute: typeof AdminSpacesSpaceIdSourcesNewRouteImport
+      parentRoute: typeof AdminSpacesSpaceIdRoute
+    }
+    '/_admin/spaces/$spaceId/sources/$resolverId': {
+      id: '/_admin/spaces/$spaceId/sources/$resolverId'
+      path: '/sources/$resolverId'
+      fullPath: '/spaces/$spaceId/sources/$resolverId'
+      preLoaderRoute: typeof AdminSpacesSpaceIdSourcesResolverIdRouteImport
+      parentRoute: typeof AdminSpacesSpaceIdRoute
     }
   }
 }
 
+interface AdminSpacesSpaceIdRouteChildren {
+  AdminSpacesSpaceIdAccessRoute: typeof AdminSpacesSpaceIdAccessRoute
+  AdminSpacesSpaceIdSettingsRoute: typeof AdminSpacesSpaceIdSettingsRoute
+  AdminSpacesSpaceIdIndexRoute: typeof AdminSpacesSpaceIdIndexRoute
+  AdminSpacesSpaceIdSourcesResolverIdRoute: typeof AdminSpacesSpaceIdSourcesResolverIdRoute
+  AdminSpacesSpaceIdSourcesNewRoute: typeof AdminSpacesSpaceIdSourcesNewRoute
+  AdminSpacesSpaceIdSourcesIndexRoute: typeof AdminSpacesSpaceIdSourcesIndexRoute
+}
+
+const AdminSpacesSpaceIdRouteChildren: AdminSpacesSpaceIdRouteChildren = {
+  AdminSpacesSpaceIdAccessRoute: AdminSpacesSpaceIdAccessRoute,
+  AdminSpacesSpaceIdSettingsRoute: AdminSpacesSpaceIdSettingsRoute,
+  AdminSpacesSpaceIdIndexRoute: AdminSpacesSpaceIdIndexRoute,
+  AdminSpacesSpaceIdSourcesResolverIdRoute:
+    AdminSpacesSpaceIdSourcesResolverIdRoute,
+  AdminSpacesSpaceIdSourcesNewRoute: AdminSpacesSpaceIdSourcesNewRoute,
+  AdminSpacesSpaceIdSourcesIndexRoute: AdminSpacesSpaceIdSourcesIndexRoute,
+}
+
+const AdminSpacesSpaceIdRouteWithChildren =
+  AdminSpacesSpaceIdRoute._addFileChildren(AdminSpacesSpaceIdRouteChildren)
+
 interface AdminRouteChildren {
   AdminIndexRoute: typeof AdminIndexRoute
-  AdminSpacesSpaceIdIndexRoute: typeof AdminSpacesSpaceIdIndexRoute
-  AdminSpacesSpaceIdResolversResolverIdRoute: typeof AdminSpacesSpaceIdResolversResolverIdRoute
-  AdminSpacesSpaceIdResolversNewRoute: typeof AdminSpacesSpaceIdResolversNewRoute
+  AdminSpacesSpaceIdRoute: typeof AdminSpacesSpaceIdRouteWithChildren
+  AdminSpacesNewRoute: typeof AdminSpacesNewRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminIndexRoute: AdminIndexRoute,
-  AdminSpacesSpaceIdIndexRoute: AdminSpacesSpaceIdIndexRoute,
-  AdminSpacesSpaceIdResolversResolverIdRoute:
-    AdminSpacesSpaceIdResolversResolverIdRoute,
-  AdminSpacesSpaceIdResolversNewRoute: AdminSpacesSpaceIdResolversNewRoute,
+  AdminSpacesSpaceIdRoute: AdminSpacesSpaceIdRouteWithChildren,
+  AdminSpacesNewRoute: AdminSpacesNewRoute,
 }
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
@@ -208,6 +343,7 @@ const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRouteWithChildren,
   LoginRoute: LoginRoute,
+  ApiThemeRoute: ApiThemeRoute,
   ApiAuthLoginRoute: ApiAuthLoginRoute,
   ApiAuthLogoutRoute: ApiAuthLogoutRoute,
 }

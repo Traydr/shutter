@@ -183,8 +183,44 @@ export function resolverFields(resolver: SourceResolverPolicy): ResolverFields |
   return fields;
 }
 
-function placeholderNames(url: string): readonly string[] {
-  return [...url.matchAll(/\{([^{}]*)\}/gu)].map((match) => match[1] ?? "");
+/** Every `{name}` in a template, in order of appearance. */
+export function placeholderNames(template: string): readonly string[] {
+  return [...template.matchAll(/\{([^{}]*)\}/gu)].map((match) => match[1] ?? "");
+}
+
+/** The placeholders that sit in the hostname of a URL template; each must list its values. */
+export function hostnamePlaceholders(url: string): readonly string[] {
+  const authority = /^[a-z]+:\/\/([^/]*)/iu.exec(url)?.[1] ?? "";
+  return placeholderNames(authority);
+}
+
+function allowedLines(allowed: string): Map<string, string> {
+  const entries = new Map<string, string>();
+  for (const line of lines(allowed)) {
+    const separator = line.indexOf("=");
+    if (separator < 1) continue;
+    entries.set(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
+  }
+  return entries;
+}
+
+/** The comma-separated values the editor shows for one placeholder. */
+export function allowedFor(allowed: string, name: string): string {
+  return allowedLines(allowed).get(name) ?? "";
+}
+
+/** The `allowed` lines with one placeholder's values replaced; an empty value drops the line. */
+export function withAllowed(allowed: string, name: string, values: string): string {
+  const entries = allowedLines(allowed);
+  if (values.trim().length === 0) entries.delete(name);
+  else entries.set(name, values);
+  return [...entries].map(([key, value]) => `${key}=${value}`).join("\n");
+}
+
+/** The request pattern a source answers, from what the editor holds: `id/{a}/{b}`. */
+export function requestPattern(fields: ResolverFields): string {
+  const names = placeholderNames(fields.kind === "template" ? fields.url : fields.keyTemplate);
+  return [fields.id.trim() || "…", ...names.map((name) => `{${name}}`)].join("/");
 }
 
 function allowedValues(text: string) {
@@ -208,10 +244,10 @@ export function resolverBody(fields: ResolverFields): ResolverBody {
   if (fields.kind === "template") {
     const url = fields.url.trim();
     const restricted = allowedValues(fields.allowed);
+    // Only the URL's own placeholders travel: a value list left over from an
+    // earlier draft of the URL would otherwise be sent and rejected.
     const placeholders: PlaceholderInputs = {};
     for (const name of placeholderNames(url)) placeholders[name] = restricted[name] ?? {};
-    for (const [name, placeholder] of Object.entries(restricted))
-      placeholders[name] ??= placeholder;
     return { resolver: { id, type: "template", url, placeholders } };
   }
   const request: ResolverBody = {

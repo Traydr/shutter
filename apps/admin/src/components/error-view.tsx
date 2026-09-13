@@ -1,7 +1,7 @@
-import { type ErrorComponentProps, Link } from "@tanstack/react-router";
+import type { ErrorComponentProps } from "@tanstack/react-router";
 import { ControlReadError } from "../features/spaces/spaces-queries";
 import { AppHeader } from "./header";
-import { Button, Panel } from "./ui";
+import { Button, Card, TextLink } from "./ui";
 
 /** What a page shows when its read of Control failed. */
 export function ControlErrorView({ error, reset }: ErrorComponentProps) {
@@ -10,22 +10,20 @@ export function ControlErrorView({ error, reset }: ErrorComponentProps) {
   return (
     <>
       <AppHeader />
-      <main className="mx-auto grid max-w-lg gap-3.5 px-4 py-10">
-        <Panel className="grid gap-2 p-4">
-          <h1 className="m-0 text-[17px] font-semibold">{title}</h1>
-          <p className="m-0 text-ink-2 [overflow-wrap:anywhere]">{error.message}</p>
+      <main className="mx-auto max-w-lg px-6 py-16">
+        <Card className="grid gap-3 p-6">
+          <h1 className="text-[20px] font-semibold tracking-[-0.01em]">{title}</h1>
+          <p className="text-fg-2 [overflow-wrap:anywhere]">{error.message}</p>
           {failure?.requestId === undefined ? null : (
-            <p className="m-0 text-[11.5px] text-ink-3">Request {failure.requestId}</p>
+            <p className="text-[13px] text-fg-3">Request {failure.requestId}</p>
           )}
-          <div className="flex gap-2">
+          <div className="flex items-center gap-4 pt-1">
             <Button type="button" onClick={reset}>
               Try again
             </Button>
-            <Link to="/" className="self-center text-brand-ink hover:underline">
-              Back to Spaces
-            </Link>
+            <TextLink to="/">Back to Spaces</TextLink>
           </div>
-        </Panel>
+        </Card>
       </main>
     </>
   );

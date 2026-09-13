@@ -1,65 +1,93 @@
 @import "tailwindcss";
 
-@theme {
-  --color-paper: #eef0ee;
-  --color-panel: #ffffff;
-  --color-panel-2: #fafbfa;
-  --color-ink: #151a18;
-  --color-ink-2: #4d5652;
-  --color-ink-3: #8a938e;
-  --color-rule: #d5dad6;
-  --color-rule-2: #e7eae7;
-  --color-brand: #0b6b52;
-  --color-brand-ink: #05483a;
-  --color-brand-bg: #e4f2ec;
-  --color-amber: #b8670f;
-  --color-amber-bg: #fff3df;
-  --color-amber-ink: #6e3d05;
-  --color-red: #a83232;
-  --color-red-bg: #fbe9e9;
-  --color-red-rule: #e6c4c4;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+/* Dark is the default; the light values apply when the theme cookie says so. */
+:root {
+  color-scheme: dark;
+  --bg: #000000;
+  --s1: #0a0a0a;
+  --s2: #111111;
+  --s3: #1a1a1a;
+  --line: #232323;
+  --line-2: #333333;
+  --line-3: #444444;
+  --fg: #ededed;
+  --fg-2: #a1a1a1;
+  --fg-3: #6b6b6b;
+  --accent: #258fe0;
+  --accent-fg: #63b3f2;
+  --warn: #f5a623;
+  --warn-fg: #f5b950;
+  --red: #ff5c5c;
+  --red-fg: #ff7a7a;
+  --red-bg: rgba(255, 92, 92, 0.1);
+  --btn-bg: #ffffff;
+  --btn-fg: #000000;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --s1: #fafafa;
+  --s2: #f4f4f4;
+  --s3: #ececec;
+  --line: #eaeaea;
+  --line-2: #d9d9d9;
+  --line-3: #c4c4c4;
+  --fg: #171717;
+  --fg-2: #666666;
+  --fg-3: #999999;
+  --accent: #1b7fd3;
+  --accent-fg: #0b66b8;
+  --warn: #b7791f;
+  --warn-fg: #9a6512;
+  --red: #e5484d;
+  --red-fg: #c62f34;
+  --red-bg: rgba(229, 72, 77, 0.08);
+  --btn-bg: #171717;
+  --btn-fg: #ffffff;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-s1: var(--s1);
+  --color-s2: var(--s2);
+  --color-s3: var(--s3);
+  --color-line: var(--line);
+  --color-line-2: var(--line-2);
+  --color-line-3: var(--line-3);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-warn: var(--warn);
+  --color-warn-fg: var(--warn-fg);
+  --color-red: var(--red);
+  --color-red-fg: var(--red-fg);
+  --color-red-bg: var(--red-bg);
+  --color-btn-bg: var(--btn-bg);
+  --color-btn-fg: var(--btn-fg);
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "Inter", "Geist", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "Geist Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
 }
 
 @layer base {
-  html {
-    color-scheme: light;
-  }
   body {
-    @apply m-0 bg-paper text-ink font-sans text-[13px] leading-[1.45];
+    @apply m-0 bg-bg font-sans text-[14px] leading-normal text-fg antialiased;
   }
   button,
   input,
   select,
   textarea {
     font: inherit;
+    color: inherit;
   }
   time,
   .num {
     font-variant-numeric: tabular-nums;
   }
-}
-
-/* The Space page's jump list: the section in the URL hash is the active one. */
-.jump a {
-  display: flex;
-  justify-content: space-between;
-  padding: 5px 8px;
-  border-radius: 5px;
-  color: var(--color-ink-2);
-}
-.jump a b {
-  font: 600 10.5px var(--font-mono);
-  color: var(--color-ink-3);
-}
-body:has(#policy:target) .jump a[href="#policy"],
-body:has(#resolvers:target) .jump a[href="#resolvers"],
-body:has(#tokens:target) .jump a[href="#tokens"],
-body:has(#keys:target) .jump a[href="#keys"],
-body:has(#decommission:target) .jump a[href="#decommission"] {
-  background: var(--color-panel);
-  color: var(--color-ink);
-  font-weight: 600;
-  box-shadow: inset 2px 0 0 var(--color-brand);
+  textarea {
+    field-sizing: content;
+  }
 }
