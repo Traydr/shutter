@@ -1,5 +1,6 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { z } from "zod";
+import { Button, Field, Input, Notice } from "../components/ui";
 import { getSessionStatus } from "../features/auth/auth-service";
 
 const MESSAGES = {
@@ -25,36 +26,22 @@ function LoginPage() {
       <form
         method="post"
         action="/api/auth/login"
-        className="grid w-full max-w-sm gap-4 rounded-lg border border-rule bg-panel p-5"
+        className="grid w-full max-w-sm gap-6 rounded-[10px] border border-line bg-s1 p-7"
       >
-        <div className="flex items-center gap-3 border-b border-rule-2 pb-4">
+        <div className="flex items-center gap-3">
           <img src="/favicon.svg" alt="" width={32} height={32} className="size-8" />
           <div>
-            <strong className="block text-sm font-semibold tracking-[.12em]">SHUTTER</strong>
-            <span className="block text-xs text-ink-3">Space administration</span>
+            <strong className="block text-[15px] font-semibold">Shutter</strong>
+            <span className="block text-[13px] text-fg-2">Sign in to manage Spaces</span>
           </div>
         </div>
-        <label className="grid gap-1.5">
-          <span className="text-xs font-semibold">Bootstrap token</span>
-          <input
-            type="password"
-            name="token"
-            required
-            autoComplete="current-password"
-            className="w-full rounded-md border border-rule bg-panel px-2.5 py-1.5 text-[13px]"
-          />
-        </label>
-        {error === undefined ? null : (
-          <p className="m-0 rounded-md border-l-[3px] border-red bg-red-bg px-3 py-2 text-[12.5px] text-red">
-            {MESSAGES[error]}
-          </p>
-        )}
-        <button
-          type="submit"
-          className="rounded-md bg-brand px-3 py-2 text-sm font-semibold text-white hover:bg-brand-ink"
-        >
+        <Field label="Bootstrap token">
+          <Input type="password" name="token" required autoComplete="current-password" />
+        </Field>
+        {error === undefined ? null : <Notice tone="error">{MESSAGES[error]}</Notice>}
+        <Button tone="primary" type="submit">
           Sign in
-        </button>
+        </Button>
       </form>
     </main>
   );

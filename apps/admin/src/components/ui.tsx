@@ -1,10 +1,120 @@
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import { Link, type LinkProps } from "@tanstack/react-router";
+import type {
+  ButtonHTMLAttributes,
+  InputHTMLAttributes,
+  ReactNode,
+  TextareaHTMLAttributes,
+} from "react";
+import { calendarDate, relativeTime } from "../features/spaces/summaries";
 
-function cx(...classes: (string | false | undefined)[]): string {
+export function cx(...classes: (string | false | undefined)[]): string {
   return classes.filter((entry) => entry !== false && entry !== undefined).join(" ");
 }
 
-export function Panel({
+// Buttons
+
+const BUTTON_TONES = {
+  default: "border-line-2 bg-bg text-fg hover:border-line-3 hover:bg-s2",
+  primary: "border-btn-bg bg-btn-bg text-btn-fg hover:opacity-90",
+  ghost: "border-transparent bg-transparent text-fg-2 hover:bg-s2 hover:text-fg",
+  danger: "border-line-2 bg-bg text-red-fg hover:border-red hover:bg-red-bg",
+} as const;
+
+const BUTTON_SIZES = {
+  md: "h-9 px-3.5 text-sm",
+  sm: "h-[30px] px-2.5 text-[13px]",
+} as const;
+
+export type ButtonTone = keyof typeof BUTTON_TONES;
+
+export function buttonClass(tone: ButtonTone = "default", size: keyof typeof BUTTON_SIZES = "md") {
+  return cx(
+    "inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-md border font-medium leading-none disabled:cursor-default disabled:opacity-50",
+    BUTTON_TONES[tone],
+    BUTTON_SIZES[size],
+  );
+}
+
+export function Button({
+  tone = "default",
+  size = "md",
+  className,
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  tone?: ButtonTone;
+  size?: keyof typeof BUTTON_SIZES;
+}) {
+  return <button {...rest} className={cx(buttonClass(tone, size), className)} />;
+}
+
+/** A router link that looks like a button. */
+export function LinkButton({
+  tone = "default",
+  size = "md",
+  className,
+  ...rest
+}: LinkProps & { tone?: ButtonTone; size?: keyof typeof BUTTON_SIZES; className?: string }) {
+  return <Link {...rest} className={cx(buttonClass(tone, size), className)} />;
+}
+
+export function TextLink({ className, ...rest }: LinkProps & { className?: string }) {
+  return <Link {...rest} className={cx("text-accent-fg hover:underline", className)} />;
+}
+
+// Inputs
+
+export const INPUT_CLASS =
+  "h-10 w-full min-w-0 rounded-md border border-line-2 bg-bg px-3 text-sm text-fg outline-none placeholder:text-fg-3 hover:border-line-3 focus:border-fg-3 focus:ring-[3px] focus:ring-s3 disabled:bg-s1 disabled:text-fg-2";
+export const MONO_INPUT_CLASS = `${INPUT_CLASS} font-mono text-[13.5px]`;
+
+export function Input({
+  mono = false,
+  className,
+  ...rest
+}: InputHTMLAttributes<HTMLInputElement> & { mono?: boolean }) {
+  return <input {...rest} className={cx(mono ? MONO_INPUT_CLASS : INPUT_CLASS, className)} />;
+}
+
+export function Textarea({
+  mono = false,
+  className,
+  ...rest
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { mono?: boolean }) {
+  return (
+    <textarea
+      {...rest}
+      className={cx(
+        mono ? MONO_INPUT_CLASS : INPUT_CLASS,
+        "h-auto min-h-0 resize-y py-2.5 leading-relaxed",
+        className,
+      )}
+    />
+  );
+}
+
+/** A labelled control with an optional sentence of help beneath it. */
+export function Field({
+  label,
+  help,
+  children,
+}: {
+  label: ReactNode;
+  help?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    // biome-ignore lint/a11y/noLabelWithoutControl: the control is the child component
+    <label className="grid min-w-0 gap-2">
+      <span className="text-sm font-medium">{label}</span>
+      {children}
+      {help === undefined ? null : <span className="text-[13px] text-fg-2">{help}</span>}
+    </label>
+  );
+}
+
+// Surfaces and text
+
+export function Card({
   id,
   className,
   children,
@@ -14,245 +124,186 @@ export function Panel({
   children: ReactNode;
 }) {
   return (
-    <section
-      id={id}
-      className={cx("min-w-0 overflow-hidden rounded-lg border border-rule bg-panel", className)}
-    >
+    <section id={id} className={cx("min-w-0 rounded-[10px] border border-line bg-s1", className)}>
       {children}
     </section>
   );
 }
 
-/** The strip at the top of a panel: a title, an aside in muted text, and actions pushed right. */
-export function PanelHead({
-  title,
-  aside,
-  children,
-}: {
-  title: ReactNode;
-  aside?: ReactNode;
-  children?: ReactNode;
-}) {
+/** The strip at the foot of a form card: a sentence on the left, the action on the right. */
+export function CardFooter({ children }: { children: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-2.5 border-b border-rule bg-panel-2 px-2.5 py-1.5">
-      <h2 className="m-0 text-[13px] font-semibold leading-tight">{title}</h2>
-      {aside === undefined ? null : <span className="text-ink-3">{aside}</span>}
-      <span className="flex-1" />
+    <div className="flex items-center justify-between gap-3 border-t border-line pt-[18px] text-[13px] text-fg-2">
       {children}
     </div>
   );
 }
 
-export function Pill({
-  tone = "muted",
-  small = false,
+export function PageTitle({ children }: { children: ReactNode }) {
+  return <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.02em]">{children}</h1>;
+}
+
+export function SectionTitle({ children }: { children: ReactNode }) {
+  return <h2 className="text-[17px] font-semibold tracking-[-0.01em]">{children}</h2>;
+}
+
+export function Mono({ children, className }: { children: ReactNode; className?: string }) {
+  return <span className={cx("font-mono text-[13px]", className)}>{children}</span>;
+}
+
+// State
+
+export type Tone = "ok" | "warn" | "off";
+
+const DOT_TONES = { ok: "bg-accent", warn: "bg-warn", off: "bg-line-3" } as const;
+
+export function Dot({ tone }: { tone: Tone }) {
+  return <i className={cx("inline-block size-2 flex-none rounded-full", DOT_TONES[tone])} />;
+}
+
+/** One dot and one sentence: the whole status vocabulary of the app. */
+export function StateLine({
+  tone,
   children,
+  className,
 }: {
-  tone?: "ok" | "warn" | "muted";
-  small?: boolean;
+  tone: Tone;
   children: ReactNode;
+  className?: string;
 }) {
-  const tones = {
-    ok: "bg-brand-bg text-brand-ink before:bg-brand",
-    warn: "bg-amber-bg text-amber before:bg-amber",
-    muted: "bg-[#eceeec] text-ink-2 before:bg-ink-3",
-  };
   return (
-    <span
-      className={cx(
-        "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full font-semibold leading-none before:size-1.5 before:rounded-full before:content-['']",
-        small ? "px-1.5 py-0.5 text-[10.5px]" : "px-2 py-[3px] text-[11px]",
-        tones[tone],
-      )}
-    >
-      {children}
+    <span className={cx("inline-flex min-w-0 items-center gap-2", className)}>
+      <Dot tone={tone} />
+      <span className={cx("min-w-0", tone === "warn" && "text-warn-fg")}>{children}</span>
     </span>
   );
 }
 
-export function RouteClassChip({ routeClass }: { routeClass: "public" | "private" }) {
-  return (
-    <span
-      className={cx(
-        "inline-block rounded border px-1.5 py-[3px] font-mono text-[10.5px] font-semibold uppercase leading-none tracking-[.04em]",
-        routeClass === "public"
-          ? "border-[#b9d9cc] bg-[#f2faf6] text-brand-ink"
-          : "border-rule text-ink-2",
-      )}
-    >
-      {routeClass}
-    </span>
-  );
-}
-
-/** A `?` glyph that reveals its explanation on hover or focus. */
-export function Hint({ text, align = "left" }: { text: string; align?: "left" | "right" }) {
-  return (
-    <span className="group relative ml-1.5 inline-flex flex-none align-[1px]">
-      <button
-        type="button"
-        aria-label={text}
-        className="inline-flex size-3.5 cursor-help items-center justify-center rounded-full border border-[#b6bcb7] bg-transparent p-0 text-[9.5px] font-bold normal-case leading-none tracking-normal text-ink-3 hover:border-ink-2 hover:text-ink-2 focus:border-ink-2 focus:text-ink-2 focus:outline-none"
-      >
-        ?
-      </button>
-      <span
-        role="tooltip"
-        className={cx(
-          "absolute top-[calc(100%+7px)] z-30 hidden w-[270px] rounded-md bg-[#1b211f] px-2.5 py-2 text-left text-[11.5px] font-normal normal-case leading-[1.45] tracking-normal text-white shadow-[0_8px_24px_#0004] group-hover:block group-focus-within:block",
-          align === "left" ? "left-0" : "right-0",
-        )}
-      >
-        {text}
-      </span>
-    </span>
-  );
-}
-
-export function Notice({ children }: { children: ReactNode }) {
-  return (
-    <p className="m-0 rounded-md border-l-[3px] border-brand bg-brand-bg px-3 py-2 text-[12.5px] text-brand-ink">
-      {children}
-    </p>
-  );
-}
-
-export function ErrorNotice({ children }: { children: ReactNode }) {
-  return (
-    <p
-      role="alert"
-      className="m-0 rounded-md border-l-[3px] border-red bg-red-bg px-3 py-2 text-[12.5px] text-red [overflow-wrap:anywhere]"
-    >
-      {children}
-    </p>
-  );
-}
-
-export function WarnBox({ children }: { children: ReactNode }) {
-  return (
-    <div className="m-0 rounded-md border border-[#f0d9b4] bg-amber-bg px-2.5 py-1.5 text-[12.5px] text-amber-ink">
-      {children}
-    </div>
-  );
-}
-
-const BUTTON_TONES = {
-  default: "border-rule bg-panel text-ink hover:bg-panel-2",
-  primary: "border-brand bg-brand text-white hover:bg-brand-ink hover:border-brand-ink",
-  danger: "border-red-rule bg-panel text-red hover:bg-red-bg",
-  ghost: "border-transparent bg-transparent text-ink-2 hover:text-ink",
+const NOTICE_TONES = {
+  info: "border-line bg-s1 text-fg-2",
+  warn: "border-warn/40 bg-warn/10 text-warn-fg",
+  error: "border-red/40 bg-red-bg text-red-fg",
 } as const;
 
-export function Button({
-  tone = "default",
-  small = false,
-  className,
-  ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  tone?: keyof typeof BUTTON_TONES;
-  small?: boolean;
-}) {
-  return (
-    <button
-      {...rest}
-      className={cx(
-        "inline-flex cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-md border font-semibold leading-none disabled:cursor-default disabled:opacity-50",
-        small ? "px-[7px] py-[3px] text-[11px]" : "px-2.5 py-1.5 text-[12px]",
-        BUTTON_TONES[tone],
-        className,
-      )}
-    />
-  );
-}
-
-export const INPUT_CLASS =
-  "w-full min-w-0 rounded-[5px] border border-[#c3c9c4] bg-panel px-2 py-[5px] text-[12.5px] text-ink disabled:bg-panel-2 disabled:text-ink-3";
-
-export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} className={cx(INPUT_CLASS, props.className)} />;
-}
-
-/** A labelled control: label row with an optional hint, the control, an optional note. */
-export function Field({
-  label,
-  hint,
-  note,
-  wide = false,
+export function Notice({
+  tone = "info",
   children,
 }: {
-  label: string;
-  hint?: string;
-  note?: ReactNode;
-  wide?: boolean;
+  tone?: keyof typeof NOTICE_TONES;
   children: ReactNode;
 }) {
   return (
-    // biome-ignore lint/a11y/noLabelWithoutControl: the control is the child component
-    <label className={cx("m-0 grid min-w-0 gap-1", wide && "col-span-full")}>
-      <span className="flex items-center text-[12px] font-semibold">
-        {label}
-        {hint === undefined ? null : <Hint text={hint} />}
-      </span>
+    <p
+      role={tone === "error" ? "alert" : undefined}
+      className={cx(
+        "rounded-lg border px-4 py-3 text-[13.5px] [overflow-wrap:anywhere]",
+        NOTICE_TONES[tone],
+      )}
+    >
       {children}
-      {note === undefined ? null : <small className="text-[11px] text-ink-3">{note}</small>}
-    </label>
-  );
-}
-
-export function Label({ children }: { children: ReactNode }) {
-  return (
-    <span className="text-[10.5px] font-semibold uppercase leading-none tracking-[.07em] text-ink-3">
-      {children}
-    </span>
-  );
-}
-
-/** A UTC instant at minute precision; the full instant stays in the attributes. */
-export function Time({ value }: { value: string }) {
-  return (
-    <time dateTime={value} title={value} className="whitespace-nowrap">
-      {value.slice(0, 10)} {value.slice(11, 16)}
-    </time>
-  );
-}
-
-export function TimeOrNever({ value }: { value: string | undefined }) {
-  return value === undefined ? <span className="text-ink-3">never</span> : <Time value={value} />;
-}
-
-export function Code({ children }: { children: ReactNode }) {
-  return (
-    <code className="rounded border border-rule-2 bg-[#f1f3f1] px-1 font-mono text-[12px] [overflow-wrap:anywhere]">
-      {children}
-    </code>
+    </p>
   );
 }
 
 /** One-time credential display; the value never appears anywhere else. */
 export function SecretReveal({ label, value }: { label: string; value: string }) {
   return (
-    <Panel className="grid gap-1.5 border-[#f0d9b4] bg-amber-bg px-3 py-2.5">
-      <h2 className="m-0 text-[13px] font-semibold text-amber-ink">{label}</h2>
-      <span className="text-ink-2">
-        This secret is shown once. Copy it now into the application's secret store.
-      </span>
-      <div className="rounded-md bg-[#13231e] px-2.5 py-2 font-mono text-[12px] text-[#e5fff7] [overflow-wrap:anywhere]">
-        {value}
-      </div>
-    </Panel>
+    <Card className="grid gap-2.5 border-warn/40 p-5">
+      <h2 className="text-[15px] font-semibold">{label}</h2>
+      <p className="text-[13.5px] text-fg-2">
+        This is shown once. Copy it now into the application's secret store.
+      </p>
+      <CodeBlock>{value}</CodeBlock>
+    </Card>
+  );
+}
+
+export function CodeBlock({ children }: { children: ReactNode }) {
+  return (
+    <pre className="m-0 whitespace-pre-wrap rounded-lg border border-line bg-bg px-4 py-3 font-mono text-[13px] leading-relaxed text-fg [overflow-wrap:anywhere]">
+      {children}
+    </pre>
+  );
+}
+
+/** A URL or key template with each `{name}` picked out in the accent colour. */
+export function Template({ value, className }: { value: string; className?: string }) {
+  const parts = value.split(/(\{[^{}]*\})/u).filter((part) => part.length > 0);
+  return (
+    <span className={cx("font-mono text-[13px] [overflow-wrap:anywhere]", className)}>
+      {parts.map((part, index) =>
+        part.startsWith("{") ? (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the parts are positional text
+          <b key={index} className="whitespace-nowrap font-medium text-accent-fg">
+            {part}
+          </b>
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: the parts are positional text
+          <span key={index}>{part}</span>
+        ),
+      )}
+    </span>
+  );
+}
+
+// Time
+
+/** "16 minutes ago"; the full instant stays in the attributes. Rendered on both sides, so hydration may differ by a minute. */
+export function Ago({ value }: { value: string }) {
+  return (
+    <time dateTime={value} title={value} suppressHydrationWarning>
+      {relativeTime(value)}
+    </time>
+  );
+}
+
+/** "Aug 13, 2026"; the full instant stays in the attributes. */
+export function Day({ value }: { value: string }) {
+  return (
+    <time dateTime={value} title={value}>
+      {calendarDate(value)}
+    </time>
+  );
+}
+
+// Lists
+
+/** A bordered stack of rows separated by hairlines. */
+export function List({ children }: { children: ReactNode }) {
+  return (
+    <div className="grid divide-y divide-line overflow-hidden rounded-[10px] border border-line bg-s1">
+      {children}
+    </div>
+  );
+}
+
+const ROW_CLASS = "grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 px-5 py-3.5";
+
+export function Row({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={cx(ROW_CLASS, className)}>{children}</div>;
+}
+
+export function LinkRow({ className, ...rest }: LinkProps & { className?: string }) {
+  return <Link {...rest} className={cx(ROW_CLASS, "hover:bg-s2", className)} />;
+}
+
+export function Chevron() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      aria-hidden="true"
+      className="text-fg-3"
+    >
+      <path d="m6 3.5 4.5 4.5L6 12.5" />
+    </svg>
   );
 }
 
 export function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
-
-export function EmptyRow({ children }: { children: ReactNode }) {
-  return <p className="m-0 p-2.5 text-ink-3">{children}</p>;
-}
-
-export const TABLE_CLASS = "w-full border-collapse";
-export const TH_CLASS =
-  "whitespace-nowrap border-b border-rule px-2.5 py-1.5 text-left text-[10.5px] font-semibold uppercase leading-none tracking-[.07em] text-ink-3";
-export const TD_CLASS =
-  "border-b border-rule-2 px-2.5 py-1.5 align-middle [overflow-wrap:anywhere]";
