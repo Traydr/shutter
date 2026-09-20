@@ -1,0 +1,20 @@
+{
+  "name": "@shutter/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:cli": "pnpm --filter @shutter/cli^... build && bun build --compile --no-compile-autoload-dotenv src/cli.ts --outfile dist/shutter",
+    "dev": "bun src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@shutter/admin-api": "workspace:*",
+    "@shutter/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "typescript": "7.0.2",
+    "vitest": "4.1.4"
+  }
+}

@@ -96,6 +96,25 @@ a deployed Control (`CONTROL_BASE_URL=https://<control-domain>` and its real
 `ADMIN_API_TOKEN`) works against production data; the session cookie is
 Secure, which browsers accept on `localhost`.
 
+### The `shutter` CLI
+
+`apps/cli` is the same admin API from a terminal, meant for agents and scripts:
+Spaces, resolvers, API tokens, Capability Keys, and the derived imgproxy
+allowlist. It is the one part of the workspace that uses [Bun](https://bun.sh),
+and only to run and compile; its code sticks to `node:` modules so it
+typechecks and tests with everything else.
+
+```sh
+pnpm --filter @shutter/cli dev -- overview         # run from source
+pnpm --filter @shutter/cli build:cli               # apps/cli/dist/shutter, a standalone binary
+ln -s "$PWD/apps/cli/dist/shutter" ~/.local/bin/shutter
+shutter auth login                                 # Control's URL and its ADMIN_API_TOKEN
+```
+
+Credentials resolve from `--url`/`--token`, then `SHUTTER_URL`/`SHUTTER_TOKEN`,
+then `~/.config/shutter/credentials` (mode 0600). `skills/shutter/SKILL.md` is
+the agent skill that goes with it.
+
 The video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
 `poppler-utils`.
 
