@@ -73,6 +73,7 @@ app.route(
     }),
     addressLookup: async () => ["93.184.216.34"],
     imgproxyAllowedSources: () => "https://uploads.example.test/",
+    mediaStoreSource: () => "https://account.r2.example.test/shutter-media",
     edgeRefreshStatus: () => refresh.latest(),
     edgeBaseUrl: () => "https://edge.example.test",
   }),

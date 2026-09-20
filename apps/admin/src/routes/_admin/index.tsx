@@ -36,7 +36,9 @@ function OverviewPage() {
       space.policy.allowedSourceOrigins.some((rule) => rule.origin.includes(needle)),
   );
   const edge = edgeSentence(overview);
-  const { uncovered, derivedValue } = overview.coverage;
+  const { uncovered, derivedValue, mediaStoreSource } = overview.coverage;
+  const mediaStoreMissing = mediaStoreSource !== undefined && uncovered.includes(mediaStoreSource);
+  const uncoveredOrigins = uncovered.filter((prefix) => prefix !== mediaStoreSource);
 
   return (
     <>
@@ -107,7 +109,10 @@ function OverviewPage() {
           {uncovered.length === 0 ? (
             <details className="grid gap-3">
               <summary className="cursor-pointer select-none">
-                Every active origin is in the deployed image-proxy allowlist. Show the value.
+                {mediaStoreSource === undefined
+                  ? "Every active origin is"
+                  : "Every active origin and the Media Store are"}{" "}
+                in the deployed image-proxy allowlist. Show the value.
               </summary>
               <CodeBlock>
                 {derivedValue === "" ? "No active Space origins" : derivedValue}
@@ -119,9 +124,11 @@ function OverviewPage() {
           ) : (
             <div className="grid gap-3">
               <Notice tone="warn">
-                {plural(uncovered.length, "origin")} {uncovered.length === 1 ? "isn't" : "aren't"}{" "}
-                in the deployed image-proxy allowlist yet: {uncovered.join(", ")}. Paste this value
-                into IMGPROXY_ALLOWED_SOURCES and redeploy.
+                {mediaStoreMissing &&
+                  `The Media Store (${mediaStoreSource}) isn't in the deployed image-proxy allowlist, so no Master Preview can be optimized. `}
+                {uncoveredOrigins.length > 0 &&
+                  `${plural(uncoveredOrigins.length, "origin")} ${uncoveredOrigins.length === 1 ? "isn't" : "aren't"} in the deployed image-proxy allowlist yet: ${uncoveredOrigins.join(", ")}. `}
+                Paste this value into IMGPROXY_ALLOWED_SOURCES and redeploy.
               </Notice>
               <CodeBlock>{derivedValue}</CodeBlock>
               <div>

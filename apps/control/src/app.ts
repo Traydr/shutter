@@ -28,6 +28,7 @@ export interface ControlRuntimeConfig {
   /** The machine credential of the `/v1/admin` JSON routes. */
   adminApiToken?(): string | undefined;
   imgproxyAllowedSources?(): string | undefined;
+  mediaStoreSource?(): string | undefined;
   /** Where the Edge serves from; the admin API reports it so pages can show complete Delivery URLs. */
   edgeBaseUrl?(): string | undefined;
   imgproxyConfig(): ImgproxyConfig | undefined;
@@ -169,6 +170,7 @@ export function createControlApp(
     registry: runtime.spaceRegistry,
     sourceResolvers: runtime.sourceResolvers,
     imgproxyAllowedSources: () => runtime.imgproxyAllowedSources?.(),
+    mediaStoreSource: () => runtime.mediaStoreSource?.(),
     edgeRefreshStatus: () => runtime.edgeRefreshTracker?.latest(),
     edgeBaseUrl: () => runtime.edgeBaseUrl?.(),
   };

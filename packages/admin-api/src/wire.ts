@@ -29,10 +29,14 @@ const generation = z.int().nonnegative();
 
 const nonEmpty = z.string().min(1);
 
-/** The coverage of active Space origins by the deployed imgproxy allowlist. */
+/**
+ * The coverage of what imgproxy must read by its deployed allowlist: active
+ * Space origins and, on the overview, the Media Store prefix named here.
+ */
 export const DEPLOYMENT_COVERAGE_SCHEMA = z.strictObject({
   derivedValue: z.string(),
   uncovered: z.array(z.string()).readonly(),
+  mediaStoreSource: z.string().optional(),
 });
 export type DeploymentCoverageWire = z.output<typeof DEPLOYMENT_COVERAGE_SCHEMA>;
 

@@ -9,6 +9,7 @@ export default defineConfig({
           globalSetup: ["./apps/control/src/postgres-test-global.ts"],
           include: [
             "apps/admin/src/**/*.test.ts",
+            "apps/cli/src/**/*.test.ts",
             "apps/control/src/**/*.test.ts",
             "apps/executor-video/src/**/*.test.ts",
             "apps/executor-pdf/src/**/*.test.ts",

@@ -69,6 +69,7 @@ function runtime(
     token: () => TOKEN,
     registry,
     imgproxyAllowedSources: () => "https://uploads.example.test/",
+    mediaStoreSource: () => undefined,
     edgeRefreshStatus: () => undefined,
     edgeBaseUrl: () => "https://edge.example.test",
     ...extra,
@@ -133,7 +134,7 @@ describe("admin API", () => {
     expect(overview.spaces.map((space) => space.policy.id)).toEqual(["example-public"]);
     expect(overview.spaces[0]?.status).toBe("active");
     expect(overview.coverage).toEqual({
-      derivedValue: "https://objects.example.test/example-bucket,https://uploads.example.test",
+      derivedValue: "https://objects.example.test/example-bucket/,https://uploads.example.test/",
       uncovered: ["https://objects.example.test/example-bucket"],
     });
     expect(overview.edgeRefresh).toEqual({
@@ -141,6 +142,28 @@ describe("admin API", () => {
       refreshedAt: "2026-09-12T10:00:00.000Z",
     });
     expect(overview.edgeBaseUrl).toBe("https://edge.example.test");
+  });
+
+  it("counts the Media Store prefix in the overview allowlist, not in a Space's", async () => {
+    const mediaStoreSource = "https://account.r2.example.test/shutter-media";
+    const api = client(
+      createAdminApi(runtime(undefined, { mediaStoreSource: () => mediaStoreSource })),
+    );
+    const missing = (await api.overview()).coverage;
+    expect(missing.mediaStoreSource).toBe(mediaStoreSource);
+    expect(missing.derivedValue.split(",")).toContain(`${mediaStoreSource}/`);
+    expect(missing.uncovered).toContain(mediaStoreSource);
+    expect((await api.space("example-public")).coverage.mediaStoreSource).toBeUndefined();
+
+    const covered = client(
+      createAdminApi(
+        runtime(undefined, {
+          mediaStoreSource: () => mediaStoreSource,
+          imgproxyAllowedSources: () => `https://uploads.example.test/,${mediaStoreSource}/`,
+        }),
+      ),
+    );
+    expect((await covered.overview()).coverage.uncovered).not.toContain(mediaStoreSource);
   });
 
   it("walks a Space through its life over the client", async () => {

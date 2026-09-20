@@ -7,7 +7,7 @@ import { createSerializedExecutorDispatch, sendExecutorWake } from "./executor-d
 import type { ImgproxyConfig } from "./imgproxy.js";
 import type { JobApiRuntime } from "./job-api.js";
 import type { ControlLogger } from "./logging.js";
-import { createMasterStore } from "./master-store.js";
+import { createMasterStore, mediaStoreSourcePrefix } from "./master-store.js";
 import { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
 import { createSourcePurge } from "./source-purge.js";
 import { createS3Presigner, createSourceResolverService } from "./source-resolvers.js";
@@ -210,6 +210,13 @@ export function buildControlRuntime(
     s3 === undefined || masterStoreInputs.values === undefined
       ? undefined
       : createMasterStore({ s3, bucket: masterStoreInputs.values.S3_BUCKET });
+  const mediaStoreSource =
+    masterStoreInputs.values === undefined
+      ? undefined
+      : mediaStoreSourcePrefix(
+          masterStoreInputs.values.S3_ENDPOINT,
+          masterStoreInputs.values.S3_BUCKET,
+        );
 
   const purgeInputs = readInputs(env, FEATURE_INPUTS.sourcePurge);
   const sourcePurge =
@@ -289,6 +296,7 @@ export function buildControlRuntime(
     edgeConfigToken: () => env.EDGE_CONFIG_TOKEN,
     adminApiToken: () => env.ADMIN_API_TOKEN,
     imgproxyAllowedSources: () => env.IMGPROXY_ALLOWED_SOURCES,
+    mediaStoreSource: () => mediaStoreSource,
     edgeBaseUrl: () => env.EDGE_BASE_URL,
     imgproxyConfig: () => imgproxyConfig,
     fetch,

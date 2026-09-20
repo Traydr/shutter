@@ -107,11 +107,12 @@ that key will fail. Do not wait for the overlap window.
 
 ## Update the imgproxy source allowlist
 
-The dashboard derives the Space portion of `IMGPROXY_ALLOWED_SOURCES` and lists
-active Space origins that the deployed value does not cover. Copy the derived
-value into the Railway variable, while retaining any additional source needed
-for Media Store Master Preview reads. Review the result; do not widen it to
-all sources.
+The dashboard derives `IMGPROXY_ALLOWED_SOURCES` from every active Space origin
+plus the Media Store prefix (`S3_ENDPOINT/S3_BUCKET/`) Control presigns Master
+Preview reads under, and lists whatever the deployed value does not cover.
+`shutter allowlist` prints the same value, and `shutter allowlist --check`
+fails while anything is uncovered. Copy the derived value into the Railway
+variable. Review the result; do not widen it to all sources.
 
 Run `railway config plan`, review every change, then deploy imgproxy. The value
 is process-start configuration, so a Space policy edit alone does not update
