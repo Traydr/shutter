@@ -58,6 +58,8 @@ export interface AdminApiRuntime extends ResolverTestRuntime {
   token(): string | undefined;
   registry?: SpaceRegistry | undefined;
   imgproxyAllowedSources(): string | undefined;
+  /** The Media Store prefix imgproxy reads Master Previews from; see `mediaStoreSourcePrefix`. */
+  mediaStoreSource(): string | undefined;
   edgeRefreshStatus(): EdgeRefreshStatus | undefined;
   edgeBaseUrl(): string | undefined;
 }
@@ -250,7 +252,11 @@ export function createAdminApi(runtime: AdminApiRuntime): Hono<AdminApiEnv> {
       generation: generation.generation,
       registryUpdatedAt: generation.updatedAt.toISOString(),
       spaces: spaces.map(spaceWire),
-      coverage: deploymentCoverage(spaces, runtime.imgproxyAllowedSources()),
+      coverage: deploymentCoverage(
+        spaces,
+        runtime.imgproxyAllowedSources(),
+        runtime.mediaStoreSource(),
+      ),
     };
     const refresh = runtime.edgeRefreshStatus();
     if (refresh !== undefined) {

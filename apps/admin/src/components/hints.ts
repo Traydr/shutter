@@ -32,7 +32,7 @@ export const HINTS = {
   capabilityKeys:
     "Shared symmetric key the application uses to mint Source Capabilities and Shutter uses to accept them. Rotate by adding a new key, installing it in the application, waiting 24 hours, then disabling the old one.",
   allowlist:
-    "imgproxy fetches only from IMGPROXY_ALLOWED_SOURCES. This value is derived from every active Space's origins. Copy it into the deployment whenever it changes, keeping any extra Media Store source the deployment needs.",
+    "imgproxy fetches only from IMGPROXY_ALLOWED_SOURCES. This value is derived from every active Space's origins plus the Media Store bucket Control reads Master Previews from. Copy it into the deployment whenever it changes.",
   decommission:
     "Blocks new Space-scoped work and removes the Space from new Edge snapshots. Keeps the identifier and every audit record. Nothing is deleted, and the identifier is never reused.",
   fixed:

@@ -1,6 +1,10 @@
 import { S3Client } from "@aws-sdk/client-s3";
 import { describe, expect, it } from "vitest";
-import { createMasterStore, MASTER_READ_EXPIRY_SECONDS } from "./master-store.js";
+import {
+  createMasterStore,
+  MASTER_READ_EXPIRY_SECONDS,
+  mediaStoreSourcePrefix,
+} from "./master-store.js";
 
 describe("master store", () => {
   it("creates a bounded read-only presigned GET", async () => {
@@ -15,6 +19,12 @@ describe("master store", () => {
     });
     const signed = new URL(await store.presignGet("masters/v1/space/fingerprint/video.webp"));
     expect(signed.pathname).toBe("/shutter-media/masters/v1/space/fingerprint/video.webp");
+    const prefix = mediaStoreSourcePrefix(
+      "https://account.r2.cloudflarestorage.com",
+      "shutter-media",
+    );
+    expect(prefix).toBe("https://account.r2.cloudflarestorage.com/shutter-media");
+    expect(signed.href.startsWith(`${prefix}/`)).toBe(true);
     expect(signed.searchParams.get("X-Amz-Expires")).toBe(String(MASTER_READ_EXPIRY_SECONDS));
     expect(signed.searchParams.get("X-Amz-Signature")).toMatch(/^[a-f0-9]{64}$/u);
   });
