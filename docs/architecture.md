@@ -223,7 +223,10 @@ small set of image, video, and PDF content types and forwards only bounded media
 metadata, range metadata, validators, and modification dates. A complete object
 with a valid length of at most 512 MB can use the Cloudflare Cache API. Warm
 range and conditional requests use that complete entry. Cold ranges and larger
-objects stream from the origin and do not enter R2.
+objects stream from the origin and do not enter R2. Every delivery response
+carries `Access-Control-Allow-Origin: *` (ADR 0030): the URL, public or
+token-bearing, is the authorization, so a consumer can `fetch` a Delivery URL
+from its own origin as well as embed it.
 
 Shutter owns a separate Media Store containing only generated media
 bytes. Object keys are deterministic from the Shutter Space, Source ID,

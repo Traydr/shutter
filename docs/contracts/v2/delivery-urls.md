@@ -65,3 +65,15 @@ responses are `private, no-store`.
 Cache identity does not depend on the resolver's configuration. Editing a
 resolver's endpoint, bucket, or credential does not invalidate cached bytes.
 Changed bytes need a new reference.
+
+## Cross-origin reads
+
+Every response on these routes, including `4xx` and `5xx`, carries
+`Access-Control-Allow-Origin: *` and no `Access-Control-Allow-Credentials`
+(ADR 0030). `OPTIONS` answers `204 No Content` with
+`Access-Control-Allow-Methods: GET,HEAD`,
+`Access-Control-Allow-Headers: Range,If-Range,If-None-Match,If-Modified-Since`,
+and `Access-Control-Max-Age: 86400`. Responses carry
+`Access-Control-Expose-Headers: Accept-Ranges,Content-Length,Content-Range,ETag,Last-Modified`.
+A private response stays `private, no-store`; the token, not the origin, is
+the authorization.

@@ -49,3 +49,7 @@ Private browser responses use `Cache-Control: private, no-store`. The Worker
 may store a separately cloned response at its non-public canonical Cache API key
 for 24 hours, but it must validate the request capability before every lookup
 and must never forward the internal cache header to the browser.
+
+Every response on these routes carries `Access-Control-Allow-Origin: *` and
+answers a preflight as the
+[v2 contract](../v2/delivery-urls.md#cross-origin-reads) describes.

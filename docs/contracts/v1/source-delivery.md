@@ -33,6 +33,12 @@ content type, `Content-Disposition: inline`, and
 values for `Content-Length`, `Content-Range`, `Accept-Ranges`, `ETag`, and
 `Last-Modified`. It drops all other origin headers.
 
+Both routes answer cross-origin reads with the headers the
+[v2 contract](../v2/delivery-urls.md#cross-origin-reads) lists: every response
+carries `Access-Control-Allow-Origin: *`, a preflight allows `GET` and `HEAD`
+with the range and conditional request headers above, and the validated
+response headers are exposed.
+
 Shutter forwards one valid byte range and the `If-Range`, `If-None-Match`, and
 `If-Modified-Since` conditions to the trusted origin. It preserves valid `206`,
 `304`, and `416` responses. It rejects multiple or malformed ranges. Redirects,
