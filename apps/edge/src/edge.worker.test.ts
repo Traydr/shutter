@@ -810,6 +810,59 @@ describe("private v2 delivery", () => {
       "https://sources.example.com/private/originals/key-1",
     );
   });
+
+  it("answers cross-origin reads and preflights on every delivery response", async () => {
+    const origin = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("private-pdf", {
+          headers: {
+            "accept-ranges": "bytes",
+            "content-length": "11",
+            "content-type": "application/pdf",
+            etag: '"pdf-v1"',
+          },
+        }),
+    );
+    vi.stubGlobal("fetch", configFetch(origin));
+    const token = await accessToken("source_delivery", "media/key-1", 160);
+
+    const preflight = await SELF.fetch(`${base}?token=${token}`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://app.example.test",
+        "access-control-request-method": "GET",
+        "access-control-request-headers": "range",
+      },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("access-control-allow-origin")).toBe("*");
+    expect(preflight.headers.get("access-control-allow-methods")).toBe("GET,HEAD");
+    expect(preflight.headers.get("access-control-allow-headers")).toBe(
+      "Range,If-Range,If-None-Match,If-Modified-Since",
+    );
+    expect(preflight.headers.get("access-control-max-age")).toBe("86400");
+
+    const delivered = await SELF.fetch(`${base}?token=${token}`, {
+      headers: { origin: "https://app.example.test" },
+    });
+    expect(delivered.status).toBe(200);
+    expect(delivered.headers.get("access-control-allow-origin")).toBe("*");
+    expect(delivered.headers.get("access-control-expose-headers")).toBe(
+      "Accept-Ranges,Content-Length,Content-Range,ETag,Last-Modified",
+    );
+    expect(delivered.headers.get("access-control-allow-credentials")).toBeNull();
+
+    // A refusal is readable too, so a fetch caller sees the 403 rather than a
+    // network error, and the `/internal/` routes stay outside the rule.
+    const refused = await SELF.fetch(base, { headers: { origin: "https://app.example.test" } });
+    expect(refused.status).toBe(403);
+    expect(refused.headers.get("access-control-allow-origin")).toBe("*");
+    const internal = await SELF.fetch("https://edge.shutter.test/internal/v1/cache/purge", {
+      method: "OPTIONS",
+      headers: { origin: "https://app.example.test", "access-control-request-method": "POST" },
+    });
+    expect(internal.headers.get("access-control-allow-origin")).toBeNull();
+  });
 });
 
 describe("workerd protocol conformance", () => {

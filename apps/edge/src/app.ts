@@ -2,6 +2,7 @@ import { faviconIcoResponse, faviconSvgResponse } from "@shutter/assets";
 import type { JsonValue } from "@shutter/protocol";
 import { Hono } from "hono";
 import { z } from "zod";
+import { deliveryCors } from "./delivery-cors.js";
 import { registerV2DeliveryRoutes } from "./delivery-v2-routes.js";
 import { registerOptimizationRoutes } from "./optimization-routes.js";
 import { registerSourceDeliveryRoutes } from "./source-delivery-routes.js";
@@ -45,6 +46,10 @@ export const app = new Hono<{ Bindings: CloudflareBindings }>();
 app.get("/favicon.svg", faviconSvgResponse);
 app.get("/favicon.ico", faviconIcoResponse);
 app.get("/healthz", (context) => context.json({ ok: true, service: "edge" }));
+
+// The delivery routes and nothing else: `/internal/` keeps its own auth.
+app.use("/v1/*", deliveryCors);
+app.use("/v2/*", deliveryCors);
 
 registerSourceDeliveryRoutes(app);
 registerV2DeliveryRoutes(app);
