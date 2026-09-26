@@ -13,7 +13,7 @@ for its own account like any other Worker project.
 - A Cloudflare zone for the Control and Edge custom domains, and an R2 bucket
   with the lifecycle rule in `infra/cloudflare/r2-lifecycle.json`.
 - Wrangler and Railway CLI sessions for the target accounts.
-- Node 22, pnpm 11.1, and a running container runtime.
+- Node 24, pnpm 11, and a running container runtime.
 
 Run `pnpm check` before deployment.
 

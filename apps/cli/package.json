@@ -13,7 +13,7 @@
     "@shutter/protocol": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^22.20.4",
+    "@types/node": "^24.13.6",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
   }
