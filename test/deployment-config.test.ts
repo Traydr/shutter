@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import { projectDefinitionToGraph } from "railway/iac";
 import { describe, expect, it } from "vitest";
 import { parseDeploymentInput } from "../.railway/deployment-input.ts";
 import { buildRailwayProject } from "../.railway/railway.ts";
@@ -19,12 +18,27 @@ const commonEnvironment = {
     "https://uploads.example.com/,https://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.r2.cloudflarestorage.com/",
 };
 
-function graphFor(environment: Record<string, string>) {
-  return projectDefinitionToGraph(buildRailwayProject(environment));
+function projectFor(environment: Record<string, string>) {
+  const definition = buildRailwayProject(environment);
+  const resources = (definition.resources ?? []).flat();
+  // A mounted volume appears only in its owner's volumeAttachments, so count
+  // those alongside the volumes declared as resources.
+  const volumes = new Set<string>();
+  for (const entry of resources) {
+    if (entry.type === "volume") volumes.add(entry.name);
+    if (entry.type === "service" || entry.type === "database") {
+      for (const attachment of Object.values(entry.volumeAttachments ?? {})) {
+        volumes.add(attachment.volume.slice("volume.".length));
+      }
+    }
+  }
+  return { name: definition.name, resources, volumes: [...volumes] };
 }
 
-function service(graph: ReturnType<typeof graphFor>, name: string) {
-  const resource = graph.resources.find((entry) => entry.type === "service" && entry.name === name);
+function service(project: ReturnType<typeof projectFor>, name: string) {
+  const resource = project.resources.find(
+    (entry) => entry.type === "service" && entry.name === name,
+  );
   if (
     resource?.type !== "service" ||
     !resource.variables ||
@@ -43,12 +57,12 @@ function service(graph: ReturnType<typeof graphFor>, name: string) {
 
 describe("deployment configuration", () => {
   it("builds an unseeded topology without preserved values", () => {
-    const graph = graphFor({ ...commonEnvironment });
-    const control = service(graph, "Shutter-Control");
-    const imgproxy = service(graph, "Shutter-Imgproxy");
+    const project = projectFor({ ...commonEnvironment });
+    const control = service(project, "Shutter-Control");
+    const imgproxy = service(project, "Shutter-Imgproxy");
 
-    expect(graph.project.name).toBe("example-shutter");
-    expect(graph.resources.some((entry) => entry.type === "volume")).toBe(false);
+    expect(project.name).toBe("example-shutter");
+    expect(project.volumes).toEqual([]);
     expect(control.source.repo).toBe("example/shutter");
     expect(control.networking.customDomains).toEqual({
       "control.example.com": { port: 8080 },
@@ -57,7 +71,7 @@ describe("deployment configuration", () => {
     expect(control.variables.ADMIN_API_TOKEN).toBeUndefined();
     expect(control.variables.S3_ACCESS_KEY_ID).toBeUndefined();
 
-    const admin = service(graph, "Shutter-Admin");
+    const admin = service(project, "Shutter-Admin");
     expect(admin.networking.customDomains).toEqual({ "admin.example.com": { port: 8080 } });
     expect(admin.variables.ADMIN_BOOTSTRAP_TOKEN).toBeUndefined();
     expect(admin.variables.CONTROL_ADMIN_TOKEN).toBeUndefined();
@@ -85,25 +99,21 @@ describe("deployment configuration", () => {
   });
 
   it("preserves only credentials once seeded, and declares the known volume", () => {
-    const graph = graphFor({
+    const project = projectFor({
       ...commonEnvironment,
       SHUTTER_SECRETS_SEEDED: "true",
       SHUTTER_JOBS_VOLUME_NAME: "existing-jobs-volume",
     });
-    const control = service(graph, "Shutter-Control");
-    const imgproxy = service(graph, "Shutter-Imgproxy");
+    const control = service(project, "Shutter-Control");
+    const imgproxy = service(project, "Shutter-Imgproxy");
 
-    expect(
-      graph.resources.some(
-        (entry) => entry.type === "volume" && entry.name === "existing-jobs-volume",
-      ),
-    ).toBe(true);
+    expect(project.volumes).toEqual(["existing-jobs-volume"]);
     // The operator login lives on the admin service; Control keeps only the machine credential.
     expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toBeUndefined();
     expect(control.variables.ADMIN_API_TOKEN).toEqual({ type: "preserve" });
     expect(control.variables.SHUTTER_ENCRYPTION_KEY).toEqual({ type: "preserve" });
     // The admin application reads Control's admin credential by reference, never a copy.
-    const admin = service(graph, "Shutter-Admin");
+    const admin = service(project, "Shutter-Admin");
     expect(admin.variables.ADMIN_BOOTSTRAP_TOKEN).toEqual({ type: "preserve" });
     expect(admin.variables.CONTROL_ADMIN_TOKEN).toMatchObject({ type: "reference" });
     expect(control.variables.S3_ACCESS_KEY_ID).toEqual({ type: "preserve" });
@@ -128,16 +138,12 @@ describe("deployment configuration", () => {
   });
 
   it("declares the volume for an unseeded project as soon as the name is known", () => {
-    const graph = graphFor({
+    const project = projectFor({
       ...commonEnvironment,
       SHUTTER_JOBS_VOLUME_NAME: "discovered-jobs-volume",
     });
-    const control = service(graph, "Shutter-Control");
-    expect(
-      graph.resources.some(
-        (entry) => entry.type === "volume" && entry.name === "discovered-jobs-volume",
-      ),
-    ).toBe(true);
+    const control = service(project, "Shutter-Control");
+    expect(project.volumes).toEqual(["discovered-jobs-volume"]);
     expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toBeUndefined();
   });
 
@@ -179,8 +185,8 @@ describe("deployment configuration", () => {
       },
     ]);
 
-    const graph = graphFor({ ...commonEnvironment });
-    const imgproxy = service(graph, "Shutter-Imgproxy");
+    const project = projectFor({ ...commonEnvironment });
+    const imgproxy = service(project, "Shutter-Imgproxy");
     expect(imgproxy.source.image).toBe("ghcr.io/imgproxy/imgproxy:v4.0.3");
     for (const guard of [
       "IMGPROXY_ALLOW_LINK_LOCAL_SOURCE_ADDRESSES",

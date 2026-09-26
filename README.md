@@ -245,7 +245,7 @@ A few properties fall out of those decisions:
 
 ## Development
 
-TypeScript workspace on Node 22 and pnpm 11.1.
+TypeScript workspace on Node 24 and pnpm 11.
 
 ```sh
 pnpm install --frozen-lockfile

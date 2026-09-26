@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Shutter is a TypeScript pnpm workspace (Node 22, pnpm 11.1). Setup, commands,
+Shutter is a TypeScript pnpm workspace (Node 24, pnpm 11). Setup, commands,
 configuration, how to run each service, and the repository conventions are in
 **[docs/development.md](./docs/development.md)** — read that first. The domain
 vocabulary is in [CONTEXT.md](./CONTEXT.md); the architecture and its decision
@@ -33,7 +33,7 @@ rather than showing up in review.
 
 If a sandbox ships an older Node than `.node-version` requires, `vite` and
 `@cloudflare/vite-plugin` fail with `does not provide an export named
-'registerHooks'`. Put a Node that satisfies `>=22.13.0 <23` on `PATH` first.
+'registerHooks'`. Put a Node that satisfies `>=24.0.0 <25` on `PATH` first.
 
 Where the Docker daemon is not auto-started, start it before `pnpm test:node`
 and make the socket usable by the test process, for example:

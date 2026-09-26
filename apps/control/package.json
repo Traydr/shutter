@@ -14,31 +14,31 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1084.0",
-    "@aws-sdk/s3-request-presigner": "^3.1085.0",
-    "@hono/node-server": "2.0.8",
-    "@opentelemetry/api": "1.9.0",
-    "@opentelemetry/api-logs": "0.221.0",
-    "@opentelemetry/exporter-logs-otlp-http": "0.221.0",
-    "@opentelemetry/resources": "2.10.0",
-    "@opentelemetry/sdk-logs": "0.221.0",
+    "@aws-sdk/client-s3": "^3.1140.0",
+    "@aws-sdk/s3-request-presigner": "^3.1140.0",
+    "@hono/node-server": "2.1.1",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/api-logs": "0.222.0",
+    "@opentelemetry/exporter-logs-otlp-http": "0.222.0",
+    "@opentelemetry/resources": "2.11.0",
+    "@opentelemetry/sdk-logs": "0.222.0",
     "@shutter/admin-api": "workspace:*",
     "@shutter/assets": "workspace:*",
     "@shutter/protocol": "workspace:*",
     "@t3-oss/env-core": "^0.13.11",
-    "drizzle-orm": "^0.45.2",
-    "hono": "4.12.28",
-    "pg": "^8.22.0",
+    "drizzle-orm": "^0.45.3",
+    "hono": "4.13.9",
+    "pg": "^8.23.0",
     "pino": "10.3.1",
-    "zod": "^4.4.3"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@testcontainers/postgresql": "^12.0.4",
-    "@types/node": "^22.18.0",
-    "@types/pg": "^8.20.0",
-    "drizzle-kit": "^0.31.10",
-    "tsx": "4.22.4",
+    "@testcontainers/postgresql": "^12.1.0",
+    "@types/node": "^24.13.6",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "4.23.15",
     "typescript": "7.0.2",
-    "vitest": "4.1.4"
+    "vitest": "4.1.11"
   }
 }
