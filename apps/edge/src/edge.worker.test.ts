@@ -432,7 +432,11 @@ describe("edge app", () => {
       expect(call.url.pathname).toBe("/internal/v2/optimize");
       expect(call.url.search).toBe("");
     }
-    expect(originCalls.map((call) => call.body)).toEqual([
+    // The two requests run concurrently, so the origin may see them in either order.
+    const originBodies = originCalls
+      .map((call) => call.body)
+      .sort((a, b) => a.spaceId.localeCompare(b.spaceId));
+    expect(originBodies).toEqual([
       {
         spaceId: "example-private",
         input: {
