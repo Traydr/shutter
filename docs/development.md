@@ -47,7 +47,7 @@ comes from `PORT`.
 pnpm --filter @shutter/control dev         # control plane + Preview Job API
 pnpm --filter @shutter/executor-video dev
 pnpm --filter @shutter/executor-pdf dev
-pnpm --filter @shutter/edge dev            # see the caveat below
+pnpm --filter @shutter/edge dev
 ```
 
 To exercise the Preview Job API end to end you need Postgres plus
@@ -117,23 +117,6 @@ the agent skill that goes with it.
 
 The video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
 `poppler-utils`.
-
-## Known caveat: the edge dev server does not boot
-
-`pnpm --filter @shutter/edge dev` (and `wrangler dev`) currently fail to start.
-`apps/edge/wrangler.jsonc` sets `compatibility_date` `2026-07-10`, but the
-workerd bundled by the pinned `@cloudflare/vite-plugin` (miniflare `4.20260701`)
-and `wrangler@4.107.1` only supports dates through `2026-07-08`/`2026-07-09`.
-
-This is a runtime-version gap, not a code defect. The Worker is still fully
-exercised by:
-
-- `pnpm --filter @shutter/edge build` — vite build producing a deployable Worker
-- `pnpm --filter @shutter/edge test` — Worker tests on `vitest-pool-workers`' newer
-  workerd (`1.20260706.1`), which does support `2026-07-10`
-
-Running the dev server requires a newer miniflare/workerd (`>= 1.20260706`)
-behind the vite plugin and wrangler.
 
 ## Repository conventions
 

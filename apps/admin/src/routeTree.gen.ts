@@ -9,28 +9,28 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as LoginRouteImport } from './routes/login'
 import { Route as AdminRouteImport } from './routes/_admin'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as AdminIndexRouteImport } from './routes/_admin/index'
 import { Route as ApiThemeRouteImport } from './routes/api.theme'
-import { Route as ApiAuthLogoutRouteImport } from './routes/api.auth.logout'
-import { Route as ApiAuthLoginRouteImport } from './routes/api.auth.login'
-import { Route as AdminSpacesNewRouteImport } from './routes/_admin/spaces.new'
 import { Route as AdminSpacesSpaceIdRouteImport } from './routes/_admin/spaces.$spaceId'
+import { Route as AdminSpacesNewRouteImport } from './routes/_admin/spaces.new'
+import { Route as ApiAuthLoginRouteImport } from './routes/api.auth.login'
+import { Route as ApiAuthLogoutRouteImport } from './routes/api.auth.logout'
 import { Route as AdminSpacesSpaceIdIndexRouteImport } from './routes/_admin/spaces.$spaceId.index'
-import { Route as AdminSpacesSpaceIdSettingsRouteImport } from './routes/_admin/spaces.$spaceId.settings'
 import { Route as AdminSpacesSpaceIdAccessRouteImport } from './routes/_admin/spaces.$spaceId.access'
+import { Route as AdminSpacesSpaceIdSettingsRouteImport } from './routes/_admin/spaces.$spaceId.settings'
 import { Route as AdminSpacesSpaceIdSourcesIndexRouteImport } from './routes/_admin/spaces.$spaceId.sources.index'
-import { Route as AdminSpacesSpaceIdSourcesNewRouteImport } from './routes/_admin/spaces.$spaceId.sources.new'
 import { Route as AdminSpacesSpaceIdSourcesResolverIdRouteImport } from './routes/_admin/spaces.$spaceId.sources.$resolverId'
+import { Route as AdminSpacesSpaceIdSourcesNewRouteImport } from './routes/_admin/spaces.$spaceId.sources.new'
 
+const AdminRoute = AdminRouteImport.update({
+  id: '/_admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminRoute = AdminRouteImport.update({
-  id: '/_admin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
@@ -43,41 +43,41 @@ const ApiThemeRoute = ApiThemeRouteImport.update({
   path: '/api/theme',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiAuthLogoutRoute = ApiAuthLogoutRouteImport.update({
-  id: '/api/auth/logout',
-  path: '/api/auth/logout',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiAuthLoginRoute = ApiAuthLoginRouteImport.update({
-  id: '/api/auth/login',
-  path: '/api/auth/login',
-  getParentRoute: () => rootRouteImport,
+const AdminSpacesSpaceIdRoute = AdminSpacesSpaceIdRouteImport.update({
+  id: '/spaces/$spaceId',
+  path: '/spaces/$spaceId',
+  getParentRoute: () => AdminRoute,
 } as any)
 const AdminSpacesNewRoute = AdminSpacesNewRouteImport.update({
   id: '/spaces/new',
   path: '/spaces/new',
   getParentRoute: () => AdminRoute,
 } as any)
-const AdminSpacesSpaceIdRoute = AdminSpacesSpaceIdRouteImport.update({
-  id: '/spaces/$spaceId',
-  path: '/spaces/$spaceId',
-  getParentRoute: () => AdminRoute,
+const ApiAuthLoginRoute = ApiAuthLoginRouteImport.update({
+  id: '/api/auth/login',
+  path: '/api/auth/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAuthLogoutRoute = ApiAuthLogoutRouteImport.update({
+  id: '/api/auth/logout',
+  path: '/api/auth/logout',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AdminSpacesSpaceIdIndexRoute = AdminSpacesSpaceIdIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AdminSpacesSpaceIdRoute,
 } as any)
-const AdminSpacesSpaceIdSettingsRoute =
-  AdminSpacesSpaceIdSettingsRouteImport.update({
-    id: '/settings',
-    path: '/settings',
-    getParentRoute: () => AdminSpacesSpaceIdRoute,
-  } as any)
 const AdminSpacesSpaceIdAccessRoute =
   AdminSpacesSpaceIdAccessRouteImport.update({
     id: '/access',
     path: '/access',
+    getParentRoute: () => AdminSpacesSpaceIdRoute,
+  } as any)
+const AdminSpacesSpaceIdSettingsRoute =
+  AdminSpacesSpaceIdSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
     getParentRoute: () => AdminSpacesSpaceIdRoute,
   } as any)
 const AdminSpacesSpaceIdSourcesIndexRoute =
@@ -86,16 +86,16 @@ const AdminSpacesSpaceIdSourcesIndexRoute =
     path: '/sources/',
     getParentRoute: () => AdminSpacesSpaceIdRoute,
   } as any)
-const AdminSpacesSpaceIdSourcesNewRoute =
-  AdminSpacesSpaceIdSourcesNewRouteImport.update({
-    id: '/sources/new',
-    path: '/sources/new',
-    getParentRoute: () => AdminSpacesSpaceIdRoute,
-  } as any)
 const AdminSpacesSpaceIdSourcesResolverIdRoute =
   AdminSpacesSpaceIdSourcesResolverIdRouteImport.update({
     id: '/sources/$resolverId',
     path: '/sources/$resolverId',
+    getParentRoute: () => AdminSpacesSpaceIdRoute,
+  } as any)
+const AdminSpacesSpaceIdSourcesNewRoute =
+  AdminSpacesSpaceIdSourcesNewRouteImport.update({
+    id: '/sources/new',
+    path: '/sources/new',
     getParentRoute: () => AdminSpacesSpaceIdRoute,
   } as any)
 
@@ -203,18 +203,18 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_admin': {
       id: '/_admin'
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_admin/': {
@@ -231,19 +231,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiThemeRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/auth/logout': {
-      id: '/api/auth/logout'
-      path: '/api/auth/logout'
-      fullPath: '/api/auth/logout'
-      preLoaderRoute: typeof ApiAuthLogoutRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/auth/login': {
-      id: '/api/auth/login'
-      path: '/api/auth/login'
-      fullPath: '/api/auth/login'
-      preLoaderRoute: typeof ApiAuthLoginRouteImport
-      parentRoute: typeof rootRouteImport
+    '/_admin/spaces/$spaceId': {
+      id: '/_admin/spaces/$spaceId'
+      path: '/spaces/$spaceId'
+      fullPath: '/spaces/$spaceId'
+      preLoaderRoute: typeof AdminSpacesSpaceIdRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/_admin/spaces/new': {
       id: '/_admin/spaces/new'
@@ -252,25 +245,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminSpacesNewRouteImport
       parentRoute: typeof AdminRoute
     }
-    '/_admin/spaces/$spaceId': {
-      id: '/_admin/spaces/$spaceId'
-      path: '/spaces/$spaceId'
-      fullPath: '/spaces/$spaceId'
-      preLoaderRoute: typeof AdminSpacesSpaceIdRouteImport
-      parentRoute: typeof AdminRoute
+    '/api/auth/login': {
+      id: '/api/auth/login'
+      path: '/api/auth/login'
+      fullPath: '/api/auth/login'
+      preLoaderRoute: typeof ApiAuthLoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/auth/logout': {
+      id: '/api/auth/logout'
+      path: '/api/auth/logout'
+      fullPath: '/api/auth/logout'
+      preLoaderRoute: typeof ApiAuthLogoutRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_admin/spaces/$spaceId/': {
       id: '/_admin/spaces/$spaceId/'
       path: '/'
       fullPath: '/spaces/$spaceId/'
       preLoaderRoute: typeof AdminSpacesSpaceIdIndexRouteImport
-      parentRoute: typeof AdminSpacesSpaceIdRoute
-    }
-    '/_admin/spaces/$spaceId/settings': {
-      id: '/_admin/spaces/$spaceId/settings'
-      path: '/settings'
-      fullPath: '/spaces/$spaceId/settings'
-      preLoaderRoute: typeof AdminSpacesSpaceIdSettingsRouteImport
       parentRoute: typeof AdminSpacesSpaceIdRoute
     }
     '/_admin/spaces/$spaceId/access': {
@@ -280,6 +273,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminSpacesSpaceIdAccessRouteImport
       parentRoute: typeof AdminSpacesSpaceIdRoute
     }
+    '/_admin/spaces/$spaceId/settings': {
+      id: '/_admin/spaces/$spaceId/settings'
+      path: '/settings'
+      fullPath: '/spaces/$spaceId/settings'
+      preLoaderRoute: typeof AdminSpacesSpaceIdSettingsRouteImport
+      parentRoute: typeof AdminSpacesSpaceIdRoute
+    }
     '/_admin/spaces/$spaceId/sources/': {
       id: '/_admin/spaces/$spaceId/sources/'
       path: '/sources'
@@ -287,18 +287,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminSpacesSpaceIdSourcesIndexRouteImport
       parentRoute: typeof AdminSpacesSpaceIdRoute
     }
-    '/_admin/spaces/$spaceId/sources/new': {
-      id: '/_admin/spaces/$spaceId/sources/new'
-      path: '/sources/new'
-      fullPath: '/spaces/$spaceId/sources/new'
-      preLoaderRoute: typeof AdminSpacesSpaceIdSourcesNewRouteImport
-      parentRoute: typeof AdminSpacesSpaceIdRoute
-    }
     '/_admin/spaces/$spaceId/sources/$resolverId': {
       id: '/_admin/spaces/$spaceId/sources/$resolverId'
       path: '/sources/$resolverId'
       fullPath: '/spaces/$spaceId/sources/$resolverId'
       preLoaderRoute: typeof AdminSpacesSpaceIdSourcesResolverIdRouteImport
+      parentRoute: typeof AdminSpacesSpaceIdRoute
+    }
+    '/_admin/spaces/$spaceId/sources/new': {
+      id: '/_admin/spaces/$spaceId/sources/new'
+      path: '/sources/new'
+      fullPath: '/spaces/$spaceId/sources/new'
+      preLoaderRoute: typeof AdminSpacesSpaceIdSourcesNewRouteImport
       parentRoute: typeof AdminSpacesSpaceIdRoute
     }
   }
