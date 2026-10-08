@@ -3,7 +3,7 @@
 ## Requirements
 
 - Node 24 (`>=24.0.0 <25`, pinned in `.node-version`)
-- pnpm 11 (pinned via `packageManager`)
+- pnpm 12 (pinned via `packageManager`)
 - A container runtime — Docker, OrbStack, or Podman — for the Control tests,
   which start a throwaway `postgres:17-alpine` through testcontainers
   (`apps/control/src/postgres-test-global.ts`)
