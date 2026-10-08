@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Shutter is a TypeScript pnpm workspace (Node 24, pnpm 11). Setup, commands,
+Shutter is a TypeScript pnpm workspace (Node 24, pnpm 12). Setup, commands,
 configuration, how to run each service, and the repository conventions are in
 **[docs/development.md](./docs/development.md)** — read that first. The domain
 vocabulary is in [CONTEXT.md](./CONTEXT.md); the architecture and its decision

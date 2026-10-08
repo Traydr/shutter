@@ -187,7 +187,7 @@ describe("deployment configuration", () => {
 
     const project = projectFor({ ...commonEnvironment });
     const imgproxy = service(project, "Shutter-Imgproxy");
-    expect(imgproxy.source.image).toBe("ghcr.io/imgproxy/imgproxy:v4.0.3");
+    expect(imgproxy.source.image).toBe("ghcr.io/imgproxy/imgproxy:v4.0.17");
     for (const guard of [
       "IMGPROXY_ALLOW_LINK_LOCAL_SOURCE_ADDRESSES",
       "IMGPROXY_ALLOW_LOOPBACK_SOURCE_ADDRESSES",
