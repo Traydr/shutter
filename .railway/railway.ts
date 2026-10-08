@@ -56,7 +56,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
     : {};
 
   const Imgproxy = service("Shutter-Imgproxy", {
-    source: image("ghcr.io/imgproxy/imgproxy:v4.0.3", {
+    source: image("ghcr.io/imgproxy/imgproxy:v4.0.17", {
       autoUpdates: { type: "disabled" },
     }),
     replicas: { [input.railwayRegion]: 1 },

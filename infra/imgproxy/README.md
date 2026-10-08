@@ -1,6 +1,6 @@
 # imgproxy deployment
 
-Railway runs the pinned `ghcr.io/imgproxy/imgproxy:v4.0.3` image on its private
+Railway runs the pinned `ghcr.io/imgproxy/imgproxy:v4.0.17` image on its private
 network. The deployment is declared in `.railway/railway.ts` and intentionally
 has no public domain.
 
