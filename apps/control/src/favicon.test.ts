@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
-import { createPdfExecutorApp } from "../../executor-pdf/src/app.js";
-import { createVideoExecutorApp } from "../../executor-video/src/app.js";
+import { createPdfExecutor } from "../../executor-pdf/src/app.js";
+import { createVideoExecutor } from "../../executor-video/src/app.js";
 import { createControlApp } from "./app.js";
 
 const control = createControlApp({
@@ -10,7 +10,7 @@ const control = createControlApp({
   imgproxyConfig: () => undefined,
   fetch,
 });
-const services = [control, createVideoExecutorApp(), createPdfExecutorApp()];
+const services = [control, createVideoExecutor().app, createPdfExecutor().app];
 
 describe("shared service favicons", () => {
   it("serves the canonical SVG and ICO without service credentials", async () => {

@@ -13,6 +13,12 @@ export const MAX_ATTEMPTS = 5;
 export const RETRY_DELAYS_SECONDS = [60, 300, 1_800, 7_200] as const;
 export const PROCESSING_LEASE_SECONDS = 15 * 60;
 export const JOB_RETRY_WINDOW_SECONDS = 23 * 60 * 60;
+/**
+ * How long a released claim waits before it can be claimed again: long enough
+ * that the jobs queued behind it go first instead of the same fault being hit
+ * again at once. Control's retry timer wakes the Executor when it passes.
+ */
+export const CLAIM_RELEASE_DELAY_SECONDS = 60;
 
 export interface JobIdentity {
   spaceId: string;
@@ -85,8 +91,12 @@ export interface AttemptFailure {
 }
 
 export type FailureResult =
-  | { outcome: "retry_scheduled" }
+  | { outcome: "retry_scheduled"; nextAttemptAt: Date }
   | { outcome: "terminal" }
+  | { outcome: "stale_attempt" };
+
+export type ReleaseResult =
+  | { outcome: "released"; nextAttemptAt: Date }
   | { outcome: "stale_attempt" };
 
 export interface MaintenanceResult {
@@ -116,7 +126,15 @@ export interface PreviewJobLifecycle {
     failure: AttemptFailure,
     now: Date,
   ): Promise<FailureResult>;
+  /**
+   * Hands a claimed job back as pending without spending its attempt, for a
+   * claim Control could not finish serving. It can be claimed again after
+   * `CLAIM_RELEASE_DELAY_SECONDS`.
+   */
+  release(identity: JobIdentity, processingToken: string, now: Date): Promise<ReleaseResult>;
   maintain(now: Date, limit: number): Promise<MaintenanceResult>;
+  /** The earliest `next_attempt_at` later than `after` among `kind`'s pending jobs: its next retry. */
+  nextAttemptAt(kind: PreviewKind, after: Date): Promise<Date | undefined>;
   withInvalidatedSource<T>(
     source: SourceIdentity,
     whileExclusive: () => Promise<T>,
@@ -398,7 +416,7 @@ export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
              where space_id = $1 and source_id = $2 and kind = $3 and processing_token = $4`,
             [identity.spaceId, identity.sourceId, identity.kind, processingToken, nextAttempt, now],
           );
-          return { outcome: "retry_scheduled" };
+          return { outcome: "retry_scheduled", nextAttemptAt: nextAttempt };
         }
       }
       const code = failure.retryable
@@ -413,6 +431,22 @@ export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
       );
       return { outcome: "terminal" };
     });
+  }
+
+  async release(identity: JobIdentity, processingToken: string, now: Date): Promise<ReleaseResult> {
+    const nextAttemptAt = new Date(now.getTime() + CLAIM_RELEASE_DELAY_SECONDS * 1_000);
+    const result = await this.#pool.query(
+      `update preview_jobs set status = 'pending', attempt_number = attempt_number - 1,
+        processing_token = null, lease_expires_at = null, heartbeat_at = null,
+        next_attempt_at = $5, updated_at = $6
+       where space_id = $1 and source_id = $2 and kind = $3
+         and status = 'processing' and processing_token = $4`,
+      [identity.spaceId, identity.sourceId, identity.kind, processingToken, nextAttemptAt, now],
+    );
+
+    return result.rowCount === 1
+      ? { outcome: "released", nextAttemptAt }
+      : { outcome: "stale_attempt" };
   }
 
   async maintain(now: Date, limit: number): Promise<MaintenanceResult> {
@@ -442,6 +476,18 @@ export class PostgresPreviewJobLifecycle implements PreviewJobLifecycle {
         runnableKinds: runnable.rows.map((row) => row.kind),
       };
     });
+  }
+
+  async nextAttemptAt(kind: PreviewKind, after: Date): Promise<Date | undefined> {
+    // With an index led by (kind, next_attempt_at) over pending rows, min()
+    // is one index probe, cheap enough to re-read after every timed drain.
+    const result = await this.#pool.query<{ next_attempt_at: Date | null }>(
+      `select min(next_attempt_at) as next_attempt_at from preview_jobs
+       where kind = $1 and status = 'pending' and next_attempt_at > $2`,
+      [kind, after],
+    );
+
+    return result.rows[0]?.next_attempt_at ?? undefined;
   }
 
   async withInvalidatedSource<T>(

@@ -1,8 +1,9 @@
 import type { S3Client } from "@aws-sdk/client-s3";
 import { describe, expect, it, vi } from "vitest";
-import { createPdfExecutorApp } from "./app.js";
+import { createPdfExecutor } from "./app.js";
 
 const TOKEN = "p".repeat(32);
+const WAKE_URL = "http://shutter.test/internal/v1/run-once";
 
 function config() {
   return {
@@ -17,15 +18,15 @@ function config() {
 describe("PDF executor app", () => {
   it("authenticates a wake with the executor role token", async () => {
     const run = vi.fn(async () => "idle" as const);
-    const configured = createPdfExecutorApp(config(), run);
+    const { app } = createPdfExecutor(config(), run);
 
-    const unauthorized = await configured.request("http://shutter.test/internal/v1/run-once", {
+    const unauthorized = await app.request(WAKE_URL, {
       method: "POST",
       headers: { authorization: "Bearer wrong" },
     });
     expect(unauthorized.status).toBe(401);
 
-    const accepted = await configured.request("http://shutter.test/internal/v1/run-once", {
+    const accepted = await app.request(WAKE_URL, {
       method: "POST",
       headers: { authorization: `Bearer ${TOKEN}` },
     });
@@ -34,7 +35,7 @@ describe("PDF executor app", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
-  it("runs at most one job invocation at a time", async () => {
+  it("runs at most one job invocation at a time, the boot invocation included", async () => {
     let finish: ((result: "processed") => void) | undefined;
     const run = vi.fn(
       () =>
@@ -42,18 +43,18 @@ describe("PDF executor app", () => {
           finish = resolve;
         }),
     );
-    const configured = createPdfExecutorApp(config(), run);
+    const executor = createPdfExecutor(config(), run);
     const wake = { method: "POST", headers: { authorization: `Bearer ${TOKEN}` } };
 
-    const firstPromise = configured.request("http://shutter.test/internal/v1/run-once", wake);
+    const booted = executor.boot();
     await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
-    const duplicate = await configured.request("http://shutter.test/internal/v1/run-once", wake);
-    expect(duplicate.status).toBe(202);
-    await expect(duplicate.json()).resolves.toEqual({ result: "busy" });
+    const joined = executor.app.request(WAKE_URL, wake);
 
     finish?.("processed");
-    const first = await firstPromise;
-    expect(first.status).toBe(200);
+    await booted;
+    const answered = await joined;
+    expect(answered.status).toBe(200);
+    await expect(answered.json()).resolves.toEqual({ result: "processed" });
     expect(run).toHaveBeenCalledOnce();
   });
 });

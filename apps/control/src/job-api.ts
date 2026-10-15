@@ -29,8 +29,10 @@ import type {
   MasterCompletion,
   PreviewJobLifecycle,
   PreviewJobView,
+  SubmissionResult,
 } from "./preview-job-lifecycle.js";
 import { type ProblemCode, problemResponse } from "./problems.js";
+import type { DispatchRequests } from "./recovery.js";
 import type { SourcePurge } from "./source-purge.js";
 import type { Resolution, SourceResolverService } from "./source-resolvers.js";
 import type { ActiveSpaceAuthorization, SpaceRegistry } from "./spaces/registry.js";
@@ -41,7 +43,8 @@ export interface JobApiRuntime {
   now(): Date;
   spaceRegistry: SpaceRegistry;
   executorToken(kind: PreviewKind): string | undefined;
-  dispatch(kind: PreviewKind): Promise<void>;
+  /** Wakes Executors for a job a submission made runnable, or a retry Control just scheduled. */
+  jobDispatch: DispatchRequests;
   sourcePurge?: SourcePurge;
   /** Resolves a resolver source's locator when an Executor claims its job (ADR 0027). */
   sourceResolvers?: SourceResolverService;
@@ -184,6 +187,9 @@ async function strictJson(request: Request): Promise<JsonValue> {
   return request.json();
 }
 
+/** The codes a claim Control cannot serve fails its job with, answering the claim `409`. */
+type ClaimFailureCode = "source_expired" | "configuration_error" | "internal_invariant";
+
 /** A claim whose resolver source cannot be resolved; the job fails with this code. */
 class ClaimResolutionError extends Error {
   readonly code: "configuration_error" | "internal_invariant" | "service_unavailable";
@@ -233,8 +239,8 @@ async function claimLocator(
       now,
     });
   } catch {
-    // A registry or presign fault is temporary: the attempt is left to its
-    // lease, which recovery returns to pending, and the budget is untouched.
+    // A registry or presign fault is temporary: the claim is released back
+    // to pending with its attempt unspent.
     throw new ClaimResolutionError("service_unavailable");
   }
   if (resolution.outcome === "resolved") return resolution.locator;
@@ -245,11 +251,9 @@ async function claimLocator(
 
 /**
  * The failure code a claim-time fault settles the job with, or `undefined`
- * when the fault is temporary and the attempt should be left to its lease.
+ * when the fault is temporary and the claim should be released.
  */
-function terminalClaimFailure(
-  cause: unknown,
-): "source_expired" | "configuration_error" | "internal_invariant" | undefined {
+function terminalClaimFailure(cause: unknown): ClaimFailureCode | undefined {
   if (cause instanceof ClaimResolutionError) {
     return cause.code === "service_unavailable" ? undefined : cause.code;
   }
@@ -276,16 +280,58 @@ async function emitSubmitted(runtime: JobApiRuntime, record: PreviewJobView): Pr
   );
 }
 
-function dispatchPending(runtime: JobApiRuntime, record: PreviewJobView): void {
-  if (record.status !== "pending") return;
-  void runtime.dispatch(record.kind).catch(() => {
-    void operationalEvent({
-      event: "control.dispatch.failed",
-      spaceId: record.spaceId,
-      sourceId: record.sourceId,
-      fields: { kind: record.kind, outcome: "failed", failureCode: "service_unavailable" },
-    }).then((event) => runtime.logger.emit("error", event));
-  });
+/**
+ * Asks for a drain when this submission made a job runnable. Repeating the
+ * `PUT` of a job that is already pending wakes nothing: that job is either
+ * covered by a drain already or waiting for its retry time, and a wake that
+ * finds no work still costs the Executor a cold start.
+ */
+function dispatchSubmitted(runtime: JobApiRuntime, submission: SubmissionResult): void {
+  if (submission.disposition === "existing" || submission.job.status !== "pending") return;
+
+  runtime.jobDispatch.dispatch(submission.job.kind);
+}
+
+/**
+ * Hands a claim Control could not serve back to pending with its attempt
+ * unspent, and has the retry timer wake the Executor when it is claimable
+ * again. If even the release fails, the job is left to its lease.
+ */
+async function releaseClaim(
+  runtime: JobApiRuntime,
+  claim: ClaimedJob,
+  now: Date,
+): Promise<Response> {
+  try {
+    const released = await runtime.lifecycle.release(claim, claim.processingToken, now);
+    if (released.outcome === "released") {
+      runtime.jobDispatch.scheduleDispatch(claim.kind, released.nextAttemptAt);
+    }
+  } catch {
+    // Recovery returns the job to pending once its lease expires.
+  }
+
+  return requestFailure(503, "service_unavailable");
+}
+
+/** Fails a claimed job for good at claim time, and logs it as any other job failure. */
+async function settleClaim(
+  runtime: JobApiRuntime,
+  claim: ClaimedJob,
+  code: ClaimFailureCode,
+  now: Date,
+): Promise<void> {
+  await runtime.lifecycle.fail(claim, claim.processingToken, { retryable: false, code }, now);
+  runtime.logger.emit(
+    "info",
+    await operationalEvent({
+      event: "control.job.failed",
+      spaceId: claim.spaceId,
+      sourceId: claim.sourceId,
+      processingToken: claim.processingToken,
+      fields: { kind: claim.kind, outcome: "failed", failureCode: code },
+    }),
+  );
 }
 
 export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
@@ -337,7 +383,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
     try {
       const submission = await runtime.lifecycle.submit(identity, runtime.now());
       await emitSubmitted(runtime, submission.job);
-      dispatchPending(runtime, submission.job);
+      dispatchSubmitted(runtime, submission);
       return activeResponse(submission.job.representation, new URL(context.req.url).pathname);
     } catch (error) {
       runtime.logger.emit("error", {
@@ -419,7 +465,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
       );
       const record = submissionResult.job;
       await emitSubmitted(runtime, record);
-      dispatchPending(runtime, record);
+      dispatchSubmitted(runtime, submissionResult);
       return activeResponse(record.representation, new URL(context.req.url).pathname);
     } catch (error) {
       if (error instanceof ProtocolError) return requestFailure(400, error.code);
@@ -464,16 +510,11 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
     try {
       authorization = await runtime.spaceRegistry.getSpaceAuthorization(claim.spaceId);
     } catch {
-      return requestFailure(503, "service_unavailable");
+      return releaseClaim(runtime, claim, now);
     }
     if (authorization === undefined) {
-      await runtime.lifecycle.fail(
-        claim,
-        claim.processingToken,
-        { retryable: false, code: "configuration_error" },
-        now,
-      );
-      return requestFailure(503, "configuration_error");
+      await settleClaim(runtime, claim, "configuration_error", now);
+      return requestFailure(409, "configuration_error");
     }
     try {
       const locator = await claimLocator(runtime, claim, authorization, now);
@@ -490,8 +531,8 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
       });
     } catch (error) {
       const code = terminalClaimFailure(error);
-      if (code === undefined) return requestFailure(503, "service_unavailable");
-      await runtime.lifecycle.fail(claim, claim.processingToken, { retryable: false, code }, now);
+      if (code === undefined) return releaseClaim(runtime, claim, now);
+      await settleClaim(runtime, claim, code, now);
       return requestFailure(409, code);
     }
   });
@@ -600,6 +641,9 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
       failure,
       runtime.now(),
     );
+    if (result.outcome === "retry_scheduled") {
+      runtime.jobDispatch.scheduleDispatch(identity.kind, result.nextAttemptAt);
+    }
     runtime.logger.emit(
       result.outcome === "stale_attempt" ? "error" : "info",
       await operationalEvent({

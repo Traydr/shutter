@@ -136,6 +136,16 @@ Executors.
 }
 ```
 
+A claim Control cannot serve answers with an error, and the claimed job never
+reaches the Executor:
+
+- `409` with a failure code (`configuration_error`, `internal_invariant`, or
+  `source_expired`): the job is settled as failed. The Executor counts it as a
+  processed job.
+- `503 service_unavailable`: the registry or a resolver failed temporarily. The
+  job is back to pending with its attempt unspent, claimable again one minute
+  later.
+
 ### Heartbeat / complete / fail
 
 - Heartbeat body: `{ "processingToken": "..." }`
@@ -144,3 +154,19 @@ Executors.
   known job failure code when present
 
 Stale processing tokens return `409` with `stale_attempt`.
+
+### Wake (`POST /internal/v1/run-once` on the Executor)
+
+Control wakes an Executor with its role credential as a bearer token. The
+Executor runs one invocation (claim, process, settle) and answers when it
+ends, so the reply can take as long as one attempt:
+
+- `200 {"result":"processed"}`: the invocation settled one job; Control wakes
+  again.
+- `200 {"result":"idle"}`: there was nothing to claim.
+- `401 unauthorized`: a missing or wrong token. Not retried.
+- `503 service_unavailable`: the invocation failed before it claimed a job, for
+  example because Control could not serve the claim. Retried with backoff.
+
+A wake during another invocation waits for it, then answers `processed` if that
+invocation processed a job or runs an invocation of its own.

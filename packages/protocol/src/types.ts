@@ -204,4 +204,12 @@ export interface ExecutorFailRequest {
   code?: JobFailureCode;
 }
 
+/** What one Executor Invocation did: settled one claimed job, or found none to claim. */
+export type ExecutorInvocationResult = "processed" | "idle";
+
+/** The body of a `200` answer to an Executor wake. */
+export interface ExecutorWakeReply {
+  result: ExecutorInvocationResult;
+}
+
 export type OptimizationInput = { type: "source" } | { type: "master"; kind: PreviewKind };

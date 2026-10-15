@@ -1,14 +1,14 @@
-import { createExecutorApp, type ExecutorRunner } from "@shutter/executor-runtime";
+import { createExecutor, type ExecutorRunner } from "@shutter/executor-runtime";
 import type { VideoExecutorConfig } from "./run-once.js";
 import { runVideoOnce } from "./run-once.js";
 
 export type VideoExecutorRunner = ExecutorRunner;
 
-export function createVideoExecutorApp(
+export function createVideoExecutor(
   config?: VideoExecutorConfig,
   run: VideoExecutorRunner = runVideoOnce,
 ) {
-  return createExecutorApp("video", config, run);
+  return createExecutor("video", config, run);
 }
 
-export const app = createVideoExecutorApp();
+export const app = createVideoExecutor().app;

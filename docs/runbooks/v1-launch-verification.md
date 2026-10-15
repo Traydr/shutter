@@ -17,9 +17,13 @@ data unless the disposable purge mode is explicitly confirmed.
    [self-hosting.md](./self-hosting.md) against disposable sources before
    changing a consumer provider switch.
 
-Executors are serverless and may cold-start. A pending job with a missed wake is
-expected to be recovered by Control's five-minute sweep; do not treat one cold
-start as job loss.
+Executors are serverless and may cold-start. Control retries a wake for about
+half a minute while a sleeping Executor boots, and the Executor claims a job on
+boot, so a cold start normally costs seconds. A `control.dispatch.failed` event
+means a whole drain gave up (its `shutter.count` is the attempts made, with the
+last HTTP status or error type); the job stays pending for Control's
+five-minute sweep, so do not treat one as job loss. The same event every five
+minutes for one kind means its Executor is down or misconfigured, not cold.
 
 ## Live verification
 

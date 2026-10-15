@@ -3,17 +3,27 @@ import { Pool } from "pg";
 import type { ControlRuntimeConfig } from "./app.js";
 import { EdgeRefreshTracker } from "./edge-refresh-status.js";
 import type { ServerEnv } from "./env/server.js";
-import { createSerializedExecutorDispatch, sendExecutorWake } from "./executor-dispatch.js";
+import {
+  createExecutorDrains,
+  type ExecutorWake,
+  type WakeRequest,
+  wakeExecutor,
+} from "./executor-dispatch.js";
 import type { ImgproxyConfig } from "./imgproxy.js";
 import type { JobApiRuntime } from "./job-api.js";
 import type { ControlLogger } from "./logging.js";
 import { createMasterStore, mediaStoreSourcePrefix } from "./master-store.js";
 import { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
+import { createJobDispatch } from "./recovery.js";
 import { createSourcePurge } from "./source-purge.js";
 import { createS3Presigner, createSourceResolverService } from "./source-resolvers.js";
 import { CapabilityKeyEncryption } from "./spaces/encryption.js";
 import { PostgresSpaceRegistry } from "./spaces/postgres-registry.js";
 
+/**
+ * One wake attempt waits for its invocation: the Executor's ten-minute
+ * attempt deadline, plus a minute for the claim, the report, and cleanup.
+ */
 const EXECUTOR_WAKE_TIMEOUT_MS = 11 * 60 * 1_000;
 
 export type ControlFeatureName =
@@ -35,6 +45,11 @@ export interface ControlRuntime {
   config: ControlRuntimeConfig;
   jobApiRuntime: JobApiRuntime | undefined;
   features: ControlFeatures;
+  /**
+   * Starts the recovery sweep and the retry timers, and returns their stop,
+   * which also aborts wakes in flight. A runtime without the Job API has none.
+   */
+  startRecovery(): () => void;
   /** Ends the connection pool and the S3 client. Safe on a runtime that never connected. */
   close(): Promise<void>;
 }
@@ -42,6 +57,8 @@ export interface ControlRuntime {
 export interface ControlRuntimeDependencies {
   logger: ControlLogger;
   fetch: typeof globalThis.fetch;
+  /** Sends Executor wakes, which outlive `fetch`'s response-header timeout (`nodeWakeRequest`). */
+  wakeRequest: WakeRequest;
   now(): Date;
 }
 
@@ -165,7 +182,7 @@ export function buildControlRuntime(
   env: ServerEnv,
   deps: ControlRuntimeDependencies,
 ): ControlRuntime {
-  const { logger, fetch, now } = deps;
+  const { logger, fetch, wakeRequest, now } = deps;
   // Malformed values are rejected here even when the feature they belong to
   // stays disabled for another missing input: a bad value is a bad value.
   const encryption = configuredEncryption(env);
@@ -246,19 +263,28 @@ export function buildControlRuntime(
         };
 
   // Wake endpoints resolve once here. A kind whose executor is not configured
-  // still rejects at dispatch time so a submission is accepted durably and the
+  // still fails at dispatch time so a submission is accepted durably and the
   // failure is logged, rather than the whole Job API disappearing. The claim
   // token stands alone: an Executor that polls Control (or is woken some other
   // way) authenticates with its token whether or not Control can wake it.
   const executors = executorEndpoints(env);
   const executorTokens = { video: env.VIDEO_EXECUTOR_TOKEN, pdf: env.PDF_EXECUTOR_TOKEN };
-  const dispatch = createSerializedExecutorDispatch(async (kind) => {
+  const wake: ExecutorWake = async (kind, signal) => {
     const endpoint = executors[kind];
-    if (endpoint === undefined) throw new Error(`${kind} executor dispatch is not configured`);
-    logger.emit("info", { event: "control.executor.delegated", kind, outcome: "accepted" });
-    await sendExecutorWake({ ...endpoint, fetch, timeoutMs: EXECUTOR_WAKE_TIMEOUT_MS });
-    logger.emit("info", { event: "control.executor.delegated", kind, outcome: "ready" });
-  });
+    if (endpoint === undefined) {
+      return { outcome: "failed", fault: { errorType: "ExecutorNotConfigured" }, attempts: 0 };
+    }
+
+    return wakeExecutor({
+      ...endpoint,
+      request: wakeRequest,
+      timeoutMs: EXECUTOR_WAKE_TIMEOUT_MS,
+      signal,
+    });
+  };
+  const drains = createExecutorDrains({ logger, wake });
+  const jobDispatch =
+    lifecycle === undefined ? undefined : createJobDispatch({ logger, lifecycle, now, drains });
 
   const sourceResolvers =
     spaceRegistry === undefined
@@ -266,14 +292,19 @@ export function buildControlRuntime(
       : createSourceResolverService({ credentials: spaceRegistry, presigner: createS3Presigner() });
 
   let jobApiRuntime: JobApiRuntime | undefined;
-  if (lifecycle !== undefined && spaceRegistry !== undefined && sourceResolvers !== undefined) {
+  if (
+    lifecycle !== undefined &&
+    jobDispatch !== undefined &&
+    spaceRegistry !== undefined &&
+    sourceResolvers !== undefined
+  ) {
     jobApiRuntime = {
       logger,
       lifecycle,
       now,
       spaceRegistry,
       executorToken: (kind) => executorTokens[kind],
-      dispatch,
+      jobDispatch,
       sourceResolvers,
     };
     if (sourcePurge !== undefined) jobApiRuntime.sourcePurge = sourcePurge;
@@ -311,6 +342,16 @@ export function buildControlRuntime(
     config,
     jobApiRuntime,
     features,
+    startRecovery() {
+      if (jobApiRuntime === undefined || jobDispatch === undefined) return () => {};
+
+      jobDispatch.start();
+
+      return () => {
+        jobDispatch.stop();
+        drains.close();
+      };
+    },
     async close() {
       s3?.destroy();
       await pool?.end();

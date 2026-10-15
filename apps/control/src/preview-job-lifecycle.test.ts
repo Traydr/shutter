@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import {
+  CLAIM_RELEASE_DELAY_SECONDS,
   JOB_RETRY_WINDOW_SECONDS,
   MAX_ATTEMPTS,
   type PostgresPreviewJobLifecycle,
@@ -112,6 +113,62 @@ describe("Postgres Preview Job lifecycle", () => {
       disposition: "reactivated",
       job: { status: "pending", executionCycle: 1, attemptNumber: 0 },
     });
+  });
+
+  it("releases a claim it could not serve without spending the attempt", async () => {
+    await lifecycle.submit(input, start);
+    const claim = await lifecycle.claim("video", start);
+    expect(claim).toMatchObject({ attemptNumber: 1 });
+    if (claim === undefined) throw new Error("expected a claim");
+
+    await expect(lifecycle.release(identity, "stale-token", start)).resolves.toEqual({
+      outcome: "stale_attempt",
+    });
+    const releasedAt = new Date(start.getTime() + 1_000);
+    const claimableAt = new Date(releasedAt.getTime() + CLAIM_RELEASE_DELAY_SECONDS * 1_000);
+    await expect(lifecycle.release(identity, claim.processingToken, releasedAt)).resolves.toEqual({
+      outcome: "released",
+      nextAttemptAt: claimableAt,
+    });
+    await expect(lifecycle.release(identity, claim.processingToken, releasedAt)).resolves.toEqual({
+      outcome: "stale_attempt",
+    });
+    expect(await lifecycle.read(identity)).toMatchObject({ status: "pending", attemptNumber: 0 });
+
+    await expect(lifecycle.claim("video", releasedAt)).resolves.toBeUndefined();
+    await expect(lifecycle.claim("video", claimableAt)).resolves.toMatchObject({
+      attemptNumber: 1,
+    });
+  });
+
+  it("finds each kind's next retry among its pending jobs", async () => {
+    await lifecycle.submit(input, start);
+    await lifecycle.submit({ ...input, sourceId: "source-2" }, start);
+    await lifecycle.submit({ ...input, sourceId: "source-3", kind: "pdf" }, start);
+    for (const kind of ["video", "video", "pdf"] as const) {
+      const claim = await lifecycle.claim(kind, start);
+      if (claim === undefined) throw new Error("expected a claim");
+      const failedAt = new Date(start.getTime() + (claim.sourceId === "source-2" ? 5_000 : 0));
+      await expect(
+        lifecycle.fail(claim, claim.processingToken, { retryable: true }, failedAt),
+      ).resolves.toEqual({
+        outcome: "retry_scheduled",
+        nextAttemptAt: new Date(failedAt.getTime() + (RETRY_DELAYS_SECONDS[0] ?? 0) * 1_000),
+      });
+    }
+
+    await expect(lifecycle.nextAttemptAt("video", start)).resolves.toEqual(
+      new Date(start.getTime() + 60_000),
+    );
+    await expect(
+      lifecycle.nextAttemptAt("video", new Date(start.getTime() + 60_000)),
+    ).resolves.toEqual(new Date(start.getTime() + 65_000));
+    await expect(
+      lifecycle.nextAttemptAt("video", new Date(start.getTime() + 65_000)),
+    ).resolves.toBeUndefined();
+    await expect(lifecycle.nextAttemptAt("pdf", start)).resolves.toEqual(
+      new Date(start.getTime() + 60_000),
+    );
   });
 
   it("maintains expiry and recovered leases in one ordered operation", async () => {

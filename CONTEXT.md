@@ -140,6 +140,17 @@ _Avoid_: Application worker, generic background process
 
 **Executor Work Cycle**:
 The shared one-job control sequence used inside each Executor: claim, heartbeat,
-media-processing invocation, Master Preview upload, completion or failure, and
-cleanup. Video and PDF processing remain separate implementations.
+media processing, Master Preview upload, completion or failure, and cleanup.
+Video and PDF processing remain separate implementations.
 _Avoid_: Generic worker loop, merged Executor
+
+**Executor Invocation**:
+One run of the Executor Work Cycle, started by a wake or as the Executor boots.
+It settles at most one Preview Job and reports `processed`, or `idle` when there
+was nothing to claim.
+_Avoid_: Attempt, execution cycle
+
+**Executor Drain**:
+Control waking one Executor kind again and again, one Executor Invocation per
+wake, until a wake finds no job to claim. Each kind has at most one at a time.
+_Avoid_: Worker loop, dispatch queue, polling

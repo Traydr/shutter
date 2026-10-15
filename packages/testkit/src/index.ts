@@ -1,6 +1,7 @@
 import type {
   AccessTokenClaims,
   CapabilityKeyMaterial,
+  ExecutorInvocationResult,
   OptimizationCacheIdentity,
   S3ResolverPolicy,
   SourceCapabilityClaims,
@@ -159,6 +160,36 @@ export const V2_URL_FIXTURES = Object.freeze({
   privateOptimization: "/v2/example-private/media/file.one?w=640&q=75&token=v2.token",
   previewJob: "/v2/spaces/example-public/sources/media%2Ffile.one/previews/video",
   sourcePurge: "/v2/spaces/example-public/sources/media%2Ffile.one/purge",
+});
+
+/**
+ * The Executor wake (job-api.md): the route Control posts to, and the exact
+ * `200` reply body of each invocation result. Any other `200` body is
+ * malformed, and Control does not retry it.
+ */
+export const EXECUTOR_WAKE_FIXTURE = Object.freeze({
+  route: "/internal/v1/run-once",
+  replies: Object.freeze({
+    processed: '{"result":"processed"}',
+    idle: '{"result":"idle"}',
+  } satisfies Record<ExecutorInvocationResult, string>),
+  malformedReplies: Object.freeze(['{"result":"busy"}', "{}", '"processed"', "processed"]),
+});
+
+/**
+ * What a `409` from Control's Executor routes means (job-api.md,
+ * job-execution.md). A claim answered `409` names the failure Control settled
+ * the job with, and the invocation counts that job as processed. A heartbeat
+ * answered `409 stale_attempt` aborts the attempt with no fail report, and
+ * the invocation still counts its job as processed.
+ */
+export const EXECUTOR_CONFLICT_FIXTURE = Object.freeze({
+  claim: Object.freeze({
+    status: 409,
+    codes: Object.freeze(["configuration_error", "internal_invariant", "source_expired"] as const),
+    result: "processed",
+  }),
+  heartbeat: Object.freeze({ status: 409, code: "stale_attempt", result: "processed" }),
 });
 
 /** The template resolver every consumer and service test agrees on, with its allowed origin. */
