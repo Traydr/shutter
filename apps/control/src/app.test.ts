@@ -7,16 +7,17 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createControlApp } from "./app.js";
 import { EdgeRefreshTracker } from "./edge-refresh-status.js";
+import { parseImgproxyConfig } from "./imgproxy.js";
 import type { ControlLogger } from "./logging.js";
 import { MemorySpaceRegistry } from "./spaces/memory-registry.js";
 
 const TOKEN = "a".repeat(32);
-const IMGPROXY = {
+const IMGPROXY = parseImgproxyConfig({
   baseUrl: "http://shutter-imgproxy.railway.internal:8080",
   key: "736563726574",
   salt: "68656c6c6f",
   secret: "s".repeat(32),
-};
+});
 
 const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
 const SPACE_REGISTRY = new MemorySpaceRegistry({
@@ -310,6 +311,46 @@ describe("control app", () => {
       generation: snapshot.generation,
       edgeRefresh: { generation: snapshot.generation, refreshedAt: "2026-08-11T12:00:00.000Z" },
     });
+  });
+
+  it("records an optimization in one completion event that names a master's kind", async () => {
+    const emit = vi.fn<ControlLogger["emit"]>();
+    const control = createControlApp({
+      logger: { emit, async shutdown() {} },
+      spaceRegistry: SPACE_REGISTRY,
+      originAuthToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch: vi.fn(async () => new Response("webp", { headers: { "content-type": "image/webp" } })),
+      masterStore: { presignGet: async () => "https://r2.example.test/master" },
+    });
+
+    const response = await control.request(OPTIMIZE_URL, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        spaceId: "example-private",
+        input: { type: "master", sourceId: "source/one", kind: "pdf" },
+        width: 640,
+        quality: 75,
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(emit.mock.calls).toEqual([
+      [
+        "info",
+        {
+          event: "control.http.completed",
+          requestId: response.headers.get("x-request-id"),
+          httpMethod: "POST",
+          httpRoute: "/internal/v2/optimize",
+          httpStatusCode: 200,
+          durationMs: expect.any(Number),
+          outcome: "ready",
+          kind: "pdf",
+        },
+      ],
+    ]);
   });
 
   it("contains uncaught failures behind a generic error body", async () => {

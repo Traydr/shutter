@@ -1,6 +1,7 @@
 import type { Attributes } from "@opentelemetry/api";
 import { type LogAttributes, SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
+import { CompressionAlgorithm } from "@opentelemetry/otlp-exporter-base";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import {
   BatchLogRecordProcessor,
@@ -30,10 +31,16 @@ export interface ControlLoggerDependencies {
   allowedOtlpEndpoints?: readonly string[];
 }
 
+/**
+ * Railway reads a JSON line's `level` as a severity only when it is a label
+ * (`info`, `error`); pino's default numeric level (30, 50) is not one, so
+ * every line showed as info. The label formatter writes the name instead.
+ */
 function createStdoutLogger(stdout?: DestinationStream): Logger {
   return pino(
     {
       base: { service: "shutter-control" },
+      formatters: { level: (label) => ({ level: label }) },
     },
     stdout,
   );
@@ -158,6 +165,8 @@ export function createControlLogger(
         url: config.endpoint,
         headers: config.headers,
         timeoutMillis: config.timeoutMillis,
+        // Batches of JSON log records compress several-fold.
+        compression: CompressionAlgorithm.GZIP,
       });
       provider = new LoggerProvider({
         resource: resourceFromAttributes(

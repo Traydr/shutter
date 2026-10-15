@@ -117,3 +117,19 @@ variable. Review the result; do not widen it to all sources.
 Run `railway config plan`, review every change, then deploy imgproxy. The value
 is process-start configuration, so a Space policy edit alone does not update
 imgproxy. Keep private, loopback, and link-local source access disabled.
+
+## Change registry rows by hand
+
+Prefer the admin application, the `shutter` CLI, or `/v1/admin`: each write
+bumps the registry generation in its own transaction. Control serves the Edge
+snapshot from memory for as long as the generation is unchanged (ADR 0033), so a
+change made with SQL must bump it in the same transaction, or no Edge sees it:
+
+```sql
+begin;
+-- the change to spaces, space_source_origins, space_resolvers,
+-- space_api_tokens, or space_capability_keys
+update space_registry_metadata
+  set generation = generation + 1, updated_at = now() where id = 1;
+commit;
+```

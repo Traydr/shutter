@@ -70,9 +70,13 @@ describe("control runtime", () => {
     expect(runtime.jobApiRuntime?.executorToken("video")).toBe(TOKEN);
     expect(runtime.config.spaceRegistry).toBeDefined();
     expect(runtime.config.masterStore).toBeDefined();
-    expect(runtime.config.imgproxyConfig()).toMatchObject({
-      baseUrl: "http://imgproxy.internal:8080",
+    expect(runtime.config.imgproxyConfig()).toEqual({
+      origin: "http://imgproxy.internal:8080",
+      key: Uint8Array.from(Buffer.from("secret")),
+      salt: Uint8Array.from(Buffer.from("hello")),
+      authorization: `Bearer ${TOKEN}`,
     });
+    expect(runtime.config.imgproxyFetch).toBeTypeOf("function");
     expect(featureReport(runtime.features)).toEqual({ count: 0 });
     await runtime.close();
   });
@@ -179,6 +183,13 @@ describe("control runtime", () => {
     // A bad value fails the boot even when its feature stays disabled anyway.
     expect(() => build({ SHUTTER_ENCRYPTION_KEY: "not-hex" })).toThrow(
       /SHUTTER_ENCRYPTION_KEY is set but not usable/u,
+    );
+    // imgproxy is decoded at boot, not on the first optimization.
+    expect(() => build({ ...FULL_ENVIRONMENT, IMGPROXY_KEY: "not-hex" })).toThrow(
+      /IMGPROXY_KEY is set but not usable/u,
+    );
+    expect(() => build({ ...FULL_ENVIRONMENT, IMGPROXY_SECRET: "short" })).toThrow(
+      /IMGPROXY_SECRET is set but not usable/u,
     );
   });
 

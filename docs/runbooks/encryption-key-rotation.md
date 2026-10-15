@@ -10,8 +10,10 @@ tested database backup.
    with the old master key and seal the same 32-byte Capability Key with the new
    master key. Preserve the Space identifier and key identifier as associated
    data. Do not write plaintext keys to disk or logs.
-4. Perform all row updates in one database transaction. Read every active key
-   back with the new master key before that transaction commits.
+4. Perform all row updates in one database transaction, and bump
+   `space_registry_metadata.generation` in it as any registry write does. Read
+   every active key back with the new master key before that transaction
+   commits.
 5. Set the new `SHUTTER_ENCRYPTION_KEY` in Railway and start one Control replica.
 6. Load the admin application, fetch one Edge snapshot, and verify one private capability for
    each active key generation.

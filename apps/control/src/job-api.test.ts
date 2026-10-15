@@ -527,6 +527,12 @@ describe("job API", () => {
       expect(response.status).toBe(204);
     }
     expect(purge).toHaveBeenCalledTimes(2);
+    // The purge lists only the cache prefix of the Space's own route class.
+    expect(purge).toHaveBeenCalledWith({
+      spaceId: "example-private",
+      sourceId: "source-1",
+      routeClass: "private",
+    });
 
     const failing = createJobApi(
       runtime(lifecycle, undefined, {
@@ -539,6 +545,45 @@ describe("job API", () => {
     });
     expect(failed.status).toBe(503);
     expect(await failed.json()).toEqual({ error: { code: "service_unavailable" } });
+  });
+
+  it("answers a v1 poll with 503 when the job ledger is unavailable", async () => {
+    const app = createJobApi(runtime(lifecycle));
+    const unavailable = vi
+      .spyOn(lifecycle, "read")
+      .mockRejectedValue(new Error("database unavailable"));
+    const failed = await app.request(
+      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video",
+      { headers: { authorization: `Bearer ${SPACE_TOKEN}` } },
+    );
+    unavailable.mockRestore();
+
+    expect(failed.status).toBe(503);
+    await expect(failed.json()).resolves.toEqual({ error: { code: "service_unavailable" } });
+  });
+
+  it("opens Capability Keys only for the submission that verifies a capability", async () => {
+    const keyed = vi.spyOn(spaceRegistry, "authorizeSpaceRequestWithKeys");
+    const plain = vi.spyOn(spaceRegistry, "authorizeSpaceRequest");
+    const app = createJobApi(runtime(lifecycle));
+    const resource =
+      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video";
+    const headers = { authorization: `Bearer ${SPACE_TOKEN}` };
+
+    const submitted = await app.request(resource, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ sourceCapability: await capability() }),
+    });
+    expect(submitted.status).toBe(202);
+    expect(keyed).toHaveBeenCalledOnce();
+    expect(plain).not.toHaveBeenCalled();
+
+    expect((await app.request(resource, { headers })).status).toBe(202);
+    expect(keyed).toHaveBeenCalledOnce();
+    expect(plain).toHaveBeenCalledOnce();
+    keyed.mockRestore();
+    plain.mockRestore();
   });
 
   it("distinguishes a missing active Space from registry unavailability", async () => {

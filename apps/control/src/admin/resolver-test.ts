@@ -50,6 +50,7 @@ export async function testResolver(
   }
   const resolution = await resolvers.resolve({
     policy: space.policy,
+    credential: { outcome: "unread" },
     resolverId,
     reference,
     lifetimeSeconds: RESOLVER_TEST_LIFETIME_SECONDS,

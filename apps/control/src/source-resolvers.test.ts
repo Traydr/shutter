@@ -51,6 +51,7 @@ describe("source resolver service", () => {
     await expect(
       resolvers.resolve({
         policy,
+        credential: { outcome: "unread" },
         resolverId: "ut",
         reference: ["example-project", "file_9"],
         lifetimeSeconds: 600,
@@ -69,6 +70,7 @@ describe("source resolver service", () => {
     const { resolvers, presign } = service({ credential });
     const resolution = await resolvers.resolve({
       policy,
+      credential: { outcome: "unread" },
       resolverId: "media",
       reference: ["x"],
       lifetimeSeconds: 600,
@@ -88,6 +90,7 @@ describe("source resolver service", () => {
     await expect(
       resolvers.resolve({
         policy,
+        credential: { outcome: "unread" },
         resolverId: "media",
         reference: ["x"],
         lifetimeSeconds: 600,
@@ -97,6 +100,7 @@ describe("source resolver service", () => {
     await expect(
       resolvers.resolve({
         policy,
+        credential: { outcome: "unread" },
         resolverId: "nope",
         reference: ["x"],
         lifetimeSeconds: 600,
@@ -106,6 +110,7 @@ describe("source resolver service", () => {
     await expect(
       resolvers.resolve({
         policy,
+        credential: { outcome: "unread" },
         resolverId: "ut",
         reference: ["other", "f"],
         lifetimeSeconds: 600,
@@ -115,6 +120,7 @@ describe("source resolver service", () => {
     await expect(
       resolvers.resolve({
         policy,
+        credential: { outcome: "unread" },
         resolverId: "ut",
         reference: ["example-project"],
         lifetimeSeconds: 600,
@@ -131,6 +137,7 @@ describe("source resolver service", () => {
     await expect(
       resolvers.resolve({
         policy,
+        credential: { outcome: "unread" },
         resolverId: "media",
         reference: ["x"],
         lifetimeSeconds: 600,
@@ -169,5 +176,36 @@ describe("S3 presigner", () => {
     );
     expect(virtual.origin).toBe("https://example-bucket.objects.example.test");
     expect(virtual.pathname).toBe("/originals/file.one");
+  });
+
+  it("signs with a rotated secret rather than a client kept for the old one", async () => {
+    vi.useFakeTimers({ now });
+    try {
+      const resolver = policy.resolvers[1];
+      if (resolver?.type !== "s3") throw new Error("fixture");
+      const signature = async (
+        presigner: ReturnType<typeof createS3Presigner>,
+        secretAccessKey: string,
+      ) =>
+        new URL(
+          await presigner.presign({
+            resolver,
+            credential: { accessKeyId: credential.accessKeyId, secretAccessKey },
+            key: "originals/file.one",
+            expiresInSeconds: 600,
+          }),
+        ).searchParams.get("X-Amz-Signature");
+
+      const presigner = createS3Presigner();
+      const original = await signature(presigner, "secret");
+      const rotated = await signature(presigner, "rotated-secret");
+      for (let index = 0; index < 40; index += 1) await signature(presigner, `other-${index}`);
+
+      expect(rotated).not.toBe(original);
+      expect(await signature(presigner, "secret")).toBe(original);
+      expect(await signature(createS3Presigner(), "rotated-secret")).toBe(rotated);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

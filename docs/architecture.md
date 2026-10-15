@@ -157,7 +157,15 @@ delivery, and job submission.
 Space policies, API-token hashes, encrypted Capability Keys, status, and
 credential history belong in the Postgres Space Registry. Tenant values are not
 source code or deployment variables. Control reads Postgres for every
-Space-scoped request and does not keep a policy cache.
+Space-scoped request and does not keep a policy cache. Each registry read is a
+single statement, with the policy's origins and resolvers (and, where the
+request needs them, its Capability Keys or one resolver's credential)
+aggregated beside the Space row, so it sees one snapshot without an enclosing
+transaction. A route opens Capability Keys only when it verifies a Source
+Capability. The one memo is the Edge snapshot, kept per registry generation
+and confirmed by a generation read on every request (ADR 0033): every registry
+write bumps the generation in its own transaction, so an out-of-band SQL edit
+must bump it too.
 
 Control exposes the registry operations as JSON routes under `/v1/admin`,
 guarded by one machine credential (`ADMIN_API_TOKEN`) and documented in
@@ -291,6 +299,13 @@ same request safely repeats every step. A stale Executor whose
 processing-token comparison fails must delete any output it uploaded (etag-
 conditioned) and cannot recreate job state after purge.
 
+Cached images are keyed by the Space's route class, which never changes, so
+Control lists only that cache prefix and the master prefix, and deletes the two
+side by side. The Edge purge and the zone purge then run side by side too, since
+neither store refills the other. Each R2 request and each purge call has its
+own timeout, and at most two purges run at once, because each holds a database
+connection and the Source's lock throughout.
+
 ## Image delivery
 
 Image Optimization is request-driven:
@@ -395,6 +410,12 @@ security limits cannot be overridden by processing options. Loopback,
 link-local, and private source addresses are disabled; allowed HTTPS origins are
 explicit. The imgproxy deployment is not browser-addressable and requires both
 an internal bearer credential and a signed processing URL from Shutter.
+Control decodes the signing key and salt at boot, so a malformed value fails
+the deploy. It ends an imgproxy request when the Edge disconnects or after 50
+seconds, past imgproxy's own 45-second processing timeout, and reuses
+connections through a keep-alive pool whose idle sockets close before
+imgproxy's 10-second keep-alive does. It streams the image back with
+imgproxy's `Content-Length` when imgproxy sent one for an unencoded body.
 
 The canonical width ladder is also passed explicitly to Unpic in each consuming
 frontend. Shutter does not independently copy Unpic's package defaults: Unpic's

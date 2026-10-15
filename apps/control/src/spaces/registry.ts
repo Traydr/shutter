@@ -87,9 +87,25 @@ export interface EdgeSpaceSnapshot {
   capabilityKeys: ReadonlyMap<string, ReadonlyMap<string, Uint8Array>>;
 }
 
-export interface ActiveSpaceAuthorization {
+/** What an authorized Space request acts with: the Space's active policy. */
+export interface SpaceRequestGrant {
   policy: SpacePolicy;
+}
+
+export interface ActiveSpaceAuthorization extends SpaceRequestGrant {
   capabilityKeys: ReadonlyMap<string, Uint8Array>;
+}
+
+/** An application request against one Space: its identifier and the bearer token it carried. */
+export interface SpaceRequest {
+  spaceId: string;
+  token: string | undefined;
+}
+
+/** One resolver of one Space, as an optimization or resolve request names it. */
+export interface ResolverIdentity {
+  spaceId: string;
+  resolverId: string;
 }
 
 /**
@@ -97,10 +113,41 @@ export interface ActiveSpaceAuthorization {
  * returned only after a successful query confirmed the active Space does not
  * exist — a registry failure throws instead, so the caller cannot fail open.
  */
-export type SpaceRequestAuthorization =
+export type SpaceRequestAuthorization<Grant extends SpaceRequestGrant = SpaceRequestGrant> =
   | { outcome: "missing" }
   | { outcome: "unauthorized" }
-  | ({ outcome: "authorized" } & ActiveSpaceAuthorization);
+  | ({ outcome: "authorized" } & Grant);
+
+/**
+ * A resolver credential as the policy read that carried it found it. It is
+ * opened in that read, and an envelope that will not open is reported rather
+ * than thrown, so the resolution that needs it fails and the policy read does
+ * not.
+ */
+export type ResolverCredentialRead =
+  | { outcome: "opened"; credential: ResolverCredential }
+  | { outcome: "unreadable" }
+  | { outcome: "absent" };
+
+/** An active policy read in the same statement as the credential of the one resolver a request names. */
+export interface ActiveResolverRead {
+  policy: SpacePolicy;
+  credential: ResolverCredentialRead;
+}
+
+/**
+ * How seldom an API token's `lastUsedAt` is rewritten: a request writes it
+ * only when the stored value is older than this, so a client polling every
+ * few seconds costs one write a minute rather than one per request.
+ */
+export const API_TOKEN_USE_RESOLUTION_MS = 60_000;
+
+/** Whether a token last used at `lastUsedAt` is due a new `lastUsedAt` at `now`. */
+export function apiTokenUseIsStale(lastUsedAt: Date | undefined, now: Date): boolean {
+  return (
+    lastUsedAt === undefined || now.getTime() - lastUsedAt.getTime() >= API_TOKEN_USE_RESOLUTION_MS
+  );
+}
 
 export type SpaceRegistryErrorCode = "conflict" | "invalid" | "not_found" | "unavailable";
 
@@ -140,15 +187,27 @@ export interface SpaceRegistry extends SpaceRegistryTransaction {
   getSpace(spaceId: string): Promise<SpaceRecord | undefined>;
   getActiveSpacePolicy(spaceId: string): Promise<SpacePolicy | undefined>;
   /**
+   * The active policy and the credential of the named resolver, in one read:
+   * an optimization or resolve that names an `s3` resolver needs both, and the
+   * credential then comes from the same snapshot as the policy.
+   */
+  getActiveResolverRead(resolver: ResolverIdentity): Promise<ActiveResolverRead | undefined>;
+  /**
    * Policy and accepted Capability Keys for a Space of any status. An Executor
    * claim may complete work accepted before the Space was decommissioned
    * (ADR 0022), so this read does not filter on status.
    */
   getSpaceAuthorization(spaceId: string): Promise<ActiveSpaceAuthorization | undefined>;
-  authorizeSpaceRequest(
-    spaceId: string,
-    token: string | undefined,
-  ): Promise<SpaceRequestAuthorization>;
+  /** Authorizes an application request; the grant carries no Capability Keys. */
+  authorizeSpaceRequest(request: SpaceRequest): Promise<SpaceRequestAuthorization>;
+  /**
+   * The same answer, plus the Space's accepted Capability Keys opened. Only a
+   * route that verifies a Source Capability asks for them, so the rest never
+   * unseal a key.
+   */
+  authorizeSpaceRequestWithKeys(
+    request: SpaceRequest,
+  ): Promise<SpaceRequestAuthorization<ActiveSpaceAuthorization>>;
   listSpaces(): Promise<readonly SpaceRecord[]>;
   editSpace(spaceId: string, update: SpacePolicyUpdate): Promise<RegistryMutation<SpaceRecord>>;
   decommissionSpace(spaceId: string): Promise<RegistryMutation<SpaceRecord>>;

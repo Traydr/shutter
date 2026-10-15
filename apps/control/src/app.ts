@@ -6,6 +6,8 @@ import {
   EDGE_REFRESH_REPORT_HEADER,
   EDGE_SERVING_GENERATION_HEADER,
   type JsonValue,
+  type OperationalEvent,
+  type PreviewKind,
   parseEdgeConfigRefreshReport,
   parseEdgeServingGeneration,
   serializeEdgeConfigSnapshot,
@@ -14,12 +16,12 @@ import { Hono } from "hono";
 import { matchedRoutes } from "hono/route";
 import { type AdminApiRuntime, createAdminApi } from "./admin-api.js";
 import type { EdgeRefreshTracker } from "./edge-refresh-status.js";
-import type { ImgproxyConfig } from "./imgproxy.js";
+import type { ImgproxyEndpoint, ImgproxyFetch } from "./imgproxy.js";
 import { createJobApi, type JobApiRuntime } from "./job-api.js";
 import { type ControlLogger, operationalErrorType } from "./logging.js";
 import type { MasterStore } from "./master-store.js";
 import { registerOptimizeRoutes } from "./optimize-routes.js";
-import { bearerAuthorized } from "./origin-auth.js";
+import { bearerCheck } from "./origin-auth.js";
 import { problemResponse } from "./problems.js";
 import type { SourceResolverService } from "./source-resolvers.js";
 import type { SpaceRegistry } from "./spaces/registry.js";
@@ -34,7 +36,10 @@ export interface ControlRuntimeConfig {
   mediaStoreSource?(): string | undefined;
   /** Where the Edge serves from; the admin API reports it so pages can show complete Delivery URLs. */
   edgeBaseUrl?(): string | undefined;
-  imgproxyConfig(): ImgproxyConfig | undefined;
+  /** The imgproxy configuration, decoded at boot. */
+  imgproxyConfig(): ImgproxyEndpoint | undefined;
+  /** The imgproxy transport: a dedicated keep-alive agent in production, `fetch` when absent. */
+  imgproxyFetch?: ImgproxyFetch;
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
   masterStore?: MasterStore;
   jobApiRuntime?: JobApiRuntime;
@@ -43,18 +48,25 @@ export interface ControlRuntimeConfig {
   edgeRefreshTracker?: EdgeRefreshTracker;
 }
 
+/**
+ * What a Control request carries from handler to middleware. A master
+ * optimization sets `previewKind` so its one completion event names the kind.
+ */
+export type ControlEnv = { Variables: { requestId: string; previewKind?: PreviewKind } };
+
+const ROUTE_TEMPLATES: readonly ControlHttpRoute[] = Object.values(CONTROL_HTTP_ROUTES);
+
 function safeRouteTemplate(
   context: Parameters<typeof matchedRoutes>[0],
 ): ControlHttpRoute | "<unmatched>" {
   // The last allowlisted template wins: a prefix middleware or a catch-all
   // that also matched is not the route the request was served by.
-  const templates = Object.values(CONTROL_HTTP_ROUTES);
-  return (
-    matchedRoutes(context)
-      .map((matched) => templates.find((route) => route === matched.path))
-      .filter((route) => route !== undefined)
-      .at(-1) ?? "<unmatched>"
-  );
+  let template: ControlHttpRoute | "<unmatched>" = "<unmatched>";
+  for (const matched of matchedRoutes(context)) {
+    template = ROUTE_TEMPLATES.find((route) => route === matched.path) ?? template;
+  }
+
+  return template;
 }
 
 function unavailable(): Response {
@@ -64,10 +76,9 @@ function unavailable(): Response {
   );
 }
 
-export function createControlApp(
-  runtime: ControlRuntimeConfig,
-): Hono<{ Variables: { requestId: string } }> {
-  const control = new Hono<{ Variables: { requestId: string } }>();
+export function createControlApp(runtime: ControlRuntimeConfig): Hono<ControlEnv> {
+  const control = new Hono<ControlEnv>();
+  const edgeAuthorized = bearerCheck(() => runtime.edgeConfigToken?.());
 
   control.use("*", async (context, next) => {
     const requestId = randomUUID();
@@ -82,7 +93,7 @@ export function createControlApp(
       const matchedRoute = safeRouteTemplate(context);
       if (matchedRoute !== CONTROL_HTTP_ROUTES.healthz) {
         const status = context.res.status;
-        runtime.logger.emit(status >= 500 ? "error" : "info", {
+        const event: OperationalEvent = {
           event: "control.http.completed",
           requestId,
           httpMethod: context.req.method,
@@ -90,7 +101,10 @@ export function createControlApp(
           httpStatusCode: status,
           durationMs: Math.max(0, Math.round(performance.now() - startedAt)),
           outcome: status >= 400 ? "failed" : "ready",
-        });
+        };
+        const kind = context.get("previewKind");
+        if (kind !== undefined) event.kind = kind;
+        runtime.logger.emit(status >= 500 ? "error" : "info", event);
       }
     }
   });
@@ -116,7 +130,7 @@ export function createControlApp(
     context.json({ ok: true, service: "control" }),
   );
   control.get(CONTROL_HTTP_ROUTES.edgeConfig, async (context) => {
-    if (!bearerAuthorized(context.req.header("authorization"), runtime.edgeConfigToken?.())) {
+    if (!edgeAuthorized(context.req.header("authorization"))) {
       return context.json({ error: { code: "unauthorized" } }, 401, {
         "cache-control": "private, no-store",
         "www-authenticate": "Bearer",
@@ -145,7 +159,7 @@ export function createControlApp(
     }
   });
   control.post(CONTROL_HTTP_ROUTES.edgeConfigRefresh, async (context) => {
-    if (!bearerAuthorized(context.req.header("authorization"), runtime.edgeConfigToken?.())) {
+    if (!edgeAuthorized(context.req.header("authorization"))) {
       return context.json({ error: { code: "unauthorized" } }, 401, {
         "cache-control": "private, no-store",
         "www-authenticate": "Bearer",

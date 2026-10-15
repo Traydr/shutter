@@ -19,8 +19,20 @@ import {
   validateCapabilityKeyId,
 } from "./credentials.js";
 import type { CapabilityKeyEncryption } from "./encryption.js";
-import { loadSpaceRecords } from "./postgres-policy.js";
+import {
+  loadSpaceRecords,
+  type RegistryDatabase,
+  SEALED_CAPABILITY_KEYS_COLUMN,
+  type SealedCapabilityKeyRow,
+  SPACE_POLICY_WITH_KEYS_JSON,
+  SPACE_RECORD_COLUMNS,
+  sealedCapabilityKeysSchema,
+  spacePolicyFromRow,
+  spacePolicyRowSchema,
+  spaceRecordRowSchema,
+} from "./postgres-policy.js";
 import type {
+  ActiveResolverRead,
   ActiveSpaceAuthorization,
   ApiTokenSummary,
   CapabilityKeySummary,
@@ -32,14 +44,20 @@ import type {
   ResolverChange,
   ResolverCredential,
   ResolverCredentialInput,
+  ResolverCredentialRead,
   ResolverCredentialSummary,
+  ResolverIdentity,
   SpacePolicyUpdate,
   SpaceRecord,
   SpaceRegistry,
   SpaceRegistryTransaction,
+  SpaceRequest,
   SpaceRequestAuthorization,
+  SpaceRequestGrant,
 } from "./registry.js";
 import {
+  API_TOKEN_USE_RESOLUTION_MS,
+  apiTokenUseIsStale,
   applyResolverChange,
   planResolverCredentials,
   rejectRetiredResolvers,
@@ -65,12 +83,6 @@ interface CapabilityKeyRow {
   key_id: string;
   accepted_at: Date;
   disabled_at: Date | null;
-}
-
-interface SealedCapabilityKeyRow {
-  key_id: string;
-  sealed_nonce: string;
-  sealed_key: string;
 }
 
 interface ResolverCredentialRow {
@@ -157,6 +169,85 @@ function capabilityKeySummary(row: CapabilityKeyRow): CapabilityKeySummary {
   if (row.disabled_at !== null) summary.disabledAt = row.disabled_at;
   return summary;
 }
+
+/** A timestamp inside a JSON aggregate, which Postgres renders as ISO 8601 with an offset. */
+const jsonTimestampSchema = z.iso.datetime({ offset: true }).transform((value) => new Date(value));
+
+const generationRowSchema = z.object({ generation: z.int().nonnegative(), updated_at: z.date() });
+
+/** An application request's read: the active Space and the one live token whose hash matched, if any. */
+const authorizationRowSchema = spaceRecordRowSchema.extend({
+  token_id: z.int().nullable(),
+  token_last_used_at: z.date().nullable(),
+});
+
+type AuthorizationRow = z.infer<typeof authorizationRowSchema>;
+
+const keyedAuthorizationRowSchema = authorizationRowSchema.extend({
+  capability_keys: sealedCapabilityKeysSchema,
+});
+
+const keyedSpaceRowSchema = spaceRecordRowSchema.extend({
+  capability_keys: sealedCapabilityKeysSchema,
+});
+
+const sealedResolverCredentialSchema = z.object({
+  access_key_id: z.string(),
+  nonce: z.string(),
+  ciphertext: z.string(),
+});
+
+type SealedResolverCredential = z.infer<typeof sealedResolverCredentialSchema>;
+
+/** One sealed resolver credential as a JSON object, for a `space_resolvers c` row. */
+const SEALED_RESOLVER_CREDENTIAL_JSON = `json_build_object('access_key_id', c.credential_access_key_id,
+  'nonce', c.sealed_credential_nonce, 'ciphertext', c.sealed_credential)`;
+
+const resolverReadRowSchema = spaceRecordRowSchema.extend({
+  credential: sealedResolverCredentialSchema.nullable(),
+});
+
+const credentialRowSchema = z.object({ credential: sealedResolverCredentialSchema });
+
+const tokenUseRowSchema = z.object({ id: z.int(), last_used_at: z.date().nullable() });
+
+const edgeSnapshotRowSchema = generationRowSchema.extend({
+  spaces: z.array(spacePolicyRowSchema.extend({ capability_keys: sealedCapabilityKeysSchema })),
+});
+
+const apiTokensRowSchema = z.object({
+  tokens: z.array(
+    z.object({
+      id: z.int(),
+      label: z.string(),
+      display_prefix: z.string(),
+      created_at: jsonTimestampSchema,
+      last_used_at: jsonTimestampSchema.nullable(),
+      revoked_at: jsonTimestampSchema.nullable(),
+    }),
+  ),
+});
+
+const capabilityKeysRowSchema = z.object({
+  keys: z.array(
+    z.object({
+      id: z.int(),
+      key_id: z.string(),
+      accepted_at: jsonTimestampSchema,
+      disabled_at: jsonTimestampSchema.nullable(),
+    }),
+  ),
+});
+
+const resolverCredentialsRowSchema = z.object({
+  credentials: z.array(
+    z.object({
+      resolver_id: z.string(),
+      access_key_id: z.string(),
+      updated_at: jsonTimestampSchema,
+    }),
+  ),
+});
 
 async function bumpGeneration(client: PoolClient, now: Date): Promise<number> {
   const result = await client.query<GenerationRow>(
@@ -309,6 +400,10 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   readonly #now: () => Date;
   readonly #transactionClient: PoolClient | undefined;
   readonly #reportUndecryptableKeys: UndecryptableKeyReporter;
+  /** The last Edge snapshot built outside a transaction; it carries the generation it was read at. */
+  #edgeSnapshot: EdgeSpaceSnapshot | undefined;
+  /** The rebuild in flight, and the generation the requests waiting on it observed. */
+  #edgeSnapshotBuild: { generation: number; snapshot: Promise<EdgeSpaceSnapshot> } | undefined;
 
   constructor(pool: Pool, options: PostgresSpaceRegistryOptions = {}) {
     this.#pool = pool;
@@ -332,79 +427,179 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   }
 
   async getSpace(spaceId: string): Promise<SpaceRecord | undefined> {
-    const [record] = await this.#read((client) => loadSpaceRecords(client, { spaceId }));
+    const [record] = await loadSpaceRecords(this.#database(), { spaceId });
+
     return record?.value;
   }
 
   async getActiveSpacePolicy(spaceId: string): Promise<SpacePolicy | undefined> {
-    const [record] = await this.#read((client) =>
-      loadSpaceRecords(client, { activeOnly: true, spaceId }),
-    );
+    const [record] = await loadSpaceRecords(this.#database(), { activeOnly: true, spaceId });
+
     return record?.value.policy;
   }
 
+  async getActiveResolverRead(resolver: ResolverIdentity): Promise<ActiveResolverRead | undefined> {
+    const result = await this.#database().query(
+      `select ${SPACE_RECORD_COLUMNS},
+         (select ${SEALED_RESOLVER_CREDENTIAL_JSON} from space_resolvers c
+          where c.space_id = s.id and c.resolver_id = $2 and c.sealed_credential is not null)
+           as credential
+       from spaces s where s.space_id = $1 and s.status = 'active'`,
+      [resolver.spaceId, resolver.resolverId],
+    );
+    const [row] = result.rows;
+    if (row === undefined) return undefined;
+    const read = resolverReadRowSchema.parse(row);
+
+    return {
+      policy: spacePolicyFromRow(read),
+      credential: this.#readResolverCredential(resolver, read.credential),
+    };
+  }
+
   async getGeneration(): Promise<RegistryGeneration> {
-    const result = await this.#pool.query<GenerationRow>(
+    const result = await this.#database().query(
       `select generation, updated_at from space_registry_metadata where id = 1`,
     );
-    const row = result.rows[0];
+    const [row] = result.rows;
     if (row === undefined) throw new Error("Space Registry metadata is not initialized");
-    return { generation: row.generation, updatedAt: row.updated_at };
+    const generation = generationRowSchema.parse(row);
+
+    return { generation: generation.generation, updatedAt: generation.updated_at };
   }
 
   async getSpaceAuthorization(spaceId: string): Promise<ActiveSpaceAuthorization | undefined> {
-    return this.#read(async (client) => {
-      const [record] = await loadSpaceRecords(client, { spaceId });
-      if (record === undefined) return undefined;
-      const capabilityKeys = await this.#openCapabilityKeys(client, record.recordId, spaceId);
-      return { policy: record.value.policy, capabilityKeys };
-    });
+    const result = await this.#database().query(
+      `select ${SPACE_RECORD_COLUMNS}, ${SEALED_CAPABILITY_KEYS_COLUMN}
+       from spaces s where s.space_id = $1`,
+      [spaceId],
+    );
+    const [row] = result.rows;
+    if (row === undefined) return undefined;
+    const space = keyedSpaceRowSchema.parse(row);
+
+    return {
+      policy: spacePolicyFromRow(space),
+      capabilityKeys: this.#openCapabilityKeys(spaceId, space.capability_keys),
+    };
   }
 
-  async authorizeSpaceRequest(
-    spaceId: string,
-    token: string | undefined,
-  ): Promise<SpaceRequestAuthorization> {
-    const result = await this.#read(
-      async (
-        client,
-      ): Promise<
-        | { outcome: "missing" | "unauthorized" }
-        | ({ outcome: "authorized"; tokenId: number } & ActiveSpaceAuthorization)
-      > => {
-        const [record] = await loadSpaceRecords(client, { activeOnly: true, spaceId });
-        if (record === undefined) return { outcome: "missing" };
-        if (token === undefined || !isWellFormedApiToken(token)) {
-          return { outcome: "unauthorized" };
-        }
-        const match = await client.query<{ id: number }>(
-          `select id from space_api_tokens
-           where space_id = $1 and token_hash = $2 and revoked_at is null`,
-          [record.recordId, apiTokenHash(token)],
-        );
-        const tokenId = match.rows[0]?.id;
-        if (tokenId === undefined) return { outcome: "unauthorized" };
-        const capabilityKeys = await this.#openCapabilityKeys(client, record.recordId, spaceId);
-        return { outcome: "authorized", tokenId, policy: record.value.policy, capabilityKeys };
-      },
+  async authorizeSpaceRequest(request: SpaceRequest): Promise<SpaceRequestAuthorization> {
+    const row = await this.#authorizationRow(request, {
+      columns: "",
+      schema: authorizationRowSchema,
+    });
+
+    return this.#settleAuthorization(row, (space) => ({ policy: spacePolicyFromRow(space) }));
+  }
+
+  async authorizeSpaceRequestWithKeys(
+    request: SpaceRequest,
+  ): Promise<SpaceRequestAuthorization<ActiveSpaceAuthorization>> {
+    const row = await this.#authorizationRow(request, {
+      columns: `, ${SEALED_CAPABILITY_KEYS_COLUMN}`,
+      schema: keyedAuthorizationRowSchema,
+    });
+
+    return this.#settleAuthorization(row, (space) => ({
+      policy: spacePolicyFromRow(space),
+      capabilityKeys: this.#openCapabilityKeys(request.spaceId, space.capability_keys),
+    }));
+  }
+
+  /**
+   * The one statement behind both authorizations: the active Space and the
+   * live token whose hash matched, left-joined so a Space without that token
+   * still comes back and `missing` stays distinguishable from `unauthorized`.
+   */
+  async #authorizationRow<Row extends AuthorizationRow>(
+    request: SpaceRequest,
+    read: { columns: string; schema: z.ZodType<Row> },
+  ): Promise<Row | undefined> {
+    const tokenHash =
+      request.token !== undefined && isWellFormedApiToken(request.token)
+        ? apiTokenHash(request.token)
+        : null;
+    // The unique index on token_hash makes the equality filter authoritative:
+    // at most one row can match, so the join cannot multiply the Space row.
+    const result = await this.#database().query(
+      `select ${SPACE_RECORD_COLUMNS}${read.columns},
+         tokens.id as token_id, tokens.last_used_at as token_last_used_at
+       from spaces s
+       left join space_api_tokens tokens
+         on tokens.space_id = s.id and tokens.token_hash = $2 and tokens.revoked_at is null
+       where s.space_id = $1 and s.status = 'active'`,
+      [request.spaceId, tokenHash],
     );
-    if (result.outcome !== "authorized") return result;
-    void this.#pool
-      .query(`update space_api_tokens set last_used_at = $2 where id = $1 and revoked_at is null`, [
-        result.tokenId,
-        this.#now(),
-      ])
+    const [row] = result.rows;
+
+    return row === undefined ? undefined : read.schema.parse(row);
+  }
+
+  #settleAuthorization<Row extends AuthorizationRow, Grant extends SpaceRequestGrant>(
+    row: Row | undefined,
+    grant: (space: Row) => Grant,
+  ): SpaceRequestAuthorization<Grant> {
+    if (row === undefined) return { outcome: "missing" };
+    if (row.token_id === null) return { outcome: "unauthorized" };
+    const granted = grant(row);
+    this.#recordTokenUse(row.token_id, row.token_last_used_at);
+
+    return { outcome: "authorized", ...granted };
+  }
+
+  /**
+   * Usage metadata is advisory: it is written off the response path, and only
+   * when the stored value is older than the one-minute resolution, so a client
+   * polling every few seconds does not write on every request. The guard is
+   * repeated in the statement so concurrent requests write at most once.
+   */
+  #recordTokenUse(tokenId: number, lastUsedAt: Date | null): void {
+    const now = this.#now();
+    if (!apiTokenUseIsStale(lastUsedAt ?? undefined, now)) return;
+    void this.#database()
+      .query(
+        `update space_api_tokens set last_used_at = $2
+         where id = $1 and revoked_at is null and (last_used_at is null or last_used_at <= $3)`,
+        [tokenId, now, new Date(now.getTime() - API_TOKEN_USE_RESOLUTION_MS)],
+      )
       .catch(() => undefined);
-    return { outcome: "authorized", policy: result.policy, capabilityKeys: result.capabilityKeys };
   }
 
   async listSpaces(): Promise<readonly SpaceRecord[]> {
-    const records = await this.#read((client) => loadSpaceRecords(client));
+    const records = await loadSpaceRecords(this.#database());
+
     return records.map((record) => record.value);
   }
 
+  /**
+   * Outside a caller-owned transaction the snapshot is memoized by registry
+   * generation. Every registry write bumps the generation in its own
+   * transaction, so a matching generation proves the memo is exactly what a
+   * fresh read would return, and a request costs one generation read
+   * (ADR 0033). Requests that observed the same generation share one rebuild;
+   * the rebuild reads after they observed it, so it is never older.
+   */
   async loadEdgeSnapshot(): Promise<EdgeSpaceSnapshot> {
-    return this.#read((client) => this.#loadEdgeSnapshot(client));
+    const encryption = this.#capabilityKeyEncryption();
+    if (this.#transactionClient !== undefined) {
+      return this.#readEdgeSnapshot(this.#transactionClient, encryption);
+    }
+    const { generation } = await this.getGeneration();
+    const memo = this.#edgeSnapshot;
+    if (memo !== undefined && memo.generation === generation) return memo;
+    const pending = this.#edgeSnapshotBuild;
+    if (pending !== undefined && pending.generation === generation) return pending.snapshot;
+    const build = { generation, snapshot: this.#readEdgeSnapshot(this.#pool, encryption) };
+    this.#edgeSnapshotBuild = build;
+    try {
+      const snapshot = await build.snapshot;
+      this.#edgeSnapshot = snapshot;
+
+      return snapshot;
+    } finally {
+      if (this.#edgeSnapshotBuild === build) this.#edgeSnapshotBuild = undefined;
+    }
   }
 
   async createSpace(
@@ -603,42 +798,34 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
 
   async verifyApiToken(spaceId: string, token: string): Promise<boolean> {
     if (!isWellFormedApiToken(token)) return false;
-    const database = this.#transactionClient ?? this.#pool;
     // The unique index on token_hash makes the equality filter authoritative:
     // at most one row can match, so a returned row is the verification.
-    const result = await database.query<{ id: number }>(
-      `select tokens.id
+    const result = await this.#database().query(
+      `select tokens.id, tokens.last_used_at
        from space_api_tokens tokens
        join spaces on spaces.id = tokens.space_id
        where spaces.space_id = $1 and spaces.status = 'active'
          and tokens.token_hash = $2 and tokens.revoked_at is null`,
       [spaceId, apiTokenHash(token)],
     );
-    const match = result.rows[0];
-    if (match === undefined) return false;
-    // Usage metadata is advisory and must not delay or fail authentication.
-    void database
-      .query(`update space_api_tokens set last_used_at = $2 where id = $1 and revoked_at is null`, [
-        match.id,
-        this.#now(),
-      ])
-      .catch(() => undefined);
+    const [row] = result.rows;
+    if (row === undefined) return false;
+    const match = tokenUseRowSchema.parse(row);
+    this.#recordTokenUse(match.id, match.last_used_at);
+
     return true;
   }
 
   async listApiTokens(spaceId: string): Promise<readonly ApiTokenSummary[]> {
-    return this.#read(async (client) => {
-      const [space] = await loadSpaceRecords(client, { spaceId });
-      if (space === undefined) {
-        throw new SpaceRegistryError("not_found", "the Space does not exist");
-      }
-      const result = await client.query<ApiTokenRow>(
-        `select ${API_TOKEN_COLUMNS}
-         from space_api_tokens where space_id = $1 order by id`,
-        [space.recordId],
-      );
-      return result.rows.map(apiTokenSummary);
+    const { tokens } = await this.#spaceChildren(spaceId, {
+      column: `(select coalesce(json_agg(json_build_object('id', t.id, 'label', t.label,
+          'display_prefix', t.display_prefix, 'created_at', t.created_at,
+          'last_used_at', t.last_used_at, 'revoked_at', t.revoked_at) order by t.id), '[]')
+        from space_api_tokens t where t.space_id = s.id) as tokens`,
+      schema: apiTokensRowSchema,
     });
+
+    return tokens.map(apiTokenSummary);
   }
 
   async revokeApiToken(
@@ -694,63 +881,103 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   }
 
   async listResolverCredentials(spaceId: string): Promise<readonly ResolverCredentialSummary[]> {
-    return this.#read(async (client) => {
-      const [space] = await loadSpaceRecords(client, { spaceId });
-      if (space === undefined) {
-        throw new SpaceRegistryError("not_found", "the Space does not exist");
-      }
-      const result = await client.query<ResolverCredentialRow>(
-        `select ${RESOLVER_CREDENTIAL_COLUMNS} from space_resolvers
-         where space_id = $1 and sealed_credential is not null order by id`,
-        [space.recordId],
-      );
-      return result.rows.map((row) => ({
-        resolverId: row.resolver_id,
-        accessKeyId: row.credential_access_key_id,
-        updatedAt: row.credential_updated_at,
-      }));
+    const { credentials } = await this.#spaceChildren(spaceId, {
+      column: `(select coalesce(json_agg(json_build_object('resolver_id', c.resolver_id,
+          'access_key_id', c.credential_access_key_id, 'updated_at', c.credential_updated_at)
+          order by c.id), '[]')
+        from space_resolvers c where c.space_id = s.id and c.sealed_credential is not null)
+        as credentials`,
+      schema: resolverCredentialsRowSchema,
     });
+
+    return credentials.map((credential) => ({
+      resolverId: credential.resolver_id,
+      accessKeyId: credential.access_key_id,
+      updatedAt: credential.updated_at,
+    }));
   }
 
   async getResolverCredential(
     spaceId: string,
     resolverId: string,
   ): Promise<ResolverCredential | undefined> {
-    return this.#read(async (client) => {
-      const [space] = await loadSpaceRecords(client, { spaceId });
-      if (space === undefined) return undefined;
-      const result = await client.query<ResolverCredentialRow>(
-        `select ${RESOLVER_CREDENTIAL_COLUMNS} from space_resolvers
-         where space_id = $1 and resolver_id = $2 and sealed_credential is not null`,
-        [space.recordId, resolverId],
-      );
-      const row = result.rows[0];
-      if (row === undefined) return undefined;
-      const secret = this.#capabilityKeyEncryption().openSecret(
-        spaceId,
-        credentialScope(row.resolver_id, row.credential_access_key_id),
-        { nonce: row.sealed_credential_nonce, ciphertext: row.sealed_credential },
-      );
-      return {
-        accessKeyId: row.credential_access_key_id,
-        secretAccessKey: Buffer.from(secret).toString("utf8"),
-      };
-    });
+    const result = await this.#database().query(
+      `select ${SEALED_RESOLVER_CREDENTIAL_JSON} as credential
+       from space_resolvers c join spaces s on s.id = c.space_id
+       where s.space_id = $1 and c.resolver_id = $2 and c.sealed_credential is not null`,
+      [spaceId, resolverId],
+    );
+    const [row] = result.rows;
+    if (row === undefined) return undefined;
+
+    return this.#openResolverCredential(
+      { spaceId, resolverId },
+      credentialRowSchema.parse(row).credential,
+    );
   }
 
   async listCapabilityKeys(spaceId: string): Promise<readonly CapabilityKeySummary[]> {
-    return this.#read(async (client) => {
-      const [space] = await loadSpaceRecords(client, { spaceId });
-      if (space === undefined) {
-        throw new SpaceRegistryError("not_found", "the Space does not exist");
-      }
-      const result = await client.query<CapabilityKeyRow>(
-        `select ${CAPABILITY_KEY_COLUMNS}
-         from space_capability_keys where space_id = $1 order by id`,
-        [space.recordId],
-      );
-      return result.rows.map(capabilityKeySummary);
+    const { keys } = await this.#spaceChildren(spaceId, {
+      column: `(select coalesce(json_agg(json_build_object('id', k.id, 'key_id', k.key_id,
+          'accepted_at', k.accepted_at, 'disabled_at', k.disabled_at) order by k.id), '[]')
+        from space_capability_keys k where k.space_id = s.id) as keys`,
+      schema: capabilityKeysRowSchema,
     });
+
+    return keys.map(capabilityKeySummary);
+  }
+
+  /**
+   * The row of a Space of any status with one aggregated child column, so an
+   * admin listing proves the Space exists in the statement that lists it. Each
+   * caller names its column and the schema that parses it.
+   */
+  async #spaceChildren<Row>(
+    spaceId: string,
+    read: { column: string; schema: z.ZodType<Row> },
+  ): Promise<Row> {
+    const result = await this.#database().query(
+      `select ${read.column} from spaces s where s.space_id = $1`,
+      [spaceId],
+    );
+    const [row] = result.rows;
+    if (row === undefined) throw new SpaceRegistryError("not_found", "the Space does not exist");
+
+    return read.schema.parse(row);
+  }
+
+  /** Opens one sealed resolver credential; throws when the envelope will not open. */
+  #openResolverCredential(
+    resolver: ResolverIdentity,
+    sealed: SealedResolverCredential,
+  ): ResolverCredential {
+    const secret = this.#capabilityKeyEncryption().openSecret(
+      resolver.spaceId,
+      credentialScope(resolver.resolverId, sealed.access_key_id),
+      { nonce: sealed.nonce, ciphertext: sealed.ciphertext },
+    );
+
+    return {
+      accessKeyId: sealed.access_key_id,
+      secretAccessKey: Buffer.from(secret).toString("utf8"),
+    };
+  }
+
+  /**
+   * A credential read beside its policy. An envelope that will not open, or a
+   * registry without encryption, is reported as `unreadable`, so the
+   * resolution that needs it fails as a separate credential read would have.
+   */
+  #readResolverCredential(
+    resolver: ResolverIdentity,
+    sealed: SealedResolverCredential | null,
+  ): ResolverCredentialRead {
+    if (sealed === null) return { outcome: "absent" };
+    try {
+      return { outcome: "opened", credential: this.#openResolverCredential(resolver, sealed) };
+    } catch {
+      return { outcome: "unreadable" };
+    }
   }
 
   async disableCapabilityKey(
@@ -801,26 +1028,18 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
   }
 
   /**
-   * The one per-Space Capability Key read: the currently accepted (not
-   * disabled) keys of one Space, opened with `openSealedKeys` tolerance.
+   * Opens the accepted (not disabled) keys one per-Space read returned, with
+   * `openSealedKeys` tolerance.
    */
-  async #openCapabilityKeys(
-    client: PoolClient,
-    spaceRecordId: number,
+  #openCapabilityKeys(
     publicSpaceId: string,
-  ): Promise<Map<string, Uint8Array>> {
-    const encryption = this.#capabilityKeyEncryption();
-    const result = await client.query<SealedCapabilityKeyRow>(
-      `select key_id, sealed_nonce, sealed_key
-       from space_capability_keys
-       where space_id = $1 and disabled_at is null
-       order by id`,
-      [spaceRecordId],
-    );
-    const opened = openSealedKeys(encryption, publicSpaceId, result.rows);
+    sealed: readonly SealedCapabilityKeyRow[],
+  ): Map<string, Uint8Array> {
+    const opened = openSealedKeys(this.#capabilityKeyEncryption(), publicSpaceId, sealed);
     if (opened.undecryptable > 0) {
       this.#reportUndecryptableKeys("space_authorization", opened.undecryptable);
     }
+
     return opened.keys;
   }
 
@@ -837,57 +1056,46 @@ export class PostgresSpaceRegistry implements SpaceRegistry {
       : work(this.#transactionClient);
   }
 
-  /**
-   * A policy read spans several tables. Outside a caller-owned transaction it
-   * runs inside one repeatable-read snapshot so no concurrent edit can split
-   * what the caller observes.
-   */
-  #read<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
-    return this.#transactionClient === undefined
-      ? transaction(this.#pool, work, { mode: "repeatable read read only" })
-      : work(this.#transactionClient);
+  /** Each read is one statement, so outside a caller-owned transaction it needs none. */
+  #database(): RegistryDatabase {
+    return this.#transactionClient ?? this.#pool;
   }
 
-  async #loadEdgeSnapshot(client: PoolClient): Promise<EdgeSpaceSnapshot> {
-    const encryption = this.#capabilityKeyEncryption();
-    const metadata = await client.query<GenerationRow>(
-      `select generation, updated_at from space_registry_metadata where id = 1`,
+  /**
+   * The whole snapshot in one statement: the generation and every active
+   * Space with its policy and sealed keys, so generation, policies, and keys
+   * come from one snapshot without an enclosing transaction.
+   */
+  async #readEdgeSnapshot(
+    database: RegistryDatabase,
+    encryption: CapabilityKeyEncryption,
+  ): Promise<EdgeSpaceSnapshot> {
+    const result = await database.query(
+      `select m.generation, m.updated_at,
+         (select coalesce(json_agg(${SPACE_POLICY_WITH_KEYS_JSON} order by s.id), '[]')
+          from spaces s where s.status = 'active') as spaces
+       from space_registry_metadata m where m.id = 1`,
     );
-    const generation = metadata.rows[0];
-    if (generation === undefined) throw new Error("Space Registry metadata is not initialized");
-    const records = await loadSpaceRecords(client, { activeOnly: true });
-    const keys = await client.query<SealedCapabilityKeyRow & { public_space_id: string }>(
-      `select spaces.space_id as public_space_id, keys.key_id, keys.sealed_nonce, keys.sealed_key
-       from space_capability_keys keys
-       join spaces on spaces.id = keys.space_id
-       where spaces.status = 'active' and keys.disabled_at is null
-       order by keys.id`,
-    );
-    // One bulk query for every Space, grouped here so the snapshot stays a
-    // single repeatable-read pass; only the open-and-tolerate step is shared
-    // with the per-Space reads.
-    const sealedBySpace = new Map<string, SealedCapabilityKeyRow[]>();
-    for (const record of records) sealedBySpace.set(record.value.policy.id, []);
-    for (const key of keys.rows) {
-      const spaceKeys = sealedBySpace.get(key.public_space_id);
-      if (spaceKeys === undefined) {
-        throw new Error("a Capability Key references a Space missing from the snapshot");
-      }
-      spaceKeys.push(key);
-    }
+    const [row] = result.rows;
+    if (row === undefined) throw new Error("Space Registry metadata is not initialized");
+    const read = edgeSnapshotRowSchema.parse(row);
+    const spaces: SpacePolicy[] = [];
     const capabilityKeys = new Map<string, Map<string, Uint8Array>>();
     let undecryptable = 0;
-    for (const [publicSpaceId, rows] of sealedBySpace) {
-      const opened = openSealedKeys(encryption, publicSpaceId, rows);
-      capabilityKeys.set(publicSpaceId, opened.keys);
+    for (const space of read.spaces) {
+      const policy = spacePolicyFromRow(space);
+      const opened = openSealedKeys(encryption, policy.id, space.capability_keys);
+      spaces.push(policy);
+      capabilityKeys.set(policy.id, opened.keys);
       undecryptable += opened.undecryptable;
     }
     if (undecryptable > 0) this.#reportUndecryptableKeys("edge_snapshot", undecryptable);
+
     return {
       schemaVersion: "v1",
-      generation: generation.generation,
-      registryUpdatedAt: generation.updated_at,
-      spaces: records.map((record) => record.value.policy),
+      generation: read.generation,
+      registryUpdatedAt: read.updated_at,
+      spaces,
       capabilityKeys,
     };
   }

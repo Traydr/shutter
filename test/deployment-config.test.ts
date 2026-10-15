@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { parseDeploymentInput } from "../.railway/deployment-input.ts";
 import { buildRailwayProject } from "../.railway/railway.ts";
+import {
+  IMGPROXY_IDLE_SOCKET_TIMEOUT_MS,
+  IMGPROXY_REQUEST_TIMEOUT_MS,
+} from "../apps/control/src/imgproxy.ts";
 
 const commonEnvironment = {
   SHUTTER_PROJECT_NAME: "example-shutter",
@@ -202,5 +206,15 @@ describe("deployment configuration", () => {
     ]) {
       expect(imgproxy.variables[guard]).toMatchObject({ type: "literal", value: "false" });
     }
+  });
+
+  it("keeps Control's imgproxy timeouts on the right side of imgproxy's own", () => {
+    const imgproxy = service(projectFor({ ...commonEnvironment }), "Shutter-Imgproxy");
+    // imgproxy answers its own processing timeout before Control gives up.
+    expect(imgproxy.variables.IMGPROXY_TIMEOUT).toMatchObject({ type: "literal", value: "45" });
+    expect(IMGPROXY_REQUEST_TIMEOUT_MS).toBeGreaterThan(45_000);
+    // Control drops an idle connection before imgproxy's 10-second default closes it.
+    expect(imgproxy.variables.IMGPROXY_KEEP_ALIVE_TIMEOUT).toBeUndefined();
+    expect(IMGPROXY_IDLE_SOCKET_TIMEOUT_MS).toBeLessThan(10_000);
   });
 });

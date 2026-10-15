@@ -1,6 +1,6 @@
 import { S3Client } from "@aws-sdk/client-s3";
-import { Pool } from "pg";
 import type { ControlRuntimeConfig } from "./app.js";
+import { createDatabasePool } from "./db/pool.js";
 import { EdgeRefreshTracker } from "./edge-refresh-status.js";
 import type { ServerEnv } from "./env/server.js";
 import {
@@ -10,6 +10,11 @@ import {
   wakeExecutor,
 } from "./executor-dispatch.js";
 import type { ImgproxyConfig } from "./imgproxy.js";
+import {
+  createImgproxyTransport,
+  ImgproxyConfigurationError,
+  parseImgproxyConfig,
+} from "./imgproxy.js";
 import type { JobApiRuntime } from "./job-api.js";
 import type { ControlLogger } from "./logging.js";
 import { createMasterStore, mediaStoreSourcePrefix } from "./master-store.js";
@@ -147,6 +152,22 @@ function configuredEncryption(env: ServerEnv): CapabilityKeyEncryption | undefin
   }
 }
 
+/** Decodes the imgproxy variables once; a supplied but malformed value fails the boot. */
+function configuredImgproxy(values: Inputs<typeof FEATURE_INPUTS.imgproxy>) {
+  const config: ImgproxyConfig = {
+    baseUrl: values.IMGPROXY_BASE_URL,
+    key: values.IMGPROXY_KEY,
+    salt: values.IMGPROXY_SALT,
+    secret: values.IMGPROXY_SECRET,
+  };
+  try {
+    return parseImgproxyConfig(config);
+  } catch (error) {
+    if (error instanceof ImgproxyConfigurationError) throw malformed(error.variable, error);
+    throw error;
+  }
+}
+
 function usableDatabaseUrl(env: ServerEnv): string | undefined {
   if (env.DATABASE_URL === undefined) return undefined;
   const protocol = new URL(env.DATABASE_URL).protocol;
@@ -195,7 +216,7 @@ export function buildControlRuntime(
   const pool =
     registryInputs.values === undefined || databaseUrl === undefined || encryption === undefined
       ? undefined
-      : new Pool({ connectionString: databaseUrl });
+      : createDatabasePool(databaseUrl, logger);
   const lifecycle = pool === undefined ? undefined : new PostgresPreviewJobLifecycle(pool);
   const spaceRegistry =
     pool === undefined || encryption === undefined
@@ -252,15 +273,9 @@ export function buildControlRuntime(
         });
 
   const imgproxyInputs = readInputs(env, FEATURE_INPUTS.imgproxy);
-  const imgproxyConfig: ImgproxyConfig | undefined =
-    imgproxyInputs.values === undefined
-      ? undefined
-      : {
-          baseUrl: imgproxyInputs.values.IMGPROXY_BASE_URL,
-          key: imgproxyInputs.values.IMGPROXY_KEY,
-          salt: imgproxyInputs.values.IMGPROXY_SALT,
-          secret: imgproxyInputs.values.IMGPROXY_SECRET,
-        };
+  const imgproxyConfig =
+    imgproxyInputs.values === undefined ? undefined : configuredImgproxy(imgproxyInputs.values);
+  const imgproxyTransport = imgproxyConfig === undefined ? undefined : createImgproxyTransport();
 
   // Wake endpoints resolve once here. A kind whose executor is not configured
   // still fails at dispatch time so a submission is accepted durably and the
@@ -333,6 +348,7 @@ export function buildControlRuntime(
     fetch,
     edgeRefreshTracker: new EdgeRefreshTracker(now),
   };
+  if (imgproxyTransport !== undefined) config.imgproxyFetch = imgproxyTransport.fetch;
   if (masterStore !== undefined) config.masterStore = masterStore;
   if (jobApiRuntime !== undefined) config.jobApiRuntime = jobApiRuntime;
   if (spaceRegistry !== undefined) config.spaceRegistry = spaceRegistry;
@@ -354,6 +370,8 @@ export function buildControlRuntime(
     },
     async close() {
       s3?.destroy();
+      // imgproxy's pooled keep-alive sockets close with the runtime too.
+      imgproxyTransport?.close();
       await pool?.end();
     },
   };
