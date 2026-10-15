@@ -11,8 +11,9 @@ resolver source that is `{resolver}/{reference}`.
 The operation is the v1 Source Purge with a v2 error format: it serializes with
 job submission and completion for the source, removes the source's Preview Jobs,
 deletes every object under its cache and master prefixes, purges the hashed
-source tag from the Worker Cache API and the zone, and returns `204 No Content`
-only when all four steps completed. Missing jobs or objects still produce `204`.
+source tag from the Edge Worker's own cache (it has none while Workers Caching
+is off, ADR 0031) and from the zone cache, which holds the Edge's Cache API
+entries, and returns `204 No Content` only when all four steps completed. Missing jobs or objects still produce `204`.
 A partial failure returns a retryable problem and the caller repeats the same
 request.
 

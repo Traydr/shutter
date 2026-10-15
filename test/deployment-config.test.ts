@@ -163,6 +163,12 @@ describe("deployment configuration", () => {
     const wrangler = JSON.parse(await readFile("apps/edge/wrangler.jsonc", "utf8"));
     expect(wrangler.name).toBe("shutter-edge");
     expect(wrangler.compatibility_flags).toBeUndefined();
+    // ADR 0031: no Workers Caching in front of the delivery Worker. Enabling it
+    // changes private, range, HEAD, and purge behaviour, not just hit rates.
+    expect(wrangler.cache).toBeUndefined();
+    expect(wrangler.exports).toBeUndefined();
+    // The Worker runs where the request lands; Smart Placement stays off.
+    expect(wrangler.placement).toBeUndefined();
     expect(wrangler.r2_buckets).toEqual([
       { binding: "MEDIA_STORE", bucket_name: "shutter-renditions" },
     ]);

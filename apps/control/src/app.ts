@@ -3,8 +3,11 @@ import { faviconIcoResponse, faviconSvgResponse } from "@shutter/assets";
 import {
   CONTROL_HTTP_ROUTES,
   type ControlHttpRoute,
+  EDGE_REFRESH_REPORT_HEADER,
+  EDGE_SERVING_GENERATION_HEADER,
   type JsonValue,
   parseEdgeConfigRefreshReport,
+  parseEdgeServingGeneration,
   serializeEdgeConfigSnapshot,
 } from "@shutter/protocol";
 import { Hono } from "hono";
@@ -119,6 +122,10 @@ export function createControlApp(
         "www-authenticate": "Bearer",
       });
     }
+    // An Edge isolate that already serves a snapshot names its generation on
+    // the read, which is the refresh report: no separate request needed.
+    const serving = parseEdgeServingGeneration(context.req.header(EDGE_SERVING_GENERATION_HEADER));
+    if (serving !== undefined) runtime.edgeRefreshTracker?.report(serving);
     if (runtime.spaceRegistry === undefined) {
       return context.json({ error: { code: "service_unavailable" } }, 503, {
         "cache-control": "private, no-store",
@@ -128,6 +135,8 @@ export function createControlApp(
       const snapshot = await runtime.spaceRegistry.loadEdgeSnapshot();
       return context.json(serializeEdgeConfigSnapshot(snapshot, new Date()), 200, {
         "cache-control": "private, no-store",
+        [EDGE_REFRESH_REPORT_HEADER]:
+          runtime.edgeRefreshTracker?.directiveFor(snapshot.generation) ?? "wanted",
       });
     } catch {
       return context.json({ error: { code: "service_unavailable" } }, 503, {

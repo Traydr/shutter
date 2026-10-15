@@ -163,6 +163,52 @@ export const V2_URL_FIXTURES = Object.freeze({
 });
 
 /**
+ * Requested width to canonical width (ADR 0015, optimization policy). A client
+ * that emits the canonical width gets no 308; 24 is the placeholder exception.
+ * The 500 and 1000 rows are what Unpic asks for a 500px component at 1x and 2x.
+ */
+export const WIDTH_NORMALIZATION_FIXTURES: readonly (readonly [number, number])[] = Object.freeze([
+  Object.freeze([24, 24] as const),
+  Object.freeze([1, 320] as const),
+  Object.freeze([23, 320] as const),
+  Object.freeze([25, 320] as const),
+  Object.freeze([320, 320] as const),
+  Object.freeze([321, 640] as const),
+  Object.freeze([500, 640] as const),
+  Object.freeze([1000, 1080] as const),
+  Object.freeze([1281, 1668] as const),
+  Object.freeze([3839, 3840] as const),
+  Object.freeze([3840, 3840] as const),
+  Object.freeze([9000, 3840] as const),
+]);
+
+/**
+ * The Edge-to-Control refresh signalling headers. A snapshot read names the
+ * generation the reading isolate serves; the snapshot response says whether
+ * Control still wants a separate refresh report.
+ */
+export const EDGE_REFRESH_FIXTURE = Object.freeze({
+  servingGenerationHeader: "x-shutter-edge-generation",
+  reportHeader: "x-shutter-edge-report",
+  servingGenerations: Object.freeze([
+    Object.freeze(["0", 0] as const),
+    Object.freeze(["42", 42] as const),
+    Object.freeze(["9007199254740991", 9_007_199_254_740_991] as const),
+  ]),
+  invalidServingGenerations: Object.freeze([
+    "",
+    "-1",
+    "01",
+    "1.5",
+    " 1",
+    "1e3",
+    "9007199254740992",
+  ]),
+  reportWanted: "wanted",
+  reportCurrent: "current",
+});
+
+/**
  * The Executor wake (job-api.md): the route Control posts to, and the exact
  * `200` reply body of each invocation result. Any other `200` body is
  * malformed, and Control does not retry it.

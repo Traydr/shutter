@@ -1,3 +1,4 @@
+import { EDGE_REFRESH_FIXTURE } from "@shutter/testkit";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import {
   type EdgeConfigBindings,
@@ -227,6 +228,54 @@ describe("Edge configuration snapshot", () => {
     resetEdgeConfigForTest();
     await getEdgeConfig(bindings, executionContext().context);
     expect(snapshotCalls(fetch)).toBe(2);
+  });
+
+  it("names the generation it serves on the next snapshot read", async () => {
+    let now = START;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) =>
+      isRefreshReport(input) ? new Response(null, { status: 204 }) : Response.json(wire(3)),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const servingHeaders = () =>
+      fetch.mock.calls
+        .filter(([input]) => !isRefreshReport(input))
+        .map(([, init]) =>
+          new Headers(init?.headers).get(EDGE_REFRESH_FIXTURE.servingGenerationHeader),
+        );
+
+    await getEdgeConfig(bindings, executionContext().context);
+    now += 61_000;
+    await getEdgeConfig(bindings, executionContext().context);
+    // A snapshot past its failure grace is not served, so it is not named.
+    now += 10 * 60_000;
+    await getEdgeConfig(bindings, executionContext().context);
+
+    expect(servingHeaders()).toEqual([null, "3", null]);
+  });
+
+  it("skips the separate report only when Control says its record is current", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(START);
+    const directives = [EDGE_REFRESH_FIXTURE.reportCurrent, EDGE_REFRESH_FIXTURE.reportWanted];
+    for (const directive of directives) {
+      resetEdgeConfigForTest();
+      const fetch = vi.fn<typeof globalThis.fetch>(async (input) =>
+        isRefreshReport(input)
+          ? new Response(null, { status: 204 })
+          : Response.json(wire(4), {
+              headers: { [EDGE_REFRESH_FIXTURE.reportHeader]: directive },
+            }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const execution = executionContext();
+
+      await getEdgeConfig(bindings, execution.context);
+      await Promise.all(execution.pending);
+
+      expect(refreshReportCalls(fetch), directive).toBe(
+        directive === EDGE_REFRESH_FIXTURE.reportCurrent ? 0 : 1,
+      );
+    }
   });
 
   it("reports each successful refresh without delaying snapshot use", async () => {

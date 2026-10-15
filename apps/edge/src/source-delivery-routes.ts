@@ -27,7 +27,7 @@ export function registerSourceDeliveryRoutes(app: EdgeApp): void {
         spaceId,
         expectedPurpose: "source_delivery",
         expectedSourceId: sourceId,
-        keys: snapshot.keysFor(spaceId),
+        keys: await snapshot.verificationKeysFor(spaceId),
         now: Math.floor(Date.now() / 1000),
         allowedSourceOrigins: policy.allowedSourceOrigins,
       });
@@ -49,7 +49,7 @@ export function registerSourceDeliveryRoutes(app: EdgeApp): void {
       const claims = await verifySourceCapability(context.req.param("capability") ?? "", {
         spaceId,
         expectedPurpose: "source_delivery",
-        keys: snapshot.keysFor(spaceId),
+        keys: await snapshot.verificationKeysFor(spaceId),
         now: Math.floor(Date.now() / 1000),
         allowedSourceOrigins: policy.allowedSourceOrigins,
       });

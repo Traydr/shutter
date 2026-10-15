@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { deliveryUrl, isDeliveryUrl, sourceIdFor, transformDeliveryUrl } from "./urls.js";
+import {
+  canonicalWidth,
+  deliveryUrl,
+  isDeliveryUrl,
+  sourceIdFor,
+  transformDeliveryUrl,
+} from "./urls.js";
 
 const EDGE = "https://edge.example.test";
 
@@ -68,6 +74,52 @@ describe("v2 delivery URLs", () => {
     expect(transformDeliveryUrl("https://elsewhere.test/x.jpg", EDGE, { width: 640 })).toBe(
       "https://elsewhere.test/x.jpg",
     );
+  });
+
+  it("snaps widths to the canonical ladder, keeping the 24px placeholder exact", () => {
+    // The @shutter/testkit WIDTH_NORMALIZATION_FIXTURES rows.
+    const rows: readonly (readonly [number, number])[] = [
+      [24, 24],
+      [1, 320],
+      [23, 320],
+      [25, 320],
+      [320, 320],
+      [321, 640],
+      [500, 640],
+      [1000, 1080],
+      [1281, 1668],
+      [3839, 3840],
+      [3840, 3840],
+      [9000, 3840],
+    ];
+    for (const [requested, canonical] of rows) {
+      expect(canonicalWidth(requested), `width ${requested}`).toBe(canonical);
+    }
+    for (const invalid of [0, -320, 640.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => canonicalWidth(invalid), String(invalid)).toThrow(TypeError);
+    }
+  });
+
+  it("emits canonical URLs for the 1x and 2x widths Unpic asks for", () => {
+    const base = `${EDGE}/v2/ernesta/media/photo.jpg`;
+    // A 500px component: Unpic requests 500 and 1000.
+    expect(transformDeliveryUrl(base, EDGE, { width: 500, quality: 75 })).toBe(
+      `${base}?w=640&q=75`,
+    );
+    expect(transformDeliveryUrl(base, EDGE, { width: 1000, quality: 75 })).toBe(
+      `${base}?w=1080&q=75`,
+    );
+    expect(transformDeliveryUrl(base, EDGE, { width: 24, quality: 75 })).toBe(`${base}?w=24&q=75`);
+    expect(
+      transformDeliveryUrl(`${base}?w=320&q=75&token=t`, EDGE, { width: 700, quality: 75 }),
+    ).toBe(`${base}?w=750&q=75&token=t`);
+    expect(
+      deliveryUrl(
+        { spaceId: "ernesta", resolverId: "media", reference: "photo.jpg" },
+        { width: 641, quality: 75 },
+      ),
+    ).toBe("/v2/ernesta/media/photo.jpg?w=750&q=75");
+    expect(() => transformDeliveryUrl(base, EDGE, { width: 0 })).toThrow(TypeError);
   });
 
   it("keeps a private token only while the operation stays the same", () => {

@@ -23,10 +23,8 @@ flowchart LR
   pdf --> derived
   browser["Browser"] --> worker["Cloudflare Worker"]
   control -->|"Atomic Space snapshot"| worker
-  worker --> privateCache["Private edge cache"]
-  browser --> publicCache["Cloudflare public CDN"]
-  privateCache --> origin["Shutter origin on Railway"]
-  publicCache --> origin
+  worker --> edgeCache["Edge cache (Cache API, per data center)"]
+  edgeCache --> origin["Shutter origin on Railway"]
   origin --> image["imgproxy"] --> source
   worker --> derived
   origin --> derived
@@ -38,8 +36,9 @@ flowchart LR
 Cloudflare is Shutter's delivery edge and durable media storage provider. A
 Cloudflare Worker decrypts and validates private Source Capabilities before
 every data-center-local edge-cache lookup and can read stored media through
-an R2 binding; ordinary Cloudflare CDN caching serves canonical public
-optimized images. Railway hosts Shutter Control, imgproxy, the isolated Executors, and
+an R2 binding. The same Worker answers public requests too, from that cache
+and R2 without a capability check; no Cloudflare cache sits in front of it
+(ADR 0031). Railway hosts Shutter Control, imgproxy, the isolated Executors, and
 the job database. Executors write Master Previews to R2 through its
 S3-compatible API.
 
@@ -185,9 +184,16 @@ cache hits available during a short outage while putting a strict bound on
 stale authorization. Executors receive only the allowed source-origin rules in
 each claim; they do not load the registry.
 
-After a successful refresh, Edge reports its generation to Control with the
-dedicated snapshot credential. Control retains the latest report in process for
-operator visibility; it is advisory and does not take part in authorization.
+Edge reports the generation it serves to Control with the dedicated snapshot
+credential. An isolate that already serves a snapshot names its generation in
+the `x-shutter-edge-generation` header of its next snapshot read, so the read is
+the report. A separate `POST /internal/v1/edge/config/refresh` follows a
+refresh only when the snapshot response's `x-shutter-edge-report` header says
+`wanted`: Control has no report yet, an older one, or none in the last five
+minutes. An Edge that sees no header, from a Control that predates it, always
+reports, and Control keeps accepting the report from an Edge that predates the
+header. Control retains the latest report in process for operator visibility;
+it is advisory and does not take part in authorization.
 
 Deployment configuration, such as service URLs, the imgproxy allowlist, storage
 credentials, and the dedicated Edge snapshot credential, belongs in Railway and
@@ -266,14 +272,22 @@ All Cloudflare cache entries for a source carry a tag derived from a hash of the
 Space ID and Source ID. R2 keys group cached optimized images and Master Previews under
 equivalent per-source prefixes. While serializing Control operations for that
 source, Shutter invalidates its jobs, deletes all matching R2 objects through
-paginated prefix listing, purges the Worker Cache API via Edge
-`POST /internal/v1/cache/purge`, globally purges the Cloudflare zone cache tag,
-and then returns `204 No Content`. The R2 deletion precedes both edge purges so a
-concurrent edge request cannot repopulate a purged cache from a stored Master Preview.
+paginated prefix listing, asks the Edge to purge the tag from its own Workers
+Cache through `POST /internal/v1/cache/purge`, globally purges the Cloudflare
+zone cache tag, and then returns `204 No Content`. The R2 deletion precedes both
+edge purges so a concurrent edge request cannot repopulate a purged cache from a
+stored Master Preview.
 
-The operation returns success only after R2, the Worker Cache API, and the zone
-CDN tag are cleared. A partial failure returns a retryable service error;
-repeating the same request safely repeats every step. A stale Executor whose
+The Worker's `caches.default` entries live in the zone cache, so the zone purge
+by tag is what removes them, in every data center; `cache.delete()` would reach
+only one. The Edge purge route clears Workers Caching, which `ctx.cache.purge()`
+alone reaches. The Edge does not enable Workers Caching (ADR 0031), so the route
+has nothing to clear and answers `204`; it keeps Source Purge complete if that
+changes.
+
+The operation returns success only after R2, the Edge, and the zone tag purge
+succeed. A partial failure returns a retryable service error; repeating the
+same request safely repeats every step. A stale Executor whose
 processing-token comparison fails must delete any output it uploaded (etag-
 conditioned) and cannot recreate job state after purge.
 
@@ -291,8 +305,8 @@ Image Optimization is request-driven:
 3. Shutter validates the resolver or capability and parameters, then sends a
    signed source request to imgproxy.
 4. For a private Space, Shutter performs that validation before every cache
-   lookup in the Cloudflare Worker, including cache hits. Public Spaces use
-   ordinary Cloudflare CDN caching.
+   lookup in the Cloudflare Worker, including cache hits. A public hit skips
+   the check; the Worker still answers it (ADR 0031).
 5. imgproxy reads only the permitted Source Object on a cache miss and returns
    the optimized response through the configured cache.
 6. The response resizes to the normalized requested width, preserves composition,
@@ -320,7 +334,9 @@ origin miss only and is excluded from the CDN key; renewing it reuses the same
 Public responses use `Cache-Control: public, max-age=86400,
 s-maxage=2592000`: Source Purge can invalidate Cloudflare and R2 immediately,
 while the shorter browser lifetime bounds cache copies that Shutter cannot
-recall from a user's device.
+recall from a user's device. Because the Worker answers every request, the
+30-day edge copy is its own Cache API entry, and `s-maxage` governs only caches
+downstream of it.
 
 Private responses use `Cache-Control: private, no-store`. The Worker therefore
 receives and validates a Source Capability for every network response instead
@@ -359,8 +375,9 @@ private source route requires `image_source`; the private master route requires
 single path segment. Unpic adapters modify only `w` and `q`.
 
 A non-canonical public width or quality receives a `308 Permanent Redirect` to
-the normalized URL, allowing the ordinary CDN to cache only canonical image
-responses. The private Worker normalizes before deriving its internal cache key
+the normalized URL, so caches hold only canonical image responses. The redirect
+costs a second request, so `@shutter/client` snaps widths to the ladder and
+emits canonical URLs itself. The private Worker normalizes before deriving its internal cache key
 and serves the response without a redirect. Missing parameters normalize to the
 Space defaults only where a default exists: quality defaults to the Space value,
 while width is required. Invalid, duplicate, and unknown query parameters fail

@@ -19,19 +19,26 @@ Shutter serializes job submission, completion, and purge for the source, then:
 
 1. Invalidates and removes its Preview Jobs.
 2. Deletes every object beneath its per-source R2 cache and master prefixes.
-3. Purges the hashed source cache tag from the Edge Worker Cache API, including
-   cached Source Delivery bytes and optimized images.
-4. Globally purges the same hashed Cloudflare zone cache tag.
+3. Asks the Edge to purge the hashed source cache tag from the Worker's own
+   Workers Cache. The Edge does not enable Workers Caching (ADR 0031), so it
+   has none and answers `204` at once; the call keeps the step correct if it
+   ever does.
+4. Globally purges the same hashed tag from the Cloudflare zone cache. The
+   Edge's Cache API entries live there, cached Source Delivery bytes and
+   optimized images alike, so this is the step that removes them, in every
+   data center.
 
 `204 No Content` means all four steps completed. Missing jobs or objects still
 produce `204`, making the operation idempotent. Any partial failure returns a
 retryable service error and the caller repeats the same request.
 
-R2 deletion occurs before Worker and zone tag purge. Zone tag purge alone is not
-enough for private Cache API entries stored under synthetic
-`https://cache.shutter.invalid/...` keys; Control must call the Edge
-`POST /internal/v1/cache/purge` endpoint (authenticated with the shared origin
-credential) so `executionCtx.cache.purge({ tags })` clears those entries. An
+R2 deletion occurs before the tag purges. The Edge stores each Cache API entry
+under a synthetic `https://cache.shutter.invalid/...` key with the source's
+`Cache-Tag`, so a purge by URL cannot name it but a zone purge by tag removes it
+everywhere. Neither `ctx.cache.purge()`, which reaches only Workers Caching, nor
+`cache.delete()`, which reaches only the data center it runs in, can replace the
+zone purge. Control calls the Edge `POST /internal/v1/cache/purge` endpoint with
+the shared origin credential. An
 Executor that loses its processing-token comparison after uploading deletes
 **this attempt's** stale output only, conditioned on the object ETag from its
 own upload, so a newer winning Master Preview at the same deterministic key is

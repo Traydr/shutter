@@ -1,11 +1,9 @@
 import {
-  buildSourceCacheTag,
-  buildSourceDeliveryCacheUrl,
   emitOperationalEvent,
-  type OperationalEventFields,
-  operationalEvent,
+  type OperationalEvent,
   ProtocolError,
   type SourceDeliveryCacheIdentity,
+  sourceDeliveryCacheNames,
 } from "@shutter/protocol";
 import { edgeBrowserResponse, internalEdgeCacheResponse } from "./edge-cache-policy.js";
 
@@ -308,37 +306,39 @@ function originResult(response: Response): OriginFetchResult {
   return "complete";
 }
 
-async function emitDeliveryEvent(
+/** What one `edge.source_delivery` event reports beyond the request it belongs to. */
+interface DeliveryOutcome {
+  cacheOutcome: CacheOutcome;
+  mediaClass: MediaClass | undefined;
+  byteRangeOutcome: ByteRangeOutcome;
+  originFetchResult: OriginFetchResult;
+}
+
+/**
+ * Synchronous: the source hash is the fingerprint the cache names already
+ * hold, so the event costs no digest and no await on the response path.
+ */
+function emitDeliveryEvent(
   input: SourceDeliveryInput,
-  cacheOutcome: CacheOutcome,
-  mediaClass: MediaClass | undefined,
-  byteRangeOutcome: ByteRangeOutcome,
-  originFetchResult: OriginFetchResult,
-): Promise<void> {
-  const identity = input.identity;
-  const fields: OperationalEventFields = {
-    routeClass: identity.routeClass,
+  sourceHash: string,
+  outcome: DeliveryOutcome,
+): void {
+  const event: OperationalEvent = {
+    event: "edge.source_delivery",
+    sourceHash,
+    routeClass: input.identity.routeClass,
     apiVersion: input.apiVersion,
-    cacheOutcome,
-    byteRangeOutcome,
-    originFetchResult,
+    cacheOutcome: outcome.cacheOutcome,
+    byteRangeOutcome: outcome.byteRangeOutcome,
+    originFetchResult: outcome.originFetchResult,
   };
-  if (mediaClass !== undefined) fields.mediaClass = mediaClass;
-  emitOperationalEvent(
-    "info",
-    await operationalEvent({
-      event: "edge.source_delivery",
-      spaceId: identity.spaceId,
-      sourceId: identity.sourceId,
-      fields,
-    }),
-  );
+  if (outcome.mediaClass !== undefined) event.mediaClass = outcome.mediaClass;
+  emitOperationalEvent("info", event);
 }
 
 export async function deliverSource(input: SourceDeliveryInput): Promise<Response> {
   validateRequestHeaders(input.request);
-  const canonicalUrl = await buildSourceDeliveryCacheUrl(input.identity);
-  const cacheTag = await buildSourceCacheTag(input.identity.spaceId, input.identity.sourceId);
+  const { sourceHash, cacheTag, canonicalUrl } = await sourceDeliveryCacheNames(input.identity);
   const lookupRequest = cacheLookupRequest(input.request, canonicalUrl);
   let cached = await caches.default.match(lookupRequest);
   const ifRange = input.request.headers.get("if-range");
@@ -351,14 +351,13 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
     cached = await caches.default.match(new Request(canonicalUrl));
   }
   if (cached !== undefined) {
-    const mediaClass = mediaClassFor(cached.headers.get("content-type"));
-    await emitDeliveryEvent(
-      input,
-      "edge-hit",
-      mediaClass,
-      rangeOutcome(input.request, cached, "edge-hit"),
-      "not-requested",
-    );
+    emitDeliveryEvent(input, sourceHash, {
+      cacheOutcome: "edge-hit",
+      mediaClass: mediaClassFor(cached.headers.get("content-type")),
+      byteRangeOutcome: rangeOutcome(input.request, cached, "edge-hit"),
+      originFetchResult: "not-requested",
+    });
+
     return edgeBrowserResponse(cached, {
       routeClass: input.identity.routeClass,
       cacheStatus: "edge-hit",
@@ -379,46 +378,38 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
       redirect: "manual",
     });
   } catch (error) {
-    await emitDeliveryEvent(
-      input,
-      "origin",
-      undefined,
-      input.request.headers.has("range") ? "origin" : "none",
-      "failed",
-    );
+    emitDeliveryEvent(input, sourceHash, {
+      cacheOutcome: "origin",
+      mediaClass: undefined,
+      byteRangeOutcome: input.request.headers.has("range") ? "origin" : "none",
+      originFetchResult: "failed",
+    });
     throw error;
   }
-  if (!validOriginResponse(input.request, origin)) {
-    await emitDeliveryEvent(
-      input,
-      "origin",
-      undefined,
-      input.request.headers.has("range") ? "origin" : "none",
-      "rejected",
-    );
-    return errorResponse(502, "origin_unavailable");
-  }
   const contentEncoding = origin.headers.get("content-encoding");
-  if (contentEncoding !== null && contentEncoding !== "identity") {
-    await emitDeliveryEvent(
-      input,
-      "origin",
-      undefined,
-      input.request.headers.has("range") ? "origin" : "none",
-      "rejected",
-    );
+  if (
+    !validOriginResponse(input.request, origin) ||
+    (contentEncoding !== null && contentEncoding !== "identity")
+  ) {
+    emitDeliveryEvent(input, sourceHash, {
+      cacheOutcome: "origin",
+      mediaClass: undefined,
+      byteRangeOutcome: input.request.headers.has("range") ? "origin" : "none",
+      originFetchResult: "rejected",
+    });
+
     return errorResponse(502, "origin_unavailable");
   }
 
   const mediaClass = mediaClassFor(origin.headers.get("content-type"));
   if ((origin.status === 200 || origin.status === 206) && mediaClass === undefined) {
-    await emitDeliveryEvent(
-      input,
-      "origin",
-      undefined,
-      rangeOutcome(input.request, origin, "origin"),
-      "rejected",
-    );
+    emitDeliveryEvent(input, sourceHash, {
+      cacheOutcome: "origin",
+      mediaClass: undefined,
+      byteRangeOutcome: rangeOutcome(input.request, origin, "origin"),
+      originFetchResult: "rejected",
+    });
+
     return errorResponse(415, "media_unsupported");
   }
   const response = new Response(origin.status === 416 ? null : origin.body, {
@@ -433,13 +424,13 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
       caches.default.put(new Request(canonicalUrl), internal.clone()).catch(() => undefined),
     );
     if (head) input.executionCtx.waitUntil(internal.body?.cancel() ?? Promise.resolve());
-    await emitDeliveryEvent(
-      input,
-      "origin",
+    emitDeliveryEvent(input, sourceHash, {
+      cacheOutcome: "origin",
       mediaClass,
-      rangeOutcome(input.request, internal, "origin"),
-      originResult(internal),
-    );
+      byteRangeOutcome: rangeOutcome(input.request, internal, "origin"),
+      originFetchResult: originResult(internal),
+    });
+
     return edgeBrowserResponse(internal, {
       routeClass: input.identity.routeClass,
       cacheStatus: "origin",
@@ -455,13 +446,13 @@ export async function deliverSource(input: SourceDeliveryInput): Promise<Respons
     );
   }
 
-  await emitDeliveryEvent(
-    input,
-    "origin",
+  emitDeliveryEvent(input, sourceHash, {
+    cacheOutcome: "origin",
     mediaClass,
-    rangeOutcome(input.request, response, "origin"),
-    originResult(response),
-  );
+    byteRangeOutcome: rangeOutcome(input.request, response, "origin"),
+    originFetchResult: originResult(response),
+  });
+
   return edgeBrowserResponse(response, {
     routeClass: input.identity.routeClass,
     cacheStatus: "origin",

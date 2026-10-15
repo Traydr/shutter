@@ -55,9 +55,14 @@ and `code`) are reserved for transport and authentication problems.
 
 Every method that needs configuration you did not provide throws immediately
 with the missing field's name, matching Shutter's fail-closed convention.
-Widths and qualities are normalized server-side by Space policy; pick values
-from your Optimization Policy to avoid the one-time canonicalization redirect
-on public routes.
+
+Every URL helper snaps the width to Shutter's canonical ladder (`320, 640, 750,
+828, 960, 1080, 1280, 1668, 1920, 2048, 2560, 3200, 3840`, with Unpic's `24`
+placeholder kept exact), so `{ width: 1200 }` comes out as `w=1280`.
+`canonicalWidth` exposes the rule and throws a `TypeError` for anything but a
+positive integer. Quality is the Space's policy, which the client cannot see:
+pass a permitted value, or a public route answers with a one-time
+canonicalization redirect.
 
 ## v2: resolver sources
 
@@ -73,8 +78,8 @@ const src = deliveryUrl(
   { edgeBaseUrl: "https://shutter-edge.example", spaceId: "my-space", resolverId: "media", reference: key },
   { width: 640, quality: 75 },
 );
-// Unpic-style transformer for a v2 URL:
-transformDeliveryUrl(src, "https://shutter-edge.example", { width: 1280, quality: 75 });
+// Unpic-style transformer for a v2 URL; 1000 snaps to w=1080:
+transformDeliveryUrl(src, "https://shutter-edge.example", { width: 1000, quality: 75 });
 
 // Server: jobs and purge by resolver source.
 const job = await shutter.waitForV2PreviewJob({ resolverId: "media", reference: key, kind: "video" });
@@ -92,9 +97,13 @@ one-placeholder resolver, an array otherwise) and must fit the reference
 grammar; the builders throw a `TypeError` otherwise, as they do for a resolver
 ID outside the identifier grammar. `transformDeliveryUrl` accepts the relative
 path `deliveryUrl` returns without an `edgeBaseUrl` and hands a relative path
-back. Give it the quality as well as the width: on a public Space a `w` without
-`q` is canonicalized with a one-time 308, and the browser-safe entry cannot
-know the Space's default. v2 request errors arrive as RFC 9457 problems;
+back. It snaps the width like every other helper, so the 1x and 2x widths
+Unpic asks for (500 and 1000 for a 500px component) become `w=640` and
+`w=1080` rather than redirects. An off-ladder width would otherwise cost an
+uncacheable `308`, a second round trip, and a second Worker request per image.
+Give it the quality as well as the width: on a public Space a `w` without `q`
+is canonicalized with a one-time 308, and the browser-safe entry cannot know
+the Space's default. v2 request errors arrive as RFC 9457 problems;
 `ShutterClientError.code` carries their `code` and `requestId` the handle an
 operator finds the log event by.
 

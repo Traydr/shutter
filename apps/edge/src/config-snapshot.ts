@@ -1,5 +1,8 @@
 import {
   CONTROL_HTTP_ROUTES,
+  EDGE_REFRESH_REPORT_HEADER,
+  EDGE_SERVING_GENERATION_HEADER,
+  edgeRefreshReportWanted,
   type JsonValue,
   type ParsedEdgeConfigSnapshot,
   parseEdgeConfigSnapshot,
@@ -20,6 +23,15 @@ interface CachedSnapshot {
   fetchedAt: number;
 }
 
+interface RefreshResult {
+  cached: CachedSnapshot;
+  /**
+   * Whether Control asked for a separate refresh report. A Control that
+   * predates the report header never declines one, so the Edge reports.
+   */
+  reportWanted: boolean;
+}
+
 /** The part of the Worker's ExecutionContext the snapshot needs: deferring a background refresh. */
 export interface WaitUntilContext {
   waitUntil(promise: Promise<unknown>): void;
@@ -29,7 +41,7 @@ export interface WaitUntilContext {
 export type EdgeConfigBindings = Pick<CloudflareBindings, "ORIGIN_BASE_URL" | "EDGE_CONFIG_TOKEN">;
 
 let cached: CachedSnapshot | undefined;
-let refreshInFlight: Promise<CachedSnapshot> | undefined;
+let refreshInFlight: Promise<RefreshResult> | undefined;
 
 export class EdgeConfigUnavailableError extends Error {
   constructor() {
@@ -68,7 +80,21 @@ async function readLimitedJson(response: Response): Promise<JsonValue> {
   }
 }
 
-async function fetchSnapshot(bindings: EdgeConfigBindings): Promise<CachedSnapshot> {
+/**
+ * The snapshot read's headers. An isolate that already serves a snapshot names
+ * its generation, so the read itself tells Control the Edge is live and what
+ * it applied, and a separate report is needed only when Control asks for one.
+ */
+function snapshotRequestHeaders(bindings: EdgeConfigBindings, now: number): Headers {
+  const headers = new Headers({ authorization: `Bearer ${bindings.EDGE_CONFIG_TOKEN}` });
+  if (cached !== undefined && withinFailureGrace(cached, now)) {
+    headers.set(EDGE_SERVING_GENERATION_HEADER, String(cached.snapshot.generation));
+  }
+
+  return headers;
+}
+
+async function fetchSnapshot(bindings: EdgeConfigBindings): Promise<RefreshResult> {
   const url = new URL(CONTROL_HTTP_ROUTES.edgeConfig, bindings.ORIGIN_BASE_URL);
   // HTTPS only, with one exemption so local development can read config from
   // a Control process on the same machine.
@@ -81,7 +107,7 @@ async function fetchSnapshot(bindings: EdgeConfigBindings): Promise<CachedSnapsh
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
     const response = await fetch(url, {
-      headers: { authorization: `Bearer ${bindings.EDGE_CONFIG_TOKEN}` },
+      headers: snapshotRequestHeaders(bindings, Date.now()),
       cache: "no-store",
       redirect: "manual",
       signal: controller.signal,
@@ -99,7 +125,11 @@ async function fetchSnapshot(bindings: EdgeConfigBindings): Promise<CachedSnapsh
     }
     const next = { snapshot, fetchedAt: now };
     cached = next;
-    return next;
+
+    return {
+      cached: next,
+      reportWanted: edgeRefreshReportWanted(response.headers.get(EDGE_REFRESH_REPORT_HEADER)),
+    };
   } catch (error) {
     if (error instanceof EdgeConfigUnavailableError) throw error;
     throw new EdgeConfigUnavailableError();
@@ -111,13 +141,17 @@ async function fetchSnapshot(bindings: EdgeConfigBindings): Promise<CachedSnapsh
 function refresh(
   bindings: EdgeConfigBindings,
   executionContext: WaitUntilContext,
-): Promise<CachedSnapshot> {
+): Promise<RefreshResult> {
   if (refreshInFlight !== undefined) return refreshInFlight;
   const pending = fetchSnapshot(bindings);
   refreshInFlight = pending;
   executionContext.waitUntil(
     pending
-      .then((result) => reportRefresh(bindings, result.snapshot.generation))
+      .then((result) =>
+        result.reportWanted
+          ? reportRefresh(bindings, result.cached.snapshot.generation)
+          : undefined,
+      )
       .catch(() => undefined),
   );
   void pending
@@ -170,7 +204,7 @@ export async function getEdgeConfig(
     }
   }
   try {
-    return (await refresh(bindings, executionContext)).snapshot;
+    return (await refresh(bindings, executionContext)).cached.snapshot;
   } catch {
     if (cached !== undefined && withinFailureGrace(cached, Date.now())) return cached.snapshot;
     throw new EdgeConfigUnavailableError();

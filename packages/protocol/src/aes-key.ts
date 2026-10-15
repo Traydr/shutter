@@ -27,5 +27,25 @@ export async function importAesGcmKey(
   if (key.byteLength !== CAPABILITY_KEY_BYTES) {
     throw new ProtocolError("claims_invalid", "capability keys must be 256 bits");
   }
+
   return crypto.subtle.importKey("raw", copyBytes(key), { name: "AES-GCM" }, false, [usage]);
+}
+
+/**
+ * Imports a key-ID map once as non-extractable AES-GCM decryption keys, so a
+ * holder that verifies many envelopes with the same keys (the Edge, per config
+ * snapshot) does not re-import raw bytes for every request. The keys can only
+ * decrypt, which is all verification needs.
+ */
+export async function importVerificationKeys(
+  keys: ReadonlyMap<string, Uint8Array>,
+): Promise<ReadonlyMap<string, CryptoKey>> {
+  const imported = await Promise.all(
+    Array.from(
+      keys,
+      async ([keyId, key]) => [keyId, await importAesGcmKey(key, "decrypt")] as const,
+    ),
+  );
+
+  return new Map(imported);
 }

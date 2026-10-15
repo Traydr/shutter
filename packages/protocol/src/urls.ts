@@ -1,12 +1,14 @@
+import { normalizeWidth } from "./normalization.js";
 import { isReferenceSegment, isResolverId, resolverSourceId } from "./source-resolver.js";
 import type { PreviewKind } from "./types.js";
 
 export type { PreviewKind };
 /**
  * This module is also the package's `./urls` entry: URL construction with no
- * capability crypto behind it, so a browser bundle can import it alone.
+ * capability crypto behind it, so a browser bundle can import it alone. Width
+ * normalization rides along so a browser transformer can emit canonical URLs.
  */
-export { isReferenceSegment, isResolverId, resolverSourceId };
+export { isReferenceSegment, isResolverId, normalizeWidth, resolverSourceId };
 
 interface OptimizationParameters {
   width: number;
