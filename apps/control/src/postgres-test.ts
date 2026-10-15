@@ -7,6 +7,8 @@ import { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
 export interface PostgresTestLifecycle {
   lifecycle: PostgresPreviewJobLifecycle;
   pool: Pool;
+  /** Every statement the pool has sent; `reset()` it before the operation under test. */
+  queries: QueryLog;
   close(): Promise<void>;
 }
 
@@ -43,6 +45,56 @@ export async function applyMigration(pool: Pool, prefix: string): Promise<void> 
   }
 }
 
+/** What a pool sent to Postgres since the last reset: statements and pool checkouts. */
+export interface QueryLog {
+  /** The text of every statement, in the order the clients sent them. */
+  readonly statements: readonly string[];
+  /** How many times a client was checked out of the pool. */
+  readonly checkouts: number;
+  reset(): void;
+}
+
+/**
+ * Records every statement a pool's clients send, so a test can pin how many
+ * round trips an operation costs. Each statement leaves a client through
+ * exactly one protocol message: a simple `query` without parameters, or an
+ * extended-protocol `parse` with them (unnamed statements are parsed every
+ * time). The recorder wraps those two on each connection as the pool opens
+ * it, so register it before the pool connects.
+ */
+export function recordQueries(pool: Pool): QueryLog {
+  let statements: string[] = [];
+  let checkouts = 0;
+  pool.on("connect", (client) => {
+    const connection = client.connection;
+    const sendQuery = connection.query.bind(connection);
+    const sendParse = connection.parse.bind(connection);
+    connection.query = (text) => {
+      statements.push(text);
+      sendQuery(text);
+    };
+    connection.parse = (query, more) => {
+      statements.push(query.text);
+      sendParse(query, more);
+    };
+  });
+  pool.on("acquire", () => {
+    checkouts += 1;
+  });
+  return {
+    get statements() {
+      return statements;
+    },
+    get checkouts() {
+      return checkouts;
+    },
+    reset() {
+      statements = [];
+      checkouts = 0;
+    },
+  };
+}
+
 export async function createPostgresTestLifecycle(
   options: PostgresTestOptions = {},
 ): Promise<PostgresTestLifecycle> {
@@ -60,11 +112,13 @@ export async function createPostgresTestLifecycle(
   const databaseUrl = new URL(adminUrl);
   databaseUrl.pathname = `/${database}`;
   const pool = new Pool({ connectionString: databaseUrl.toString(), max: 8 });
+  const queries = recordQueries(pool);
   await applyMigrations(pool, options.throughMigration);
 
   return {
     lifecycle: new PostgresPreviewJobLifecycle(pool),
     pool,
+    queries,
     close: () => pool.end(),
   };
 }

@@ -2,22 +2,22 @@ import {
   buildMasterPreviewKey,
   CONTROL_HTTP_ROUTES,
   type JsonValue,
+  type OperationalEvent,
   type OptimizeRequest,
-  type PreviewKind,
   ProtocolError,
   parseOptimizeRequest,
   parseResolveRequest,
   type ResolveRequest,
-  type SpacePolicy,
   validateSourceLocator,
 } from "@shutter/protocol";
 import type { Context, Hono } from "hono";
-import type { ControlRuntimeConfig } from "./app.js";
-import { buildImgproxyRequest } from "./imgproxy.js";
-import { bearerAuthorized } from "./origin-auth.js";
+import type { ControlEnv, ControlRuntimeConfig } from "./app.js";
+import { buildImgproxyRequest, IMGPROXY_REQUEST_TIMEOUT_MS } from "./imgproxy.js";
+import { bearerCheck } from "./origin-auth.js";
 import { RESOLVE_LIFETIME_SECONDS, type Resolution } from "./source-resolvers.js";
+import type { ActiveResolverRead, SpaceRegistry } from "./spaces/registry.js";
 
-type ControlApp = Hono<{ Variables: { requestId: string } }>;
+type ControlApp = Hono<ControlEnv>;
 
 const NO_STORE = { "cache-control": "private, no-store" } as const;
 
@@ -32,27 +32,51 @@ function unauthorized(): Response {
   );
 }
 
-interface OptimizeDelegation {
-  spaceId: string;
-  width: number;
-  quality: number;
-  /** Master routes name a kind for the `control.optimize.*` events. */
-  kind?: PreviewKind;
+/**
+ * An optimize request and how to settle its source. A `master` input names
+ * the kind for the request's completion and failure events; a `resolved` one
+ * names the resolver whose credential is read with the policy.
+ */
+interface OptimizeDelegation extends OptimizeRequest {
   /**
    * Resolves the imgproxy source once the active policy is known. Answering
    * with a Response ends the request (a locator outside the allowlist, for
    * example); throwing is an optimization failure and answers 502.
    */
-  sourceUrl(policy: SpacePolicy): Promise<string | Response>;
+  sourceUrl(space: ActiveResolverRead): Promise<string | Response>;
+}
+
+/**
+ * The one registry read an optimization costs: the active policy, with the
+ * named resolver's credential in the same statement when there is one.
+ */
+async function readActiveSpace(
+  registry: SpaceRegistry,
+  delegation: OptimizeDelegation,
+): Promise<ActiveResolverRead | undefined> {
+  if (delegation.input.type === "resolved") {
+    return registry.getActiveResolverRead({
+      spaceId: delegation.spaceId,
+      resolverId: delegation.input.resolverId,
+    });
+  }
+  const policy = await registry.getActiveSpacePolicy(delegation.spaceId);
+
+  return policy === undefined ? undefined : { policy, credential: { outcome: "absent" } };
 }
 
 /**
  * The one imgproxy delegation: active policy or 404/503, build the signed
  * imgproxy request, fetch with redirects forbidden, then stream the bytes or
- * answer 502 with the `control.optimize.*` events. The optimize route parses
- * its tagged input and settles the source URL in front of this.
+ * answer 502 with a `control.optimize.failed` event. A success is recorded by
+ * the request's own `control.http.completed` event alone, so an optimization
+ * costs one log line. The imgproxy exchange ends when the caller disconnects
+ * or after `IMGPROXY_REQUEST_TIMEOUT_MS`, so an abandoned render is not left
+ * running. The optimize route parses its tagged input and settles the source
+ * URL in front of this.
  */
 async function delegateOptimization(
+  context: Context<ControlEnv>,
   runtime: ControlRuntimeConfig,
   delegation: OptimizeDelegation,
 ): Promise<Response> {
@@ -60,51 +84,53 @@ async function delegateOptimization(
   if (imgproxy === undefined) return failure(503, "service_unavailable");
   if (runtime.spaceRegistry === undefined) return failure(503, "service_unavailable");
 
-  let policy: SpacePolicy | undefined;
+  let space: ActiveResolverRead | undefined;
   try {
-    policy = await runtime.spaceRegistry.getActiveSpacePolicy(delegation.spaceId);
+    space = await readActiveSpace(runtime.spaceRegistry, delegation);
   } catch {
     return failure(503, "service_unavailable");
   }
-  if (policy === undefined) return failure(404, "not_found");
+  if (space === undefined) return failure(404, "not_found");
+  if (delegation.input.type === "master") context.set("previewKind", delegation.input.kind);
 
-  const eventKind = delegation.kind === undefined ? {} : { kind: delegation.kind };
   try {
-    const sourceUrl = await delegation.sourceUrl(policy);
+    const sourceUrl = await delegation.sourceUrl(space);
     if (sourceUrl instanceof Response) return sourceUrl;
     const request = buildImgproxyRequest(
       { sourceUrl, width: delegation.width, quality: delegation.quality },
       imgproxy,
     );
-    runtime.logger.emit("info", {
-      event: "control.optimize.delegated",
-      ...eventKind,
-      outcome: "accepted",
-    });
-    const response = await runtime.fetch(request.url, {
+    const send = runtime.imgproxyFetch ?? runtime.fetch;
+    const response = await send(request.url, {
       headers: request.headers,
       redirect: "error",
+      signal: AbortSignal.any([
+        context.req.raw.signal,
+        AbortSignal.timeout(IMGPROXY_REQUEST_TIMEOUT_MS),
+      ]),
     });
     if (!response.ok || response.body === null) throw new Error("optimization failed");
-    runtime.logger.emit("info", {
-      event: "control.optimize.delegated",
-      ...eventKind,
-      outcome: "ready",
+    const headers = new Headers({
+      ...NO_STORE,
+      "content-type": response.headers.get("content-type") ?? "image/webp",
     });
-    return new Response(response.body, {
-      status: 200,
-      headers: {
-        ...NO_STORE,
-        "content-type": response.headers.get("content-type") ?? "image/webp",
-      },
-    });
+    // The length describes the bytes on the wire; a decoded body has no
+    // length to forward, so it stays chunked.
+    const length = response.headers.get("content-length");
+    if (length !== null && response.headers.get("content-encoding") === null) {
+      headers.set("content-length", length);
+    }
+
+    return new Response(response.body, { status: 200, headers });
   } catch {
-    runtime.logger.emit("error", {
+    const event: OperationalEvent = {
       event: "control.optimize.failed",
-      ...eventKind,
       outcome: "failed",
       failureCode: "service_unavailable",
-    });
+    };
+    if (delegation.input.type === "master") event.kind = delegation.input.kind;
+    runtime.logger.emit("error", event);
+
     return failure(502, "optimization_failed");
   }
 }
@@ -133,8 +159,7 @@ function resolutionFailure(resolution: Exclude<Resolution, { outcome: "resolved"
 }
 
 export function registerOptimizeRoutes(app: ControlApp, runtime: ControlRuntimeConfig): void {
-  const authorizedOrigin = (header: string | undefined) =>
-    bearerAuthorized(header, runtime.originAuthToken());
+  const authorizedOrigin = bearerCheck(() => runtime.originAuthToken());
 
   // v2: one POST with a tagged input; the locator, when there is one, travels
   // in the body rather than the query string.
@@ -151,10 +176,8 @@ export function registerOptimizeRoutes(app: ControlApp, runtime: ControlRuntimeC
     }
     const input = request.input;
     const delegation: OptimizeDelegation = {
-      spaceId: request.spaceId,
-      width: request.width,
-      quality: request.quality,
-      async sourceUrl(policy) {
+      ...request,
+      async sourceUrl({ policy, credential }) {
         switch (input.type) {
           case "located":
             try {
@@ -176,6 +199,7 @@ export function registerOptimizeRoutes(app: ControlApp, runtime: ControlRuntimeC
             if (resolvers === undefined) return failure(503, "service_unavailable");
             const resolution = await resolvers.resolve({
               policy,
+              credential,
               resolverId: input.resolverId,
               reference: input.reference,
               lifetimeSeconds: RESOLVE_LIFETIME_SECONDS,
@@ -188,8 +212,7 @@ export function registerOptimizeRoutes(app: ControlApp, runtime: ControlRuntimeC
         }
       },
     };
-    if (input.type === "master") delegation.kind = input.kind;
-    return delegateOptimization(runtime, delegation);
+    return delegateOptimization(context, runtime, delegation);
   });
 
   // The Edge asks for a presigned locator on a cold Source Delivery miss of an
@@ -209,17 +232,18 @@ export function registerOptimizeRoutes(app: ControlApp, runtime: ControlRuntimeC
     if (resolvers === undefined || runtime.spaceRegistry === undefined) {
       return failure(503, "service_unavailable");
     }
-    let policy: SpacePolicy | undefined;
+    let space: ActiveResolverRead | undefined;
     try {
-      policy = await runtime.spaceRegistry.getActiveSpacePolicy(request.spaceId);
+      space = await runtime.spaceRegistry.getActiveResolverRead(request);
     } catch {
       return failure(503, "service_unavailable");
     }
-    if (policy === undefined) return failure(404, "not_found");
+    if (space === undefined) return failure(404, "not_found");
     let resolution: Resolution;
     try {
       resolution = await resolvers.resolve({
-        policy,
+        policy: space.policy,
+        credential: space.credential,
         resolverId: request.resolverId,
         reference: request.reference,
         lifetimeSeconds: RESOLVE_LIFETIME_SECONDS,

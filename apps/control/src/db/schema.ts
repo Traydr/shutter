@@ -166,7 +166,16 @@ export const previewJobs = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.spaceId, table.sourceId, table.kind] }),
-    index("preview_jobs_claim_idx").on(table.kind, table.status, table.nextAttemptAt),
+    // Ready and failed rows stay until a Source Purge, so the table only
+    // grows; the job sweeps read only rows still in flight. Partial indexes
+    // over those stay the size of the backlog. The pending one serves the
+    // claim (by kind), the earliest next attempt per kind, and the expiry and
+    // runnable sweeps. The processing one leaves out `lease_expires_at` so a
+    // heartbeat, which moves only the lease, stays a heap-only update.
+    index("preview_jobs_pending_idx")
+      .on(table.kind, table.nextAttemptAt)
+      .where(sql`${table.status} = 'pending'`),
+    index("preview_jobs_processing_idx").on(table.kind).where(sql`${table.status} = 'processing'`),
     check("preview_jobs_kind_check", sql`${table.kind} in ('video', 'pdf')`),
     check(
       "preview_jobs_status_check",

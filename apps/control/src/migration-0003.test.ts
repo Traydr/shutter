@@ -4,7 +4,7 @@ import {
   createPostgresTestLifecycle,
   type PostgresTestLifecycle,
 } from "./postgres-test.js";
-import { loadSpaceRecordsFromPool } from "./spaces/postgres-policy.js";
+import { loadSpaceRecords } from "./spaces/postgres-policy.js";
 
 /**
  * Migration 0003 rewrites every retired UploadThing row into a template and
@@ -38,7 +38,7 @@ describe("migration 0003", () => {
   afterAll(async () => test.close());
 
   it("turns the uploadthing row into a template with the project allowlist", async () => {
-    const [record] = await loadSpaceRecordsFromPool(test.pool, { spaceId: "legacy" });
+    const [record] = await loadSpaceRecords(test.pool, { spaceId: "legacy" });
     expect(record?.value.policy.resolvers).toEqual([
       {
         id: "uploadthing",
@@ -96,7 +96,7 @@ describe("migration 0003", () => {
   });
 
   it("adds the ufs.sh origin for each project the allowlist did not already cover", async () => {
-    const [record] = await loadSpaceRecordsFromPool(test.pool, { spaceId: "legacy" });
+    const [record] = await loadSpaceRecords(test.pool, { spaceId: "legacy" });
     expect(record?.value.policy.allowedSourceOrigins).toEqual([
       { origin: "https://sources.example.com", pathPrefix: "/media" },
       { origin: "https://already.ufs.sh" },

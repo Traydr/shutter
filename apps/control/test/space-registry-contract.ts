@@ -374,9 +374,13 @@ export function registerSpaceRegistryContract(
       );
       const token = await registry.issueApiToken(contractPolicy.id, "application");
       await registry.decommissionSpace(contractPolicy.id);
-      await expect(
-        registry.authorizeSpaceRequest(contractPolicy.id, token.value.token),
-      ).resolves.toEqual({ outcome: "missing" });
+      const request = { spaceId: contractPolicy.id, token: token.value.token };
+      await expect(registry.authorizeSpaceRequest(request)).resolves.toEqual({
+        outcome: "missing",
+      });
+      await expect(registry.authorizeSpaceRequestWithKeys(request)).resolves.toEqual({
+        outcome: "missing",
+      });
       await expect(registry.getSpaceAuthorization(contractPolicy.id)).resolves.toMatchObject({
         policy: contractPolicy,
       });
@@ -387,7 +391,7 @@ export function registerSpaceRegistryContract(
 
     it("authorizes a Space request only for a live token on an active Space", async () => {
       await expect(
-        registry.authorizeSpaceRequest("missing-space", "x".repeat(40)),
+        registry.authorizeSpaceRequest({ spaceId: "missing-space", token: "x".repeat(40) }),
       ).resolves.toEqual({ outcome: "missing" });
 
       await registry.createSpace(contractPolicy);
@@ -398,31 +402,89 @@ export function registerSpaceRegistryContract(
       await registry.addCapabilityKey(contractPolicy.id, "key-1", key);
       await registry.addCapabilityKey(contractPolicy.id, "key-2");
 
-      await expect(registry.authorizeSpaceRequest(contractPolicy.id, undefined)).resolves.toEqual({
-        outcome: "unauthorized",
-      });
-      await expect(registry.authorizeSpaceRequest(contractPolicy.id, "short")).resolves.toEqual({
-        outcome: "unauthorized",
-      });
-      await expect(
-        registry.authorizeSpaceRequest(contractPolicy.id, foreign.value.token),
-      ).resolves.toEqual({ outcome: "unauthorized" });
+      for (const rejected of [undefined, "short", foreign.value.token]) {
+        const request = { spaceId: contractPolicy.id, token: rejected };
+        await expect(registry.authorizeSpaceRequest(request)).resolves.toEqual({
+          outcome: "unauthorized",
+        });
+        await expect(registry.authorizeSpaceRequestWithKeys(request)).resolves.toEqual({
+          outcome: "unauthorized",
+        });
+      }
 
-      const authorized = await registry.authorizeSpaceRequest(contractPolicy.id, token.value.token);
-      expect(authorized).toMatchObject({ outcome: "authorized", policy: contractPolicy });
-      if (authorized.outcome !== "authorized") throw new Error("expected authorization");
-      expect([...authorized.capabilityKeys.keys()]).toEqual(["key-1", "key-2"]);
-      expect(authorized.capabilityKeys.get("key-1")).toEqual(key);
+      const request = { spaceId: contractPolicy.id, token: token.value.token };
+      // A plain authorization opens no Capability Key: its grant is the policy alone.
+      await expect(registry.authorizeSpaceRequest(request)).resolves.toEqual({
+        outcome: "authorized",
+        policy: contractPolicy,
+      });
+      await expect(registry.authorizeSpaceRequestWithKeys(request)).resolves.toEqual({
+        outcome: "authorized",
+        policy: contractPolicy,
+        capabilityKeys: new Map([
+          ["key-1", key],
+          ["key-2", expect.any(Uint8Array)],
+        ]),
+      });
 
       await registry.disableCapabilityKey(contractPolicy.id, "key-1");
-      const rotated = await registry.authorizeSpaceRequest(contractPolicy.id, token.value.token);
+      const rotated = await registry.authorizeSpaceRequestWithKeys(request);
       if (rotated.outcome !== "authorized") throw new Error("expected authorization");
       expect([...rotated.capabilityKeys.keys()]).toEqual(["key-2"]);
 
       await registry.revokeApiToken(contractPolicy.id, token.value.id);
-      await expect(
-        registry.authorizeSpaceRequest(contractPolicy.id, token.value.token),
-      ).resolves.toEqual({ outcome: "unauthorized" });
+      await expect(registry.authorizeSpaceRequest(request)).resolves.toEqual({
+        outcome: "unauthorized",
+      });
+    });
+
+    it("reads an active policy with the credential of the one resolver a request names", async () => {
+      const bucket = {
+        id: "bucket",
+        type: "s3",
+        endpoint: "https://objects.example.test",
+        region: "auto",
+        bucket: "example-bucket",
+        pathStyle: true,
+        keyTemplate: "originals/{key}",
+      } as const;
+      const template = {
+        id: "template",
+        type: "template",
+        url: "https://sources.example.com/{key}",
+        placeholders: { key: {} },
+      } as const;
+      const policy = parseSpacePolicy({
+        ...otherPolicy,
+        allowedSourceOrigins: [
+          ...otherPolicy.allowedSourceOrigins,
+          { origin: "https://sources.example.com" },
+          { origin: "https://objects.example.test", pathPrefix: "/example-bucket" },
+        ],
+        resolvers: [template, bucket],
+      });
+      const named = { spaceId: policy.id, resolverId: "bucket" };
+      await expect(registry.getActiveResolverRead(named)).resolves.toBeUndefined();
+      await registry.createSpace(policy, [
+        { resolverId: "bucket", accessKeyId: "AKIAREAD", secretAccessKey: "read-secret" },
+      ]);
+
+      await expect(registry.getActiveResolverRead(named)).resolves.toEqual({
+        policy,
+        credential: {
+          outcome: "opened",
+          credential: { accessKeyId: "AKIAREAD", secretAccessKey: "read-secret" },
+        },
+      });
+      for (const resolverId of ["template", "unknown"]) {
+        await expect(
+          registry.getActiveResolverRead({ spaceId: policy.id, resolverId }),
+        ).resolves.toEqual({ policy, credential: { outcome: "absent" } });
+      }
+      await expect(registry.getActiveSpacePolicy(policy.id)).resolves.toEqual(policy);
+
+      await registry.decommissionSpace(policy.id);
+      await expect(registry.getActiveResolverRead(named)).resolves.toBeUndefined();
     });
 
     it("reads one Space record of any status", async () => {

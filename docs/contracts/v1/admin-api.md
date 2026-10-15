@@ -49,6 +49,8 @@ and strict: an unknown field is rejected. Every timestamp is an ISO instant.
   read cannot lose a stored credential. No later response contains it.
 - A resolver test resolves the sample reference as a request would and fetches
   its first byte. The answer names the host, never the signed location.
+- An API token's `lastUsedAt` is accurate to one minute: a request rewrites it
+  only when the stored value is at least a minute old.
 - Responses are `Cache-Control: private, no-store`.
 
 ## Errors

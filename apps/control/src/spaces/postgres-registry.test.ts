@@ -307,9 +307,15 @@ describe("PostgresSpaceRegistry", () => {
     await expect(unconfigured.getSpaceAuthorization(privatePolicy.id)).rejects.toMatchObject({
       code: "unavailable",
     });
-    await expect(
-      unconfigured.authorizeSpaceRequest(privatePolicy.id, token.value.token),
-    ).rejects.toMatchObject({ code: "unavailable" });
+    const request = { spaceId: privatePolicy.id, token: token.value.token };
+    await expect(unconfigured.authorizeSpaceRequestWithKeys(request)).rejects.toMatchObject({
+      code: "unavailable",
+    });
+    // A request that verifies no Source Capability never needs the encryption key.
+    await expect(unconfigured.authorizeSpaceRequest(request)).resolves.toEqual({
+      outcome: "authorized",
+      policy: privatePolicy,
+    });
     await expect(unconfigured.getActiveSpacePolicy(privatePolicy.id)).resolves.toEqual(
       privatePolicy,
     );
@@ -333,7 +339,10 @@ describe("PostgresSpaceRegistry", () => {
       `update space_capability_keys set sealed_key = 'AAAA' where key_id = 'key-1'`,
     );
 
-    const authorized = await tolerant.authorizeSpaceRequest(privatePolicy.id, token.value.token);
+    const authorized = await tolerant.authorizeSpaceRequestWithKeys({
+      spaceId: privatePolicy.id,
+      token: token.value.token,
+    });
     if (authorized.outcome !== "authorized") throw new Error("expected authorization");
     expect([...authorized.capabilityKeys.keys()]).toEqual(["key-2"]);
     const claim = await tolerant.getSpaceAuthorization(privatePolicy.id);
@@ -361,5 +370,169 @@ describe("PostgresSpaceRegistry", () => {
     await expect(importRegistry(registry, input)).rejects.toMatchObject({ code: "conflict" });
     await expect(registry.listSpaces()).resolves.toEqual([]);
     await expect(registry.loadEdgeSnapshot()).resolves.toMatchObject({ generation: 0 });
+  });
+  it("answers each registry read with one statement and no transaction", async () => {
+    const bucket = {
+      id: "bucket",
+      type: "s3",
+      endpoint: "https://objects.example.test",
+      region: "auto",
+      bucket: "example-bucket",
+      pathStyle: true,
+      keyTemplate: "{key}",
+    } as const;
+    await registry.createSpace(
+      {
+        ...publicPolicy,
+        allowedSourceOrigins: [
+          ...publicPolicy.allowedSourceOrigins,
+          { origin: "https://objects.example.test", pathPrefix: "/example-bucket" },
+        ],
+        resolvers: [...publicPolicy.resolvers, bucket],
+      },
+      [{ resolverId: "bucket", accessKeyId: "AKIA", secretAccessKey: "secret" }],
+    );
+    const token = await registry.issueApiToken(publicPolicy.id, "application");
+    await registry.addCapabilityKey(publicPolicy.id, "key-1");
+    const request = { spaceId: publicPolicy.id, token: token.value.token };
+    // Record the token's use now, so the reads below have no usage write to make.
+    await registry.authorizeSpaceRequest(request);
+    await vi.waitFor(async () =>
+      expect((await registry.listApiTokens(publicPolicy.id))[0]?.lastUsedAt).toEqual(now),
+    );
+
+    const statementsOf = async <Result>(read: () => Promise<Result>): Promise<number> => {
+      test.queries.reset();
+      await read();
+
+      return test.queries.statements.length;
+    };
+    const statements = {
+      getSpace: await statementsOf(() => registry.getSpace(publicPolicy.id)),
+      getActiveSpacePolicy: await statementsOf(() =>
+        registry.getActiveSpacePolicy(publicPolicy.id),
+      ),
+      getActiveResolverRead: await statementsOf(() =>
+        registry.getActiveResolverRead({ spaceId: publicPolicy.id, resolverId: "bucket" }),
+      ),
+      getResolverCredential: await statementsOf(() =>
+        registry.getResolverCredential(publicPolicy.id, "bucket"),
+      ),
+      getSpaceAuthorization: await statementsOf(() =>
+        registry.getSpaceAuthorization(publicPolicy.id),
+      ),
+      authorizeSpaceRequest: await statementsOf(() => registry.authorizeSpaceRequest(request)),
+      authorizeSpaceRequestWithKeys: await statementsOf(() =>
+        registry.authorizeSpaceRequestWithKeys(request),
+      ),
+      listSpaces: await statementsOf(() => registry.listSpaces()),
+      listApiTokens: await statementsOf(() => registry.listApiTokens(publicPolicy.id)),
+      listCapabilityKeys: await statementsOf(() => registry.listCapabilityKeys(publicPolicy.id)),
+      listResolverCredentials: await statementsOf(() =>
+        registry.listResolverCredentials(publicPolicy.id),
+      ),
+    };
+
+    expect(statements).toEqual({
+      getSpace: 1,
+      getActiveSpacePolicy: 1,
+      getActiveResolverRead: 1,
+      getResolverCredential: 1,
+      getSpaceAuthorization: 1,
+      authorizeSpaceRequest: 1,
+      authorizeSpaceRequestWithKeys: 1,
+      listSpaces: 1,
+      listApiTokens: 1,
+      listCapabilityKeys: 1,
+      listResolverCredentials: 1,
+    });
+  });
+
+  it("memoizes the Edge snapshot until the registry generation moves", async () => {
+    await registry.createSpace(privatePolicy);
+    await registry.addCapabilityKey(privatePolicy.id, "key-1");
+
+    test.queries.reset();
+    const first = await registry.loadEdgeSnapshot();
+    expect(test.queries.statements).toHaveLength(2);
+
+    test.queries.reset();
+    const second = await registry.loadEdgeSnapshot();
+    // One generation read proves the memo current; nothing is rebuilt.
+    expect(test.queries.statements).toEqual([
+      "select generation, updated_at from space_registry_metadata where id = 1",
+    ]);
+    expect(second).toBe(first);
+
+    await registry.addCapabilityKey(privatePolicy.id, "key-2");
+    test.queries.reset();
+    const [third, fourth, fifth] = await Promise.all([
+      registry.loadEdgeSnapshot(),
+      registry.loadEdgeSnapshot(),
+      registry.loadEdgeSnapshot(),
+    ]);
+    // Requests that observed the same new generation share one rebuild.
+    expect(test.queries.statements).toHaveLength(4);
+    expect(third).toMatchObject({ generation: 3 });
+    expect([...(third.capabilityKeys.get(privatePolicy.id)?.keys() ?? [])]).toEqual([
+      "key-1",
+      "key-2",
+    ]);
+    expect(fourth).toBe(third);
+    expect(fifth).toBe(third);
+  });
+
+  it("rebuilds a memoized snapshot for any generation change, not only an increase", async () => {
+    await registry.createSpace(privatePolicy);
+    expect(await registry.loadEdgeSnapshot()).toMatchObject({ generation: 1 });
+    // A restore from a backup can move the generation back with different contents.
+    await test.pool.query(`update spaces set qualities = '{75}', default_quality = 75`);
+    await test.pool.query(`update space_registry_metadata set generation = 0 where id = 1`);
+
+    const restored = await registry.loadEdgeSnapshot();
+
+    expect(restored).toMatchObject({ generation: 0 });
+    expect(restored.spaces).toEqual([{ ...privatePolicy, qualities: [75] }]);
+  });
+
+  it("does not memoize inside a caller-owned transaction", async () => {
+    await registry.createSpace(privatePolicy);
+    await registry.loadEdgeSnapshot();
+
+    const inside = await registry.withTransaction(async (transaction) => {
+      await transaction.addCapabilityKey(privatePolicy.id, "key-1");
+      return transaction.loadEdgeSnapshot();
+    });
+
+    expect(inside).toMatchObject({ generation: 2 });
+    expect([...(inside.capabilityKeys.get(privatePolicy.id)?.keys() ?? [])]).toEqual(["key-1"]);
+    await expect(registry.loadEdgeSnapshot()).resolves.toMatchObject({ generation: 2 });
+  });
+
+  it("rewrites an API token's last use at most once a minute", async () => {
+    let clock = now;
+    const timed = new PostgresSpaceRegistry(test.pool, {
+      encryption: new CapabilityKeyEncryption(randomBytes(32).toString("hex")),
+      now: () => clock,
+    });
+    await timed.createSpace(privatePolicy);
+    const token = await timed.issueApiToken(privatePolicy.id, "application");
+    const request = { spaceId: privatePolicy.id, token: token.value.token };
+    const lastUsedAt = async () => (await timed.listApiTokens(privatePolicy.id))[0]?.lastUsedAt;
+
+    await timed.authorizeSpaceRequest(request);
+    await vi.waitFor(async () => expect(await lastUsedAt()).toEqual(now));
+
+    clock = new Date(now.getTime() + 59_000);
+    test.queries.reset();
+    await timed.authorizeSpaceRequest(request);
+    await expect(timed.verifyApiToken(privatePolicy.id, token.value.token)).resolves.toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(test.queries.statements.filter((text) => text.startsWith("update"))).toEqual([]);
+    expect(await lastUsedAt()).toEqual(now);
+
+    clock = new Date(now.getTime() + 60_000);
+    await timed.authorizeSpaceRequestWithKeys(request);
+    await vi.waitFor(async () => expect(await lastUsedAt()).toEqual(clock));
   });
 });

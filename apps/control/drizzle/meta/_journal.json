@@ -36,6 +36,13 @@
       "when": 1788989891777,
       "tag": "0004_private_space_resolvers",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1792015106841,
+      "tag": "0005_preview_job_partial_indexes",
+      "breakpoints": true
     }
   ]
 }

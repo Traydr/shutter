@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
@@ -9,10 +10,22 @@ import {
   type SpacePolicy,
   validateSourceLocator,
 } from "@shutter/protocol";
-import type { ResolverCredential, SpaceRegistry } from "./spaces/registry.js";
+import type {
+  ResolverCredential,
+  ResolverCredentialRead,
+  SpaceRegistry,
+} from "./spaces/registry.js";
 
 /** How long a presigned locator minted for an optimization or delivery miss stays valid. */
 export const RESOLVE_LIFETIME_SECONDS = 10 * 60;
+
+/**
+ * The credential of the resolver being resolved, as the read that returned
+ * the policy found it when the caller read both in one statement (the
+ * optimize and resolve routes). `unread` has an `s3` resolution read the
+ * credential itself.
+ */
+export type ResolveCredential = ResolverCredentialRead | { outcome: "unread" };
 
 export interface ResolveInput {
   policy: SpacePolicy;
@@ -21,6 +34,7 @@ export interface ResolveInput {
   /** For an S3 resolver, the presign lifetime; a template locator does not expire. */
   lifetimeSeconds: number;
   now: Date;
+  credential: ResolveCredential;
 }
 
 export type Resolution =
@@ -52,20 +66,36 @@ export interface S3Presigner {
   presign(input: S3PresignInput): Promise<string>;
 }
 
-/** Presigns with the AWS SDK, keeping one client per endpoint, region, style, and access key. */
+/** Presigning clients kept at once; the least recently used one is dropped past this. */
+const MAX_PRESIGN_CLIENTS = 32;
+
+/**
+ * Presigns with the AWS SDK, keeping one client per endpoint, region, style, and
+ * credential. Clients are keyed by a digest, so no secret is held outside its client.
+ */
 export function createS3Presigner(): S3Presigner {
   const clients = new Map<string, S3Client>();
   return {
     presign({ resolver, credential, key, expiresInSeconds }) {
-      const clientKey = [
-        resolver.endpoint,
-        resolver.region,
-        String(resolver.pathStyle),
-        credential.accessKeyId,
-        credential.secretAccessKey,
-      ].join("\n");
+      const clientKey = createHash("sha256")
+        .update(
+          JSON.stringify([
+            resolver.endpoint,
+            resolver.region,
+            resolver.pathStyle,
+            credential.accessKeyId,
+            credential.secretAccessKey,
+          ]),
+        )
+        .digest("base64url");
       let client = clients.get(clientKey);
       if (client === undefined) {
+        const oldest = clients.keys().next();
+        if (clients.size >= MAX_PRESIGN_CLIENTS && !oldest.done) {
+          clients.get(oldest.value)?.destroy();
+          clients.delete(oldest.value);
+        }
+
         client = new S3Client({
           endpoint: resolver.endpoint,
           region: resolver.region,
@@ -75,8 +105,11 @@ export function createS3Presigner(): S3Presigner {
             secretAccessKey: credential.secretAccessKey,
           },
         });
-        clients.set(clientKey, client);
+      } else {
+        clients.delete(clientKey);
       }
+      clients.set(clientKey, client);
+
       return getSignedUrl(client, new GetObjectCommand({ Bucket: resolver.bucket, Key: key }), {
         expiresIn: expiresInSeconds,
       });
@@ -87,6 +120,25 @@ export function createS3Presigner(): S3Presigner {
 export interface SourceResolverDependencies {
   credentials: Pick<SpaceRegistry, "getResolverCredential">;
   presigner: S3Presigner;
+}
+
+/** The credential an `s3` resolution signs with: the one read beside the policy, or a fresh read. */
+async function resolverCredential(
+  input: ResolveInput,
+  resolverId: string,
+  credentials: SourceResolverDependencies["credentials"],
+): Promise<ResolverCredential | undefined> {
+  const read = input.credential;
+  switch (read.outcome) {
+    case "unread":
+      return credentials.getResolverCredential(input.policy.id, resolverId);
+    case "opened":
+      return read.credential;
+    case "absent":
+      return undefined;
+    case "unreadable":
+      throw new Error("the resolver credential could not be opened");
+  }
 }
 
 export function createSourceResolverService(
@@ -103,10 +155,7 @@ export function createSourceResolverService(
 
       let locator: string;
       if (resolver.type === "s3") {
-        const credential = await dependencies.credentials.getResolverCredential(
-          input.policy.id,
-          resolver.id,
-        );
+        const credential = await resolverCredential(input, resolver.id, dependencies.credentials);
         if (credential === undefined) return { outcome: "configuration_error" };
         locator = await dependencies.presigner.presign({
           resolver,

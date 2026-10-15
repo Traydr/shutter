@@ -1,13 +1,15 @@
 # Control logging with OpenObserve
 
 Shutter Control writes every operational event to JSON stdout and, when
-configured, sends the same allowlisted event to OpenObserve with OTLP/HTTP JSON.
+configured, sends the same allowlisted event to OpenObserve with OTLP/HTTP JSON,
+gzip-compressed.
 Railway logs are the fallback if OpenObserve is unavailable. OTLP delivery uses an
 in-memory batch queue, so a forced process kill can lose the final batch.
 
-Pino supplies the stdout envelope: stable JSON serialization, numeric levels,
-timestamps, and a testable destination stream. It is not trusted to redact
-events. The shared protocol sanitizer drops invalid or unknown fields first, and
+Pino supplies the stdout envelope: stable JSON serialization, the level as a
+label (`"level":"error"`, never pino's numeric `50`, which Railway does not
+recognize and shows as `info`), timestamps, and a testable destination stream.
+It is not trusted to redact events. The shared protocol sanitizer drops invalid or unknown fields first, and
 one declarative projection table then produces both the Pino and OTLP records.
 
 The Executors have no OTLP export. They write the same sanitized events to
@@ -192,6 +194,8 @@ OSS, remember that the replacement account is not constrained by scoped RBAC.
 
 An unavailable backend does not block requests. Control keeps writing stdout and
 rate-limits `control.telemetry.export_failed` diagnostics to one per minute.
+Exports are gzip-compressed (`Content-Encoding: gzip`); a collector that rejected
+compressed bodies would show up as those diagnostics.
 
 For exporter rollback, remove `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` and redeploy;
 stdout logging continues. For full rollback, deploy the previous Control revision

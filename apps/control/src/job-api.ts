@@ -35,7 +35,13 @@ import { type ProblemCode, problemResponse } from "./problems.js";
 import type { DispatchRequests } from "./recovery.js";
 import type { SourcePurge } from "./source-purge.js";
 import type { Resolution, SourceResolverService } from "./source-resolvers.js";
-import type { ActiveSpaceAuthorization, SpaceRegistry } from "./spaces/registry.js";
+import type {
+  ActiveSpaceAuthorization,
+  SpaceRegistry,
+  SpaceRequest,
+  SpaceRequestAuthorization,
+  SpaceRequestGrant,
+} from "./spaces/registry.js";
 
 export interface JobApiRuntime {
   logger: ControlLogger;
@@ -96,28 +102,42 @@ function identityFromRoute(context: {
  * token, 503 when the registry itself failed. One resolved registry call per
  * request; every route consumes the same closed union.
  */
-async function spaceAccess(
-  runtime: JobApiRuntime,
-  spaceId: string,
-  authorizationHeader: string | undefined,
-  failure: (code: ProblemCode) => Response = (code) => requestFailure(STATUS[code], code),
-): Promise<{ response: Response } | { authorization: ActiveSpaceAuthorization }> {
+async function settleSpaceAccess<Grant extends SpaceRequestGrant>(
+  authorization: Promise<SpaceRequestAuthorization<Grant>>,
+  failure: (code: ProblemCode) => Response,
+): Promise<{ response: Response } | { authorization: Grant }> {
   try {
-    const result = await runtime.spaceRegistry.authorizeSpaceRequest(
-      spaceId,
-      bearer(authorizationHeader),
-    );
+    const result = await authorization;
     switch (result.outcome) {
       case "missing":
         return { response: failure("not_found") };
       case "unauthorized":
         return { response: failure("unauthorized") };
       case "authorized":
-        return { authorization: { policy: result.policy, capabilityKeys: result.capabilityKeys } };
+        return { authorization: result };
     }
   } catch {
     return { response: failure("service_unavailable") };
   }
+}
+
+const v1Failure = (code: ProblemCode): Response => requestFailure(STATUS[code], code);
+
+/** The ladder for a route that acts on the Space's policy alone; no Capability Key is opened. */
+function spaceAccess(
+  runtime: JobApiRuntime,
+  request: SpaceRequest,
+  failure: (code: ProblemCode) => Response = v1Failure,
+): Promise<{ response: Response } | { authorization: SpaceRequestGrant }> {
+  return settleSpaceAccess(runtime.spaceRegistry.authorizeSpaceRequest(request), failure);
+}
+
+/** The ladder for the one route that verifies a Source Capability, so it needs the keys. */
+function keyedSpaceAccess(
+  runtime: JobApiRuntime,
+  request: SpaceRequest,
+): Promise<{ response: Response } | { authorization: ActiveSpaceAuthorization }> {
+  return settleSpaceAccess(runtime.spaceRegistry.authorizeSpaceRequestWithKeys(request), v1Failure);
 }
 
 const STATUS = {
@@ -233,6 +253,7 @@ async function claimLocator(
   try {
     resolution = await resolvers.resolve({
       policy: authorization.policy,
+      credential: { outcome: "unread" },
       resolverId: source.resolverId,
       reference: source.reference,
       lifetimeSeconds: CLAIM_LOCATOR_LIFETIME_SECONDS,
@@ -345,8 +366,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
     const sourceId = context.req.param("sourceId");
     const access = await spaceAccess(
       runtime,
-      spaceId,
-      context.req.header("authorization"),
+      { spaceId, token: bearer(context.req.header("authorization")) },
       problem,
     );
     if ("response" in access) return access.response;
@@ -354,7 +374,11 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
     const sourcePurge = runtime.sourcePurge;
     if (sourcePurge === undefined) return problem("service_unavailable");
     try {
-      await sourcePurge.purge({ spaceId, sourceId });
+      await sourcePurge.purge({
+        spaceId,
+        sourceId,
+        routeClass: access.authorization.policy.routeClass,
+      });
       return new Response(null, { status: 204 });
     } catch {
       return problem("service_unavailable");
@@ -367,8 +391,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
     if (identity === undefined) return problem("not_found");
     const access = await spaceAccess(
       runtime,
-      identity.spaceId,
-      context.req.header("authorization"),
+      { spaceId: identity.spaceId, token: bearer(context.req.header("authorization")) },
       problem,
     );
     if ("response" in access) return access.response;
@@ -402,8 +425,7 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
     if (identity === undefined) return problem("not_found");
     const access = await spaceAccess(
       runtime,
-      identity.spaceId,
-      context.req.header("authorization"),
+      { spaceId: identity.spaceId, token: bearer(context.req.header("authorization")) },
       problem,
     );
     if ("response" in access) return access.response;
@@ -421,12 +443,19 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
   api.post(CONTROL_HTTP_ROUTES.sourcePurge, async (context) => {
     const spaceId = context.req.param("spaceId");
     const sourceId = context.req.param("sourceId");
-    const access = await spaceAccess(runtime, spaceId, context.req.header("authorization"));
+    const access = await spaceAccess(runtime, {
+      spaceId,
+      token: bearer(context.req.header("authorization")),
+    });
     if ("response" in access) return access.response;
     const sourcePurge = runtime.sourcePurge;
     if (sourcePurge === undefined) return requestFailure(503, "service_unavailable");
     try {
-      await sourcePurge.purge({ spaceId, sourceId });
+      await sourcePurge.purge({
+        spaceId,
+        sourceId,
+        routeClass: access.authorization.policy.routeClass,
+      });
       return new Response(null, { status: 204 });
     } catch {
       return requestFailure(503, "service_unavailable");
@@ -436,11 +465,10 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
   api.put(CONTROL_HTTP_ROUTES.previewJob, async (context) => {
     const identity = identityFromRoute(context);
     if (identity === undefined) return requestFailure(404, "not_found");
-    const access = await spaceAccess(
-      runtime,
-      identity.spaceId,
-      context.req.header("authorization"),
-    );
+    const access = await keyedSpaceAccess(runtime, {
+      spaceId: identity.spaceId,
+      token: bearer(context.req.header("authorization")),
+    });
     if ("response" in access) return access.response;
     const authorization = access.authorization;
     try {
@@ -482,13 +510,17 @@ export function createJobApi(runtime: JobApiRuntime): Hono<JobApiEnv> {
   api.get(CONTROL_HTTP_ROUTES.previewJob, async (context) => {
     const identity = identityFromRoute(context);
     if (identity === undefined) return requestFailure(404, "not_found");
-    const access = await spaceAccess(
-      runtime,
-      identity.spaceId,
-      context.req.header("authorization"),
-    );
+    const access = await spaceAccess(runtime, {
+      spaceId: identity.spaceId,
+      token: bearer(context.req.header("authorization")),
+    });
     if ("response" in access) return access.response;
-    const record = await runtime.lifecycle.read(identity);
+    let record: PreviewJobView | undefined;
+    try {
+      record = await runtime.lifecycle.read(identity);
+    } catch {
+      return requestFailure(503, "service_unavailable");
+    }
     if (record === undefined) return requestFailure(404, "not_found");
     return activeResponse(record.representation, new URL(context.req.url).pathname);
   });

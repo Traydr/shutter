@@ -1,19 +1,25 @@
 import { buildMasterPreviewKey, type JsonObject, type SpacePolicy } from "@shutter/protocol";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
-import type { ControlRuntimeConfig } from "./app.js";
+import type { ControlEnv, ControlRuntimeConfig } from "./app.js";
+import { parseImgproxyConfig } from "./imgproxy.js";
 import type { ControlLogger } from "./logging.js";
 import { registerOptimizeRoutes } from "./optimize-routes.js";
 import { createSourceResolverService } from "./source-resolvers.js";
 import { MemorySpaceRegistry } from "./spaces/memory-registry.js";
+import type {
+  ActiveResolverRead,
+  ResolverCredentialRead,
+  ResolverIdentity,
+} from "./spaces/registry.js";
 
 const TOKEN = "a".repeat(32);
-const IMGPROXY = {
+const IMGPROXY = parseImgproxyConfig({
   baseUrl: "http://shutter-imgproxy.railway.internal:8080",
   key: "736563726574",
   salt: "68656c6c6f",
   secret: "s".repeat(32),
-};
+});
 
 const NOOP_LOGGER: ControlLogger = { emit() {}, async shutdown() {} };
 const SPACE_REGISTRY = new MemorySpaceRegistry({
@@ -30,7 +36,7 @@ const SPACE_REGISTRY = new MemorySpaceRegistry({
 });
 
 function optimizeApp(runtime: Omit<ControlRuntimeConfig, "logger"> & { logger?: ControlLogger }) {
-  const app = new Hono<{ Variables: { requestId: string } }>();
+  const app = new Hono<ControlEnv>();
   registerOptimizeRoutes(app, { logger: NOOP_LOGGER, ...runtime });
   return app;
 }
@@ -57,13 +63,15 @@ function masterBody(sourceId = "source/one", kind = "video"): string {
 }
 
 function optimizeRequest(
-  control: Hono,
+  control: Hono<ControlEnv>,
   body: string,
-  options: { authorized?: boolean; contentType?: string } = {},
+  options: { authorized?: boolean; contentType?: string; signal?: AbortSignal } = {},
 ) {
   const headers = new Headers({ "content-type": options.contentType ?? "application/json" });
   if (options.authorized !== false) headers.set("authorization", `Bearer ${TOKEN}`);
-  return control.request(OPTIMIZE_URL, { method: "POST", headers, body });
+  const init: RequestInit = { method: "POST", headers, body };
+  if (options.signal !== undefined) init.signal = options.signal;
+  return control.request(OPTIMIZE_URL, init);
 }
 
 describe("optimize routes", () => {
@@ -110,7 +118,8 @@ describe("optimize routes", () => {
     expect(url).toMatch(
       /^http:\/\/shutter-imgproxy\.railway\.internal:8080\/[A-Za-z0-9_-]{43}\/rs:fit:640:0:0\/q:75\/[A-Za-z0-9_-]+\.webp$/u,
     );
-    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${IMGPROXY.secret}`);
+    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${"s".repeat(32)}`);
+    expect(init?.redirect).toBe("error");
   });
 
   it("rejects incomplete or malformed optimization requests before imgproxy", async () => {
@@ -242,7 +251,126 @@ describe("optimize routes", () => {
     ).toBe(404);
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it("ends the imgproxy exchange when the Edge disconnects", async () => {
+    const signals: AbortSignal[] = [];
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.signal) signals.push(init.signal);
+      return new Response("webp", { headers: { "content-type": "image/webp" } });
+    });
+    const control = optimizeApp({
+      spaceRegistry: SPACE_REGISTRY,
+      originAuthToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch,
+    });
+    const edge = new AbortController();
+
+    const response = await optimizeRequest(control, locatedBody(), { signal: edge.signal });
+    expect(response.status).toBe(200);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(false);
+    edge.abort();
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it("sends through the imgproxy transport when one is configured", async () => {
+    const fetch = vi.fn();
+    const imgproxyFetch = vi.fn(
+      async () => new Response("webp", { headers: { "content-type": "image/webp" } }),
+    );
+    const control = optimizeApp({
+      spaceRegistry: SPACE_REGISTRY,
+      originAuthToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      imgproxyFetch,
+      fetch,
+    });
+
+    expect((await optimizeRequest(control, locatedBody())).status).toBe(200);
+    expect(imgproxyFetch).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("forwards imgproxy's content length, but not for a decoded body", async () => {
+    const respond = vi.fn(
+      async () =>
+        new Response("RIFF", { headers: { "content-type": "image/webp", "content-length": "4" } }),
+    );
+    const control = optimizeApp({
+      spaceRegistry: SPACE_REGISTRY,
+      originAuthToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch: respond,
+    });
+
+    const sized = await optimizeRequest(control, locatedBody());
+    expect(sized.headers.get("content-length")).toBe("4");
+    expect(await sized.text()).toBe("RIFF");
+
+    respond.mockImplementationOnce(
+      async () =>
+        new Response("RIFF", {
+          headers: {
+            "content-type": "image/webp",
+            "content-length": "2",
+            "content-encoding": "gzip",
+          },
+        }),
+    );
+    const decoded = await optimizeRequest(control, locatedBody());
+    expect(decoded.headers.get("content-length")).toBeNull();
+    expect(await decoded.text()).toBe("RIFF");
+  });
+
+  it("logs nothing of its own for a success and one failure event for a failure", async () => {
+    const emit = vi.fn<ControlLogger["emit"]>();
+    const fetch = vi.fn(async () => new Response("webp", { status: 200 }));
+    const control = optimizeApp({
+      logger: { emit, async shutdown() {} },
+      spaceRegistry: SPACE_REGISTRY,
+      originAuthToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch,
+      masterStore: { presignGet: async () => "https://r2.example.test/master" },
+    });
+
+    expect((await optimizeRequest(control, masterBody())).status).toBe(200);
+    expect(emit).not.toHaveBeenCalled();
+
+    fetch.mockResolvedValueOnce(new Response(null, { status: 500 }));
+    expect((await optimizeRequest(control, masterBody())).status).toBe(502);
+    expect(emit.mock.calls).toEqual([
+      [
+        "error",
+        {
+          event: "control.optimize.failed",
+          kind: "video",
+          outcome: "failed",
+          failureCode: "service_unavailable",
+        },
+      ],
+    ]);
+  });
 });
+
+/** A registry whose resolver credentials read as the given outcome, as a corrupt row would. */
+class CredentialReadRegistry extends MemorySpaceRegistry {
+  readonly #credential: ResolverCredentialRead;
+
+  constructor(credential: ResolverCredentialRead) {
+    super();
+    this.#credential = credential;
+  }
+
+  override async getActiveResolverRead(
+    resolver: ResolverIdentity,
+  ): Promise<ActiveResolverRead | undefined> {
+    const read = await super.getActiveResolverRead(resolver);
+
+    return read === undefined ? undefined : { policy: read.policy, credential: this.#credential };
+  }
+}
 
 describe("v2 optimize and resolve wire", () => {
   const publicPolicy: SpacePolicy = {
@@ -273,17 +401,19 @@ describe("v2 optimize and resolve wire", () => {
     ],
   };
 
-  async function v2App(options: { credential?: boolean } = {}) {
-    const registry = new MemorySpaceRegistry();
+  async function v2App(options: { credential?: ResolverCredentialRead } = {}) {
+    // A credential that cannot be opened is the one configuration error the
+    // registry cannot prevent at write time.
+    const registry =
+      options.credential === undefined
+        ? new MemorySpaceRegistry()
+        : new CredentialReadRegistry(options.credential);
     await registry.createSpace(publicPolicy, [
       { resolverId: "media", accessKeyId: "AKIA", secretAccessKey: "s" },
     ]);
     const presigned: string[] = [];
     const sourceResolvers = createSourceResolverService({
-      // A credential that cannot be opened is the one configuration error the
-      // registry cannot prevent at write time.
-      credentials:
-        options.credential === false ? { getResolverCredential: async () => undefined } : registry,
+      credentials: registry,
       presigner: {
         presign: async ({ key, expiresInSeconds }) => {
           presigned.push(`${key} ${expiresInSeconds}`);
@@ -305,7 +435,7 @@ describe("v2 optimize and resolve wire", () => {
     return { control, fetch, presigned };
   }
 
-  function post(control: Hono, path: string, body: string, authorized = true) {
+  function post(control: Hono<ControlEnv>, path: string, body: string, authorized = true) {
     const headers = new Headers({ "content-type": "application/json" });
     if (authorized) headers.set("authorization", `Bearer ${TOKEN}`);
     return control.request(`http://shutter.test${path}`, { method: "POST", headers, body });
@@ -331,7 +461,7 @@ describe("v2 optimize and resolve wire", () => {
   });
 
   it("answers each resolution failure with its own status", async () => {
-    const { control } = await v2App({ credential: false });
+    const { control } = await v2App({ credential: { outcome: "absent" } });
     const request = (input: JsonObject) =>
       post(
         control,
@@ -354,6 +484,30 @@ describe("v2 optimize and resolve wire", () => {
     expect((await post(control, "/internal/v2/optimize", JSON.stringify({}), false)).status).toBe(
       401,
     );
+  });
+
+  it("fails the optimization, not the policy read, when the credential will not open", async () => {
+    const { control, fetch } = await v2App({ credential: { outcome: "unreadable" } });
+    const resolved = { spaceId: "example-public", resolverId: "media", reference: ["file.one"] };
+
+    const optimized = await post(
+      control,
+      "/internal/v2/optimize",
+      JSON.stringify({
+        spaceId: resolved.spaceId,
+        input: { type: "resolved", resolverId: resolved.resolverId, reference: resolved.reference },
+        width: 640,
+        quality: 75,
+      }),
+    );
+    expect(optimized.status).toBe(502);
+    await expect(optimized.json()).resolves.toEqual({ error: { code: "optimization_failed" } });
+    const resolvedLocator = await post(control, "/internal/v2/resolve", JSON.stringify(resolved));
+    expect(resolvedLocator.status).toBe(503);
+    await expect(resolvedLocator.json()).resolves.toEqual({
+      error: { code: "service_unavailable" },
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("presigns a delivery locator for the Edge and never stores it", async () => {

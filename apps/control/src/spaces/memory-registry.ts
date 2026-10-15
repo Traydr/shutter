@@ -11,6 +11,7 @@ import {
   validateCapabilityKeyId,
 } from "./credentials.js";
 import type {
+  ActiveResolverRead,
   ActiveSpaceAuthorization,
   ApiTokenSummary,
   CapabilityKeySummary,
@@ -23,13 +24,16 @@ import type {
   ResolverCredential,
   ResolverCredentialInput,
   ResolverCredentialSummary,
+  ResolverIdentity,
   SpacePolicyUpdate,
   SpaceRecord,
   SpaceRegistry,
   SpaceRegistryTransaction,
+  SpaceRequest,
   SpaceRequestAuthorization,
 } from "./registry.js";
 import {
+  apiTokenUseIsStale,
   applyResolverChange,
   planResolverCredentials,
   rejectRetiredResolvers,
@@ -156,6 +160,26 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     return record?.status === "active" ? parseSpacePolicy(record.policy) : undefined;
   }
 
+  async getActiveResolverRead(resolver: ResolverIdentity): Promise<ActiveResolverRead | undefined> {
+    const policy = await this.getActiveSpacePolicy(resolver.spaceId);
+    if (policy === undefined) return undefined;
+    const credential = this.#resolverCredentials.get(resolver.spaceId)?.get(resolver.resolverId);
+
+    return {
+      policy,
+      credential:
+        credential === undefined
+          ? { outcome: "absent" }
+          : {
+              outcome: "opened",
+              credential: {
+                accessKeyId: credential.accessKeyId,
+                secretAccessKey: credential.secretAccessKey,
+              },
+            },
+    };
+  }
+
   async getGeneration(): Promise<RegistryGeneration> {
     return { generation: this.#generation, updatedAt: new Date(this.#generatedAt) };
   }
@@ -165,16 +189,35 @@ export class MemorySpaceRegistry implements SpaceRegistry {
     return record === undefined ? undefined : this.#authorization(record);
   }
 
-  async authorizeSpaceRequest(
-    spaceId: string,
-    token: string | undefined,
-  ): Promise<SpaceRequestAuthorization> {
-    const record = this.#spaces.get(spaceId);
+  async authorizeSpaceRequest(request: SpaceRequest): Promise<SpaceRequestAuthorization> {
+    const authorized = await this.#authorizedRecord(request);
+    if (authorized.outcome !== "authorized") return authorized;
+
+    return { outcome: "authorized", policy: parseSpacePolicy(authorized.record.policy) };
+  }
+
+  async authorizeSpaceRequestWithKeys(
+    request: SpaceRequest,
+  ): Promise<SpaceRequestAuthorization<ActiveSpaceAuthorization>> {
+    const authorized = await this.#authorizedRecord(request);
+    if (authorized.outcome !== "authorized") return authorized;
+
+    return { outcome: "authorized", ...this.#authorization(authorized.record) };
+  }
+
+  async #authorizedRecord(
+    request: SpaceRequest,
+  ): Promise<SpaceRequestAuthorization<{ policy: SpacePolicy; record: SpaceRecord }>> {
+    const record = this.#spaces.get(request.spaceId);
     if (record === undefined || record.status !== "active") return { outcome: "missing" };
-    if (token === undefined || !(await this.verifyApiToken(spaceId, token))) {
+    if (
+      request.token === undefined ||
+      !(await this.verifyApiToken(request.spaceId, request.token))
+    ) {
       return { outcome: "unauthorized" };
     }
-    return { outcome: "authorized", ...this.#authorization(record) };
+
+    return { outcome: "authorized", policy: record.policy, record };
   }
 
   /** The one projection of a Space record onto policy plus accepted Capability Keys. */
@@ -367,7 +410,9 @@ export class MemorySpaceRegistry implements SpaceRegistry {
       (candidate) => candidate.revokedAt === undefined && apiTokenHashMatches(hash, candidate.hash),
     );
     if (match === undefined) return false;
-    match.lastUsedAt = this.#now();
+    const now = this.#now();
+    if (apiTokenUseIsStale(match.lastUsedAt, now)) match.lastUsedAt = now;
+
     return true;
   }
 

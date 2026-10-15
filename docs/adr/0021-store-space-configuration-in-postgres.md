@@ -4,7 +4,9 @@ Space policy, API-token hashes, encrypted Capability Keys, status, and
 credential history are operational data. Store them in the Postgres Space
 Registry. Do not keep tenant values in source code or deployment variables.
 Control reads the registry for each Space-scoped request, so all replicas see a
-committed change without a Control cache-invalidation protocol.
+committed change without a Control cache-invalidation protocol. (ADR 0033
+memoizes the Edge snapshot per registry generation, still checked on every
+request.)
 
 Edge reads one authenticated `v1` snapshot that contains all active policies
 and Capability Keys from one repeatable-read transaction. Each Worker isolate

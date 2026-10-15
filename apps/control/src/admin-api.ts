@@ -40,7 +40,7 @@ import {
   testResolver,
 } from "./admin/resolver-test.js";
 import type { EdgeRefreshStatus } from "./edge-refresh-status.js";
-import { bearerAuthorized } from "./origin-auth.js";
+import { bearerCheck } from "./origin-auth.js";
 import { problemResponse } from "./problems.js";
 import {
   type ApiTokenSummary,
@@ -209,9 +209,10 @@ export function createAdminApi(runtime: AdminApiRuntime): Hono<AdminApiEnv> {
   const admin = new Hono<AdminApiEnv>();
   const routes = CONTROL_HTTP_ROUTES;
   const prefix = `${routes.adminOverview.slice(0, routes.adminOverview.lastIndexOf("/"))}/*`;
+  const authorized = bearerCheck(() => runtime.token());
 
   admin.use(prefix, async (context, next) => {
-    if (!bearerAuthorized(context.req.header("authorization"), runtime.token())) {
+    if (!authorized(context.req.header("authorization"))) {
       return problemResponse("unauthorized", context.get("requestId"));
     }
     if (runtime.registry === undefined) {
