@@ -37,11 +37,21 @@ pnpm deployment:apply
 Credentials (`SHUTTER_ENCRYPTION_KEY`, `ADMIN_API_TOKEN`, the admin
 application's `ADMIN_BOOTSTRAP_TOKEN`, `ORIGIN_AUTH_TOKEN`, `EDGE_CONFIG_TOKEN`, the executor tokens, imgproxy
 key/salt/secret, S3 keys, the Cloudflare purge token, and OTLP settings) are set
-directly on the Railway services and never enter this repository. Once they
+directly on the Railway services and never enter this repository. The S3 keys
+belong on Control and the two Executors only. imgproxy reads every source over
+HTTPS, so it holds none, and a plan deletes any S3 variable left on it. Once they
 exist, set `SHUTTER_SECRETS_SEEDED=true` in the input so later plans
 `preserve()` them instead of proposing their removal, and record the Postgres
 volume name as `SHUTTER_JOBS_VOLUME_NAME` after the first apply so the plan
 keeps declaring it.
+
+The Node services build with Railpack from the root `railpack.json` and prune
+devDependencies from their images (`RAILPACK_PRUNE_DEPS`). imgproxy runs four
+workers and jemalloc, is capped at 2 vCPU and 2 GB, and gets 50 seconds to
+finish in-flight renders when it redeploys. That is longer than its 45-second
+request timeout. If Railway's imgproxy memory graph rises toward the cap under
+real traffic, raise the cap or lower the workers in `.railway/railway.ts`
+rather than removing either bound.
 
 ## Edge
 

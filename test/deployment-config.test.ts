@@ -151,6 +151,64 @@ describe("deployment configuration", () => {
     expect(control.variables.ADMIN_BOOTSTRAP_TOKEN).toBeUndefined();
   });
 
+  it("starts each Node service's built entrypoint with node, from a pruned image", () => {
+    const project = projectFor({ ...commonEnvironment });
+    const startCommands = {
+      "Shutter-Control": "node apps/control/dist/index.js",
+      "Shutter-Admin": "env -u CI node apps/admin/.output/server/index.mjs",
+      "Shutter-Executor-Video": "node apps/executor-video/dist/index.js",
+      "Shutter-Executor-PDF": "node apps/executor-pdf/dist/index.js",
+    };
+
+    for (const [name, startCommand] of Object.entries(startCommands)) {
+      const resource = service(project, name);
+
+      expect(resource.deploy?.startCommand).toBe(startCommand);
+      expect(resource.variables.RAILPACK_PRUNE_DEPS).toMatchObject({
+        type: "literal",
+        value: "true",
+      });
+    }
+
+    expect(service(project, "Shutter-Control").deploy?.preDeployCommand).toEqual([
+      "node apps/control/dist/migrate.js",
+    ]);
+  });
+
+  it("pins Railpack's pnpm to packageManager and keeps pnpm's cache out of the image", async () => {
+    const railpack = JSON.parse(await readFile("railpack.json", "utf8"));
+    const workspace = JSON.parse(await readFile("package.json", "utf8"));
+
+    // Railpack does not read packageManager for pnpm, so the two must move together.
+    expect(`pnpm@${railpack.packages.pnpm}`).toBe(workspace.packageManager);
+    // An install step named here would otherwise ship its unpruned /app.
+    expect(railpack.steps).toEqual({
+      install: { variables: { PNPM_CONFIG_CACHE_DIR: "/tmp/pnpm-cache" }, deployOutputs: [] },
+      build: { variables: { PNPM_CONFIG_CACHE_DIR: "/tmp/pnpm-cache" } },
+    });
+  });
+
+  it("bounds imgproxy and gives it no Media Store credential", () => {
+    const project = projectFor({ ...commonEnvironment, SHUTTER_SECRETS_SEEDED: "true" });
+    const imgproxy = service(project, "Shutter-Imgproxy");
+
+    // Control presigns every R2 read imgproxy makes, Master Previews included.
+    expect(Object.keys(imgproxy.variables).filter((name) => name.startsWith("S3_"))).toEqual([]);
+    expect(service(project, "Shutter-Control").variables.S3_ACCESS_KEY_ID).toEqual({
+      type: "preserve",
+    });
+    expect(imgproxy.variables.IMGPROXY_WORKERS).toMatchObject({ type: "literal", value: "4" });
+    expect(imgproxy.variables.IMGPROXY_MALLOC).toMatchObject({
+      type: "literal",
+      value: "jemalloc",
+    });
+    expect(imgproxy.variables.IMGPROXY_TIMEOUT).toMatchObject({ type: "literal", value: "45" });
+    expect(imgproxy.deploy).toMatchObject({
+      drainingSeconds: 50,
+      limitOverride: { containers: { cpu: 2, memoryBytes: 2_147_483_648 } },
+    });
+  });
+
   it("rejects ambiguous seeding state and invalid inputs", () => {
     expect(() =>
       parseDeploymentInput({ ...commonEnvironment, SHUTTER_SECRETS_SEEDED: "maybe" }),

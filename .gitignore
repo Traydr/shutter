@@ -9,4 +9,4 @@ coverage/
 .env.*
 !.env.example
 .dev.vars
-.railway/deployment.env
+.railway/deployment.env*

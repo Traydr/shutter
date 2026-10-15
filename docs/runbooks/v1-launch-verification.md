@@ -116,6 +116,7 @@ record.
 - Control and both Executors address the same R2 endpoint and bucket; Executor
   role-token references match Control.
 - Control and imgproxy share the signing key, salt, and bearer secret.
+  imgproxy has no `S3_*` variable.
 - Edge declares `EDGE_CONFIG_TOKEN`, `ORIGIN_AUTH_TOKEN`, and `ORIGIN_BASE_URL`.
   Its snapshot token matches Control, and `MEDIA_STORE` binds to the
   deployment's Media Store bucket.

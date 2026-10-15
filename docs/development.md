@@ -125,8 +125,18 @@ The video Executor needs `ffmpeg` on `PATH`; the PDF Executor also needs
   must not enable `nodejs_compat`.
 - **Reviewed infrastructure.** Normal configuration tests guard the R2
   lifecycle rule, the seeded and unseeded Railway graphs, the Worker's R2
-  binding, the pinned imgproxy image, and the imgproxy SSRF guards. The
+  binding, the pinned imgproxy image, the imgproxy SSRF guards and resource
+  bounds, the services' start commands, and `railpack.json`. The
   [self-hosting runbook](./runbooks/self-hosting.md) covers deployment values.
+- **Railway builds.** Railway builds the Node services with Railpack, which
+  reads the root `railpack.json`. Its pnpm version must equal `packageManager`:
+  Railpack cannot read pnpm 12's lockfile, and without the pin a fresh service
+  falls back to pnpm 9 and fails its install. Each service starts its built
+  entrypoint with `node` from the repository root
+  (`node apps/control/dist/index.js`), never `pnpm … start`, so Node is PID 1
+  and receives SIGTERM itself. The `start` scripts remain for local use. The
+  reasoning and measurements are in
+  [research/railpack-images.md](./research/railpack-images.md).
 - **Versioned protocol.** URLs and capabilities carry an explicit `v1`, so
   incompatible drift fails closed rather than degrading. Cross-consumer
   behavior is pinned by fixtures in `@shutter/testkit`.

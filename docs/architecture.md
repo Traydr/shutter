@@ -575,11 +575,20 @@ separate deployment because it is a standalone on-demand renderer.
 Because imgproxy reads HTTPS sources authorized by Source Capabilities rather
 than `s3://` URLs, one central
 imgproxy deployment can serve several Spaces without holding their Bucket
-credentials. Its internal source URLs must be encrypted and signed.
+credentials. It holds no Media Store credential either: Control presigns the
+R2 read of a Master Preview like any other source. Its internal processing URLs
+are signed, not encrypted. Control base64url-encodes the source URL into the
+processing path and signs that path with an HMAC-SHA256 key and salt, and
+imgproxy also requires its bearer secret. Anything that can read the request,
+or imgproxy's request log, can therefore decode the source URL. The request
+stays on Railway's private network.
 
 ## Workspace boundaries
 
-Deployable apps are `edge`, `control`, `executor-video`, and `executor-pdf`.
+Deployable apps are `edge`, `control`, `admin`, `executor-video`, and
+`executor-pdf`. Railway builds the Node apps with Railpack and starts each one's
+built entrypoint with `node`, not through pnpm
+([`research/railpack-images.md`](./research/railpack-images.md)).
 Internal packages are `protocol` for Web-standard capability, URL, policy, and
 API contracts; `testkit` for cross-runtime fixtures and conformance helpers; and
 `executor-runtime` for the shared work cycle. Drizzle schema and migrations
