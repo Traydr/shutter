@@ -17,12 +17,20 @@ import {
   buildV2DeliveryUrl,
   buildV2PreviewJobUrl,
   buildV2SourcePurgeUrl,
+  EDGE_REFRESH_REPORT_HEADER,
+  EDGE_SERVING_GENERATION_HEADER,
   EXECUTOR_WAKE_ROUTE,
+  edgeRefreshReportWanted,
   expandS3Resolver,
   expandTemplateResolver,
   FAILURE_ACTIONS,
+  masterPreviewKeyFor,
+  normalizeWidth,
+  optimizationCacheNames,
+  parseEdgeServingGeneration,
   parseExecutorWakeReply,
   parseSourceReference,
+  sourceDeliveryCacheNames,
   sourceFingerprint,
   verifyAccessToken,
   verifySourceCapability,
@@ -32,6 +40,7 @@ import { describe, expect, it } from "vitest";
 import {
   CACHE_IDENTITY_EXPECTED,
   CACHE_IDENTITY_FIXTURE,
+  EDGE_REFRESH_FIXTURE,
   EXECUTOR_CONFLICT_FIXTURE,
   EXECUTOR_WAKE_FIXTURE,
   RESOLVER_EXPECTED,
@@ -42,6 +51,7 @@ import {
   TEMPLATE_RESOLVER_FIXTURE,
   URL_FIXTURES,
   V2_URL_FIXTURES,
+  WIDTH_NORMALIZATION_FIXTURES,
 } from "./index.js";
 
 describe("Node protocol conformance", () => {
@@ -169,6 +179,53 @@ describe("Node protocol conformance", () => {
     await expect(buildSourceDeliveryCacheUrl(SOURCE_DELIVERY_CACHE_IDENTITY_FIXTURE)).resolves.toBe(
       CACHE_IDENTITY_EXPECTED.sourceDeliveryUrl,
     );
+  });
+
+  it("derives every per-request cache name from one fingerprint", async () => {
+    await expect(optimizationCacheNames(CACHE_IDENTITY_FIXTURE)).resolves.toEqual({
+      sourceHash: CACHE_IDENTITY_EXPECTED.fingerprint,
+      cacheTag: CACHE_IDENTITY_EXPECTED.cacheTag,
+      r2Key: CACHE_IDENTITY_EXPECTED.r2Key,
+      canonicalUrl: CACHE_IDENTITY_EXPECTED.canonicalUrl,
+    });
+    await expect(sourceDeliveryCacheNames(SOURCE_DELIVERY_CACHE_IDENTITY_FIXTURE)).resolves.toEqual(
+      {
+        sourceHash: CACHE_IDENTITY_EXPECTED.fingerprint,
+        cacheTag: CACHE_IDENTITY_EXPECTED.cacheTag,
+        canonicalUrl: CACHE_IDENTITY_EXPECTED.sourceDeliveryUrl,
+      },
+    );
+    expect(
+      masterPreviewKeyFor(
+        {
+          spaceId: CACHE_IDENTITY_FIXTURE.spaceId,
+          sourceHash: CACHE_IDENTITY_EXPECTED.fingerprint,
+        },
+        "video",
+      ),
+    ).toBe(CACHE_IDENTITY_EXPECTED.masterKey);
+  });
+
+  it("matches the width normalization fixtures", () => {
+    for (const [requested, canonical] of WIDTH_NORMALIZATION_FIXTURES) {
+      expect(normalizeWidth(requested), `width ${requested}`).toBe(canonical);
+    }
+  });
+
+  it("matches the Edge refresh header fixtures", () => {
+    expect(EDGE_SERVING_GENERATION_HEADER).toBe(EDGE_REFRESH_FIXTURE.servingGenerationHeader);
+    expect(EDGE_REFRESH_REPORT_HEADER).toBe(EDGE_REFRESH_FIXTURE.reportHeader);
+    for (const [value, generation] of EDGE_REFRESH_FIXTURE.servingGenerations) {
+      expect(parseEdgeServingGeneration(value)).toBe(generation);
+    }
+    for (const value of EDGE_REFRESH_FIXTURE.invalidServingGenerations) {
+      expect(parseEdgeServingGeneration(value), JSON.stringify(value)).toBeUndefined();
+    }
+    expect(parseEdgeServingGeneration(null)).toBeUndefined();
+    expect(edgeRefreshReportWanted(EDGE_REFRESH_FIXTURE.reportWanted)).toBe(true);
+    expect(edgeRefreshReportWanted(EDGE_REFRESH_FIXTURE.reportCurrent)).toBe(false);
+    expect(edgeRefreshReportWanted(null)).toBe(true);
+    expect(edgeRefreshReportWanted("CURRENT")).toBe(true);
   });
 
   it("matches the Executor wake fixtures", () => {

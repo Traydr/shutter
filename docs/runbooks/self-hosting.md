@@ -90,7 +90,10 @@ Capability and request the private source or Master Preview route. Confirm:
 - the admin Edge status shows a recent successful refresh.
 
 Use a disposable Source ID to test purge twice. Confirm both calls succeed and
-that a later invalid capability cannot recover bytes from Edge or R2. Keep all
+that a later invalid capability cannot recover bytes from Edge or R2; the full
+procedure, including the second-region check that proves the zone purge cleared
+every data center, is
+[Source Purge verification](./v1-launch-verification.md#source-purge-verification). Keep all
 URLs, tokens, locators, account identifiers, and captured evidence in the
 private operational record, not in this repository.
 

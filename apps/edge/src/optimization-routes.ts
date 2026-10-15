@@ -1,19 +1,20 @@
 import {
-  buildCanonicalCacheUrl,
-  buildMasterPreviewKey,
-  buildR2CacheKey,
-  buildSourceCacheTag,
   CONTROL_HTTP_ROUTES,
   emitOperationalEvent,
+  masterPreviewKeyFor,
   normalizeOptimizationQuery,
+  type OperationalEvent,
   type OptimizationCacheIdentity,
+  type OptimizationCacheNames,
   type OptimizationInput,
   type OptimizeInput,
-  operationalEvent,
+  operationalErrorType,
+  optimizationCacheNames,
   type PreviewKind,
   verifySourceCapability,
 } from "@shutter/protocol";
 import type { Context, Hono } from "hono";
+import type { WaitUntilContext } from "./config-snapshot.js";
 import { edgeBrowserResponse, internalEdgeCacheResponse } from "./edge-cache-policy.js";
 import { notFound } from "./http-responses.js";
 import { type SpaceRouteAccess, spaceRoute } from "./space-route.js";
@@ -21,11 +22,21 @@ import { type SpaceRouteAccess, spaceRoute } from "./space-route.js";
 type EdgeEnv = { Bindings: CloudflareBindings };
 type EdgeApp = Hono<EdgeEnv>;
 
+/**
+ * What one delivery needs from its request: the bindings, and somewhere to
+ * finish cache writes after the response has gone. A Hono context is one.
+ */
+export interface DeliveryContext {
+  env: CloudflareBindings;
+  executionCtx: WaitUntilContext;
+}
+
 const PUBLIC_LOCATED_ROUTE = "/v1/public/:spaceId/located/:sourceId/:capability";
 const PUBLIC_MASTER_ROUTE = "/v1/public/:spaceId/master/:kind/:sourceId";
 const PRIVATE_SOURCE_ROUTE = "/v1/private/:spaceId/source/:capability";
 const PRIVATE_MASTER_ROUTE = "/v1/private/:spaceId/master/:capability";
 const OPTIMIZATION_METHODS = ["GET"] as const;
+const CONTENT_LENGTH = /^\d{1,16}$/u;
 
 /**
  * What Control optimizes on a miss: a Source Object the origin fetches from a
@@ -79,28 +90,32 @@ type CapabilityGate =
   | { verify: "on-miss"; sourceId: string; locate(): Promise<string> }
   | { verify: "none"; subject: OptimizationSubject };
 
-async function emitDeliveryEvent(
+/**
+ * One `edge.delivery` event per response. The source hash is the fingerprint
+ * the cache names already hold, so emitting is synchronous and adds no digest
+ * and no await to the response path.
+ */
+function emitDeliveryEvent(
   identity: OptimizationCacheIdentity,
+  sourceHash: string,
   cacheOutcome: "edge-hit" | "r2-hit" | "origin",
   apiVersion: ApiVersion,
-): Promise<void> {
-  emitOperationalEvent(
-    "info",
-    await operationalEvent({
-      event: "edge.delivery",
-      spaceId: identity.spaceId,
-      sourceId: identity.sourceId,
-      fields:
-        identity.input.type === "master"
-          ? { routeClass: identity.routeClass, apiVersion, cacheOutcome, kind: identity.input.kind }
-          : { routeClass: identity.routeClass, apiVersion, cacheOutcome },
-    }),
-  );
+): void {
+  const event: OperationalEvent = {
+    event: "edge.delivery",
+    sourceHash,
+    routeClass: identity.routeClass,
+    apiVersion,
+    cacheOutcome,
+  };
+  if (identity.input.type === "master") event.kind = identity.input.kind;
+  emitOperationalEvent("info", event);
 }
 
 function canonicalRedirect(requestUrl: string, width: number, quality: number): Response {
   const canonical = new URL(requestUrl);
   canonical.search = `?w=${width}&q=${quality}`;
+
   return new Response(null, {
     status: 308,
     headers: { "cache-control": "private, no-store", location: canonical.toString() },
@@ -113,6 +128,7 @@ async function readR2Response(bucket: R2Bucket, key: string): Promise<Response |
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   if (object.httpEtag !== undefined) headers.set("etag", object.httpEtag);
+
   return new Response(object.body, { headers });
 }
 
@@ -141,6 +157,7 @@ async function fetchOptimize(
     redirect: "manual",
   });
   if (!response.ok) throw new Error(`origin returned ${response.status}`);
+
   return response;
 }
 
@@ -148,18 +165,19 @@ async function fetchOptimize(
 async function renderAtOrigin(
   bindings: CloudflareBindings,
   identity: OptimizationCacheIdentity,
+  names: OptimizationCacheNames,
   origin: OptimizationOrigin,
 ): Promise<Response | undefined> {
   switch (origin.type) {
     case "master": {
       if (origin.requireStored === true) {
-        const masterKey = await buildMasterPreviewKey(
-          identity.spaceId,
-          identity.sourceId,
+        const masterKey = masterPreviewKeyFor(
+          { spaceId: identity.spaceId, sourceHash: names.sourceHash },
           origin.kind,
         );
         if ((await bindings.MEDIA_STORE.head(masterKey)) === null) return undefined;
       }
+
       return fetchOptimize(bindings, identity, {
         type: "master",
         sourceId: identity.sourceId,
@@ -180,64 +198,151 @@ async function renderAtOrigin(
   }
 }
 
-async function populateCaches(
-  bindings: CloudflareBindings,
+/** A length the Edge can stream a render with: present, well formed, and not content-encoded. */
+function streamableLength(rendered: Response): number | undefined {
+  const encoding = rendered.headers.get("content-encoding");
+  if (encoding !== null && encoding !== "identity") return undefined;
+  const value = rendered.headers.get("content-length");
+  if (value === null || !CONTENT_LENGTH.test(value)) return undefined;
+  const length = Number(value);
+
+  return Number.isSafeInteger(length) ? length : undefined;
+}
+
+/** The three readers of one fresh render: the browser, R2, and the Edge cache. */
+interface RenderedBodies {
+  client: ReadableStream | ArrayBuffer;
+  r2: ReadableStream | ArrayBuffer;
+  cache: ReadableStream | ArrayBuffer;
+}
+
+/**
+ * Splits a fresh render three ways. With a trustworthy length the body
+ * streams: it runs through one FixedLengthStream before the tee, and the tee
+ * branches keep that length, which gives the browser a Content-Length and R2
+ * the known length a streamed put needs. A render that ends short errors every
+ * branch, so it is never stored. Without a length, the body is read once.
+ * (workerd cannot pipe a tee branch into a FixedLengthStream, so the order of
+ * the two steps matters.)
+ */
+async function renderedBodies(rendered: Response): Promise<RenderedBodies> {
+  const length = streamableLength(rendered);
+  if (length === undefined || rendered.body === null) {
+    const bytes = await rendered.arrayBuffer();
+
+    return { client: bytes, r2: bytes, cache: bytes };
+  }
+  const [client, stores] = rendered.body.pipeThrough(new FixedLengthStream(length)).tee();
+  const [r2, cache] = stores.tee();
+
+  return { client, r2, cache };
+}
+
+/**
+ * Writes a fresh render to R2. A failure only costs a later re-render, but it
+ * is logged: unlike an Edge cache miss, it would repeat for every request.
+ */
+async function storeRender(
+  bucket: R2Bucket,
+  names: OptimizationCacheNames,
+  body: ReadableStream | ArrayBuffer,
+  contentType: string,
+): Promise<void> {
+  try {
+    await bucket.put(names.r2Key, body, {
+      httpMetadata: { contentType },
+      customMetadata: { cacheTag: names.cacheTag },
+    });
+  } catch (error) {
+    emitOperationalEvent("error", {
+      event: "edge.failure",
+      outcome: "failed",
+      errorType: operationalErrorType(error),
+    });
+  }
+}
+
+/**
+ * Hands a fresh render to the browser and writes it to R2 and the Edge cache
+ * after the response, so neither write delays it.
+ */
+async function deliverRendered(
+  context: DeliveryContext,
   identity: OptimizationCacheIdentity,
-  cacheTag: string,
-  origin: OptimizationOrigin,
-): Promise<Response | undefined> {
-  const key = await buildR2CacheKey(identity);
-  const rendered = await renderAtOrigin(bindings, identity, origin);
-  if (rendered === undefined) return undefined;
-  const bytes = await rendered.arrayBuffer();
+  names: OptimizationCacheNames,
+  rendered: Response,
+): Promise<Response> {
   const contentType = rendered.headers.get("content-type") ?? "application/octet-stream";
-  await bindings.MEDIA_STORE.put(key, bytes, {
-    httpMetadata: { contentType },
-    customMetadata: { cacheTag },
-  });
-  return new Response(bytes, { headers: { "content-type": contentType } });
+  const bodies = await renderedBodies(rendered);
+  context.executionCtx.waitUntil(
+    storeRender(context.env.MEDIA_STORE, names, bodies.r2, contentType),
+  );
+  const headers = { "content-type": contentType };
+  const stored = internalEdgeCacheResponse(
+    new Response(bodies.cache, { headers }),
+    identity.routeClass,
+    names.cacheTag,
+  );
+  context.executionCtx.waitUntil(
+    caches.default.put(new Request(names.canonicalUrl), stored).catch(() => undefined),
+  );
+
+  return internalEdgeCacheResponse(
+    new Response(bodies.client, { headers }),
+    identity.routeClass,
+    names.cacheTag,
+  );
 }
 
 /**
  * Delivers one Image Optimization under one cache identity: the Edge cache,
  * then R2, then the origin. Every optimization route, v1 or v2, ends here
- * after it has settled its subject and canonical parameters.
+ * after it has settled its subject and canonical parameters. Only reads sit
+ * on the response path; the Edge cache and R2 writes finish in `waitUntil`.
  */
 export async function deliverOptimization(
-  bindings: CloudflareBindings,
+  context: DeliveryContext,
   identity: OptimizationCacheIdentity,
   origin: OptimizationOrigin,
   apiVersion: ApiVersion,
 ): Promise<Response> {
-  const canonicalUrl = await buildCanonicalCacheUrl(identity);
-  const cacheKey = new Request(canonicalUrl);
-  const cacheTag = await buildSourceCacheTag(identity.spaceId, identity.sourceId);
+  const names = await optimizationCacheNames(identity);
+  const cacheKey = new Request(names.canonicalUrl);
   const cached = await caches.default.match(cacheKey);
   if (cached !== undefined) {
-    await emitDeliveryEvent(identity, "edge-hit", apiVersion);
+    emitDeliveryEvent(identity, names.sourceHash, "edge-hit", apiVersion);
+
     return edgeBrowserResponse(cached, {
       routeClass: identity.routeClass,
       cacheStatus: "edge-hit",
-      cacheTag,
+      cacheTag: names.cacheTag,
     });
   }
 
-  const key = await buildR2CacheKey(identity);
-  const stored = await readR2Response(bindings.MEDIA_STORE, key);
-  let response = stored;
-  if (response === undefined) {
-    response = await populateCaches(bindings, identity, cacheTag, origin);
-    if (response === undefined) return notFound();
-  }
-  const outcome = stored === undefined ? "origin" : "r2-hit";
+  const stored = await readR2Response(context.env.MEDIA_STORE, names.r2Key);
+  if (stored !== undefined) {
+    const internal = internalEdgeCacheResponse(stored, identity.routeClass, names.cacheTag);
+    context.executionCtx.waitUntil(
+      caches.default.put(cacheKey, internal.clone()).catch(() => undefined),
+    );
+    emitDeliveryEvent(identity, names.sourceHash, "r2-hit", apiVersion);
 
-  const internal = internalEdgeCacheResponse(response, identity.routeClass, cacheTag);
-  await caches.default.put(cacheKey, internal.clone());
-  await emitDeliveryEvent(identity, outcome, apiVersion);
-  return edgeBrowserResponse(internal, {
+    return edgeBrowserResponse(internal, {
+      routeClass: identity.routeClass,
+      cacheStatus: "r2-hit",
+      cacheTag: names.cacheTag,
+    });
+  }
+
+  const rendered = await renderAtOrigin(context.env, identity, names, origin);
+  if (rendered === undefined) return notFound();
+  const response = await deliverRendered(context, identity, names, rendered);
+  emitDeliveryEvent(identity, names.sourceHash, "origin", apiVersion);
+
+  return edgeBrowserResponse(response, {
     routeClass: identity.routeClass,
-    cacheStatus: outcome,
-    cacheTag,
+    cacheStatus: "origin",
+    cacheTag: names.cacheTag,
   });
 }
 
@@ -267,7 +372,8 @@ async function optimize(
     width: query.width,
     quality: query.quality,
   };
-  return deliverOptimization(context.env, identity, subject.origin, "v1");
+
+  return deliverOptimization(context, identity, subject.origin, "v1");
 }
 
 function resolveSubject(gate: CapabilityGate): Promise<OptimizationSubject> {
@@ -291,6 +397,7 @@ export function registerOptimizationRoutes(app: EdgeApp): void {
     async (context, access) => {
       const sourceId = context.req.param("sourceId") ?? "";
       const capability = context.req.param("capability") ?? "";
+
       return optimize(context, access, {
         verify: "on-miss",
         sourceId,
@@ -299,10 +406,11 @@ export function registerOptimizationRoutes(app: EdgeApp): void {
             spaceId: access.spaceId,
             expectedPurpose: "image_source",
             expectedSourceId: sourceId,
-            keys: access.snapshot.keysFor(access.spaceId),
+            keys: await access.snapshot.verificationKeysFor(access.spaceId),
             now: Math.floor(Date.now() / 1000),
             allowedSourceOrigins: access.policy.allowedSourceOrigins,
           });
+
           return claims.locator;
         },
       });
@@ -315,6 +423,7 @@ export function registerOptimizationRoutes(app: EdgeApp): void {
     async (context, access) => {
       const kind = context.req.param("kind") ?? "";
       if (kind !== "video" && kind !== "pdf") return notFound();
+
       return optimize(context, access, {
         verify: "none",
         subject: {
@@ -335,10 +444,11 @@ export function registerOptimizationRoutes(app: EdgeApp): void {
           const claims = await verifySourceCapability(context.req.param("capability") ?? "", {
             spaceId: access.spaceId,
             expectedPurpose: "image_source",
-            keys: access.snapshot.keysFor(access.spaceId),
+            keys: await access.snapshot.verificationKeysFor(access.spaceId),
             now: Math.floor(Date.now() / 1000),
             allowedSourceOrigins: access.policy.allowedSourceOrigins,
           });
+
           return {
             sourceId: claims.source_id,
             origin: { type: "source", locate: async () => claims.locator },
@@ -357,9 +467,10 @@ export function registerOptimizationRoutes(app: EdgeApp): void {
           const claims = await verifySourceCapability(context.req.param("capability") ?? "", {
             spaceId: access.spaceId,
             expectedPurpose: "master_preview",
-            keys: access.snapshot.keysFor(access.spaceId),
+            keys: await access.snapshot.verificationKeysFor(access.spaceId),
             now: Math.floor(Date.now() / 1000),
           });
+
           return { sourceId: claims.source_id, origin: { type: "master", kind: claims.kind } };
         },
       }),

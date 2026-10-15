@@ -100,7 +100,7 @@ async function authorizePrivate(
   operation: DeliveryOperation,
   token: string,
 ): Promise<void> {
-  const keys = access.snapshot.keysFor(access.spaceId);
+  const keys = await access.snapshot.verificationKeysFor(access.spaceId);
   const now = Math.floor(Date.now() / 1000);
   switch (operation.type) {
     case "source_delivery":
@@ -185,7 +185,7 @@ async function serveV2(context: Context<EdgeEnv>, access: SpaceRouteAccess): Pro
     return canonicalRedirect(context.req.url, operation);
   }
   return deliverOptimization(
-    context.env,
+    context,
     {
       ...identity,
       sourceId: reference.sourceId,

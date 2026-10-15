@@ -1,4 +1,9 @@
-import { type EdgeConfigSnapshotWire, parseEdgeConfigSnapshot } from "@shutter/protocol";
+import {
+  EDGE_REFRESH_REPORT_HEADER,
+  EDGE_SERVING_GENERATION_HEADER,
+  type EdgeConfigSnapshotWire,
+  parseEdgeConfigSnapshot,
+} from "@shutter/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { createControlApp } from "./app.js";
 import { EdgeRefreshTracker } from "./edge-refresh-status.js";
@@ -138,6 +143,57 @@ describe("control app", () => {
         "test-key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
       },
     });
+  });
+
+  it("takes the Edge's serving generation from its snapshot read and asks for a report only when needed", async () => {
+    let now = new Date("2026-08-11T12:00:00.000Z");
+    const tracker = new EdgeRefreshTracker(() => now);
+    const registry = new MemorySpaceRegistry({
+      spaces: [
+        {
+          id: "example-public",
+          routeClass: "public",
+          qualities: [75],
+          defaultQuality: 75,
+          allowedSourceOrigins: [{ origin: "https://sources.example.com" }],
+          resolvers: [],
+        },
+      ],
+    });
+    const control = createControlApp({
+      logger: NOOP_LOGGER,
+      originAuthToken: () => TOKEN,
+      edgeConfigToken: () => TOKEN,
+      imgproxyConfig: () => IMGPROXY,
+      fetch: vi.fn(),
+      spaceRegistry: registry,
+      edgeRefreshTracker: tracker,
+    });
+    const read = async (serving: string | undefined, token = TOKEN) => {
+      const headers = new Headers({ authorization: `Bearer ${token}` });
+      if (serving !== undefined) headers.set(EDGE_SERVING_GENERATION_HEADER, serving);
+      const response = await control.request("https://shutter.test/internal/v1/edge/config", {
+        headers,
+      });
+
+      return response.headers.get(EDGE_REFRESH_REPORT_HEADER);
+    };
+
+    // A fresh isolate names nothing, and Control has no report yet.
+    expect(await read(undefined)).toBe("wanted");
+    expect(tracker.latest()).toBeUndefined();
+    // Neither an unauthenticated nor a malformed name counts.
+    expect(await read("1", "x".repeat(32))).toBeNull();
+    expect(await read("01")).toBe("wanted");
+    expect(tracker.latest()).toBeUndefined();
+    // An isolate serving the current generation names it: that is the report.
+    expect(await read("1")).toBe("current");
+    expect(tracker.latest()).toEqual({ generation: 1, refreshedAt: now });
+    // With only fresh isolates reading, the record goes stale and Control asks again.
+    now = new Date("2026-08-11T12:04:59.999Z");
+    expect(await read(undefined)).toBe("current");
+    now = new Date("2026-08-11T12:05:00.000Z");
+    expect(await read(undefined)).toBe("wanted");
   });
 
   it("records authenticated Edge refresh reports for the admin surface", async () => {

@@ -1,4 +1,4 @@
-import { env, reset, SELF } from "cloudflare:test";
+import { createExecutionContext, env, reset, SELF, waitOnExecutionContext } from "cloudflare:test";
 import {
   buildMasterPreviewKey,
   buildR2CacheKey,
@@ -14,6 +14,7 @@ import {
   TEST_CAPABILITY_KID,
 } from "@shutter/testkit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { app } from "./app.js";
 import { resetEdgeConfigForTest } from "./config-snapshot.js";
 
 function snapshotResponse(): Response {
@@ -116,6 +117,71 @@ function tamper(value: string): string {
   const index = Math.floor(value.length / 2);
   const replacement = value[index] === "A" ? "B" : "A";
   return `${value.slice(0, index)}${replacement}${value.slice(index + 1)}`;
+}
+
+/**
+ * One request through the Worker, settled: its body is read and the cache and
+ * R2 writes it deferred with `waitUntil` have finished before this returns.
+ */
+async function fetchSettled(url: string, bindings: CloudflareBindings = env): Promise<Response> {
+  const context = createExecutionContext();
+  const response = await app.fetch(new Request(url), bindings, context);
+  const body = await response.arrayBuffer();
+  await waitOnExecutionContext(context);
+
+  return new Response(body, { status: response.status, headers: response.headers });
+}
+
+/** The Media Store with every write held until `release()`, so a response that waits on R2 never arrives. */
+class HeldWritesBucket implements R2Bucket {
+  readonly #bucket: R2Bucket;
+  readonly #released: Promise<void>;
+  #release: () => void = () => undefined;
+
+  constructor(bucket: R2Bucket) {
+    this.#bucket = bucket;
+    this.#released = new Promise((resolve) => {
+      this.#release = resolve;
+    });
+  }
+
+  release(): void {
+    this.#release();
+  }
+
+  head(key: string): Promise<R2Object | null> {
+    return this.#bucket.head(key);
+  }
+
+  get(key: string, options?: R2GetOptions): Promise<R2ObjectBody | null> {
+    return this.#bucket.get(key, options);
+  }
+
+  async put(
+    key: string,
+    value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null | Blob,
+    options?: R2PutOptions,
+  ): Promise<R2Object> {
+    await this.#released;
+
+    return this.#bucket.put(key, value, options);
+  }
+
+  createMultipartUpload(key: string, options?: R2MultipartOptions): Promise<R2MultipartUpload> {
+    return this.#bucket.createMultipartUpload(key, options);
+  }
+
+  resumeMultipartUpload(key: string, uploadId: string): R2MultipartUpload {
+    return this.#bucket.resumeMultipartUpload(key, uploadId);
+  }
+
+  delete(keys: string | string[]): Promise<void> {
+    return this.#bucket.delete(keys);
+  }
+
+  list(options?: R2ListOptions): Promise<R2Objects> {
+    return this.#bucket.list(options);
+  }
 }
 
 describe("edge app", () => {
@@ -528,17 +594,17 @@ describe("edge app", () => {
     });
     vi.stubGlobal("fetch", configFetch(origin));
 
-    const template = await SELF.fetch(
+    const template = await fetchSettled(
       "https://edge.shutter.test/v2/example-public/ut/example-project/miss-1?w=640&q=75",
     );
     expect(template.status).toBe(200);
     expect(template.headers.get("x-shutter-cache")).toBe("origin");
     expect(await template.text()).toBe("rendered-v2");
-    const s3 = await SELF.fetch(
+    const s3 = await fetchSettled(
       "https://edge.shutter.test/v2/example-public/media/miss-2?w=640&q=75",
     );
     expect(s3.status).toBe(200);
-    const missingMaster = await SELF.fetch(
+    const missingMaster = await fetchSettled(
       "https://edge.shutter.test/v2/example-public/media/clip.mp4?preview=video&w=640&q=75",
     );
     expect(missingMaster.status).toBe(404);
@@ -548,7 +614,7 @@ describe("edge app", () => {
       "master-bytes",
       { httpMetadata: { contentType: "image/webp" } },
     );
-    const master = await SELF.fetch(
+    const master = await fetchSettled(
       "https://edge.shutter.test/v2/example-public/media/clip.mp4?preview=video&w=640&q=75",
     );
     expect(master.status).toBe(200);
@@ -584,6 +650,113 @@ describe("edge app", () => {
         quality: 75,
       }),
     );
+  });
+
+  it("answers an origin render before its R2 and Edge cache writes finish", async () => {
+    vi.stubGlobal(
+      "fetch",
+      configFetch(
+        async () => new Response("rendered-held", { headers: { "content-type": "image/webp" } }),
+      ),
+    );
+    const url = "https://edge.shutter.test/v2/example-public/ut/example-project/held?w=640&q=75";
+    const key = await buildR2CacheKey({
+      routeClass: "public",
+      spaceId: "example-public",
+      sourceId: "ut/example-project/held",
+      input: { type: "source" },
+      width: 640,
+      quality: 75,
+    });
+    const bucket = new HeldWritesBucket(env.MEDIA_STORE);
+    const context = createExecutionContext();
+
+    // With the R2 write held, a response that awaited it would never arrive.
+    const response = await app.fetch(new Request(url), { ...env, MEDIA_STORE: bucket }, context);
+    expect(response.headers.get("x-shutter-cache")).toBe("origin");
+    expect(await response.text()).toBe("rendered-held");
+    expect(await env.MEDIA_STORE.head(key)).toBeNull();
+
+    bucket.release();
+    await waitOnExecutionContext(context);
+    const stored = await env.MEDIA_STORE.get(key);
+    expect(await stored?.text()).toBe("rendered-held");
+    expect(stored?.httpMetadata?.contentType).toBe("image/webp");
+    expect(stored?.customMetadata).toEqual({
+      cacheTag: await buildSourceCacheTag("example-public", "ut/example-project/held"),
+    });
+    const second = await SELF.fetch(url);
+    expect(second.headers.get("x-shutter-cache")).toBe("edge-hit");
+    expect(await second.text()).toBe("rendered-held");
+  });
+
+  it("streams a render with a known length to the browser, R2, and the Edge cache", async () => {
+    const rendered = Uint8Array.from({ length: 4096 }, (_, index) => index % 251);
+    vi.stubGlobal(
+      "fetch",
+      configFetch(
+        async () =>
+          new Response(rendered, {
+            headers: { "content-type": "image/webp", "content-length": "4096" },
+          }),
+      ),
+    );
+    const url = "https://edge.shutter.test/v2/example-public/ut/example-project/sized?w=640&q=75";
+
+    const response = await fetchSettled(url);
+    expect(response.headers.get("x-shutter-cache")).toBe("origin");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(rendered);
+    const stored = await env.MEDIA_STORE.get(
+      await buildR2CacheKey({
+        routeClass: "public",
+        spaceId: "example-public",
+        sourceId: "ut/example-project/sized",
+        input: { type: "source" },
+        width: 640,
+        quality: 75,
+      }),
+    );
+    expect(new Uint8Array((await stored?.arrayBuffer()) ?? new ArrayBuffer(0))).toEqual(rendered);
+    const second = await SELF.fetch(url);
+    expect(second.headers.get("x-shutter-cache")).toBe("edge-hit");
+    expect(second.headers.get("content-length")).toBe("4096");
+    expect(new Uint8Array(await second.arrayBuffer())).toEqual(rendered);
+  });
+
+  it("stores nothing when a streamed render ends short of its length", async () => {
+    vi.stubGlobal(
+      "fetch",
+      configFetch(
+        async () =>
+          new Response("short", {
+            headers: { "content-type": "image/webp", "content-length": "4096" },
+          }),
+      ),
+    );
+    const url = "https://edge.shutter.test/v2/example-public/ut/example-project/short?w=640&q=75";
+    const context = createExecutionContext();
+
+    const response = await app.fetch(new Request(url), env, context);
+    await expect(response.arrayBuffer()).rejects.toThrow();
+    await waitOnExecutionContext(context);
+    const key = await buildR2CacheKey({
+      routeClass: "public",
+      spaceId: "example-public",
+      sourceId: "ut/example-project/short",
+      input: { type: "source" },
+      width: 640,
+      quality: 75,
+    });
+    expect(await env.MEDIA_STORE.head(key)).toBeNull();
+    vi.stubGlobal(
+      "fetch",
+      configFetch(
+        async () => new Response("complete", { headers: { "content-type": "image/webp" } }),
+      ),
+    );
+    const retry = await fetchSettled(url);
+    expect(retry.headers.get("x-shutter-cache")).toBe("origin");
+    expect(await retry.text()).toBe("complete");
   });
 
   it("delivers an S3 reference by asking Control for a presigned locator", async () => {
@@ -902,7 +1075,9 @@ describe("workerd protocol conformance", () => {
     expect(response.status).toBe(400);
   });
 
-  it("purges Worker Cache API tags when authorized", async () => {
+  it("acknowledges a purge when the Worker has no Workers Cache of its own", async () => {
+    // Without `cache.enabled` the runtime gives the Worker no `ctx.cache` and
+    // no cache in front of it; its Cache API entries are the zone purge's.
     const tag = await buildSourceCacheTag("example-private", "private-source");
     const response = await SELF.fetch("https://edge.shutter.test/internal/v1/cache/purge", {
       method: "POST",
@@ -912,7 +1087,42 @@ describe("workerd protocol conformance", () => {
       },
       body: JSON.stringify({ tags: [tag] }),
     });
-    expect([204, 503]).toContain(response.status);
-    if (response.status === 204) expect(await response.text()).toBe("");
+    expect(response.status).toBe(204);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.text()).toBe("");
+  });
+
+  it("purges the Worker's own cache by tag when the Worker has one", async () => {
+    const tag = await buildSourceCacheTag("example-private", "private-source");
+    const purged: CachePurgeOptions[] = [];
+    let outcome: CachePurgeResult | Error = { success: true, errors: [] };
+    const purge = (options: CachePurgeOptions): Promise<CachePurgeResult> => {
+      purged.push(options);
+
+      return outcome instanceof Error ? Promise.reject(outcome) : Promise.resolve(outcome);
+    };
+    const cacheEnabledContext = {
+      waitUntil: () => undefined,
+      passThroughOnException: () => undefined,
+      props: {},
+      cache: { purge, invalidate: purge },
+    };
+    const request = () =>
+      new Request("https://edge.shutter.test/internal/v1/cache/purge", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${env.ORIGIN_AUTH_TOKEN}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ tags: [tag] }),
+      });
+
+    expect((await app.fetch(request(), env, cacheEnabledContext)).status).toBe(204);
+    expect(purged).toEqual([{ tags: [tag] }]);
+
+    outcome = { success: false, errors: [{ code: 1, message: "rate limited" }] };
+    expect((await app.fetch(request(), env, cacheEnabledContext)).status).toBe(503);
+    outcome = new Error("purge unavailable");
+    expect((await app.fetch(request(), env, cacheEnabledContext)).status).toBe(503);
   });
 });

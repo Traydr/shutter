@@ -3,6 +3,7 @@ import {
   type DeliveryUrlOptions,
   isReferenceSegment,
   isResolverId,
+  normalizeWidth,
   type PreviewKind,
   resolverSourceId,
 } from "@shutter/protocol/urls";
@@ -34,13 +35,41 @@ function withBase(path: string, edgeBaseUrl: string | undefined): string {
 }
 
 /**
- * `/v2/{space}/{resolver}/{reference}` with the canonical query. Throws a
- * TypeError for a resolver ID or reference outside the grammar, so a bad key
- * fails at build time rather than as a 404 in production.
+ * The canonical width for a requested one: the smallest width on Shutter's
+ * ladder at or above it, 3840 above the ladder, and exactly 24 for Unpic's
+ * placeholder. A URL built with it is already canonical, so a public Space
+ * answers it directly instead of with an uncacheable 308 to the canonical URL,
+ * which would cost a second round trip and Worker request per image. Throws a
+ * TypeError for anything but a positive integer, which the Edge would refuse.
+ */
+export function canonicalWidth(width: number): number {
+  if (!Number.isSafeInteger(width) || width <= 0) {
+    throw new TypeError("a width is a positive integer");
+  }
+
+  return normalizeWidth(width);
+}
+
+function canonicalOptions(options: DeliveryUrlOptions): DeliveryUrlOptions {
+  return options.width === undefined
+    ? options
+    : { ...options, width: canonicalWidth(options.width) };
+}
+
+/**
+ * `/v2/{space}/{resolver}/{reference}` with the canonical query; the width
+ * snaps to the ladder (`canonicalWidth`). Throws a TypeError for a resolver ID
+ * or reference outside the grammar, so a bad key fails at build time rather
+ * than as a 404 in production.
  */
 export function deliveryUrl(source: DeliverySource, options: DeliveryUrlOptions = {}): string {
   return withBase(
-    buildV2DeliveryUrl(source.spaceId, source.resolverId, segments(source.reference), options),
+    buildV2DeliveryUrl(
+      source.spaceId,
+      source.resolverId,
+      segments(source.reference),
+      canonicalOptions(options),
+    ),
     source.edgeBaseUrl,
   );
 }
@@ -84,9 +113,11 @@ export function isDeliveryUrl(value: string, edgeBaseUrl: string): boolean {
 /**
  * An Unpic-style transformer: rewrites the width and quality of a v2 Delivery
  * URL and leaves every other URL alone. A relative path comes back relative.
- * A value the caller does not supply keeps what the URL already had, so a
- * preview URL never loses the width it needs. Pass the quality as well, from
- * the Space's Optimization Policy: on a public Space a `w` without `q` is
+ * The width snaps to the canonical ladder (`canonicalWidth`), so the 1x and
+ * 2x component widths Unpic asks for come out as canonical URLs rather than
+ * 308s. A value the caller does not supply keeps what the URL already had, so
+ * a preview URL never loses the width it needs. Pass the quality as well,
+ * from the Space's Optimization Policy: on a public Space a `w` without `q` is
  * canonicalized with a one-time 308.
  *
  * A private token is bound to one operation, so it is kept only while the
@@ -105,7 +136,8 @@ export function transformDeliveryUrl(
   const preview = url.searchParams.get("preview");
   const token = url.searchParams.get("token");
   const hadWidth = url.searchParams.has("w");
-  const width = options.width === undefined ? url.searchParams.get("w") : String(options.width);
+  const width =
+    options.width === undefined ? url.searchParams.get("w") : String(canonicalWidth(options.width));
   const quality =
     options.quality === undefined ? url.searchParams.get("q") : String(options.quality);
   const query = new URLSearchParams();

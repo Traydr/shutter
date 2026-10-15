@@ -42,7 +42,10 @@ defaults from the Space, and both normalize to canonical values.
 For a public Space, a valid non-canonical `w` or `q`, or an omitted `q`,
 receives `308 Permanent Redirect` to the canonical query, which is `preview`
 (when present) then `w` then `q`. A conforming client emits canonical values and
-never sees the redirect. Private Spaces normalize internally and never redirect.
+never sees the redirect: `@shutter/client` snaps every width it writes with the
+shared normalization, which `WIDTH_NORMALIZATION_FIXTURES` in `@shutter/testkit`
+pins. Quality depends on the Space, so a client passes a permitted value.
+Private Spaces normalize internally and never redirect.
 
 ## Private Spaces
 

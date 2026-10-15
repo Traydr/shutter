@@ -194,7 +194,8 @@ describe("delivery URLs", () => {
     );
 
     expect(url.origin).toBe("https://media.example.test");
-    expect(url.searchParams.get("w")).toBe("1200");
+    // 1200 is not on the ladder; the client emits the canonical 1280 itself.
+    expect(url.searchParams.get("w")).toBe("1280");
     expect(url.searchParams.get("q")).toBe("75");
     const capability = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
     const claims = await verifySourceCapability(capability, {

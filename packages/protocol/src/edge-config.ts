@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { importVerificationKeys } from "./aes-key.js";
 import type { JsonValue } from "./json.js";
 import { decodeCapabilityKey, encodeCapabilityKey } from "./key-material.js";
 import { SPACE_POLICY_SCHEMA } from "./space-policy.js";
@@ -27,8 +28,33 @@ export interface ParsedEdgeConfigSnapshot {
   generation: number;
   generatedAt: number;
   policyFor(spaceId: string): SpacePolicy | undefined;
+  /** A copy of the Space's raw Capability Keys by key ID. */
   keysFor(spaceId: string): ReadonlyMap<string, Uint8Array>;
+  /**
+   * The Space's Capability Keys imported as AES-GCM decryption keys, once per
+   * snapshot and Space, for verifying capabilities and access tokens. An
+   * unknown Space has no keys.
+   */
+  verificationKeysFor(spaceId: string): Promise<ReadonlyMap<string, CryptoKey>>;
 }
+
+/**
+ * The request header on an Edge snapshot read that names the generation the
+ * reading isolate already serves. It lets Control record a refresh without a
+ * separate report request.
+ */
+export const EDGE_SERVING_GENERATION_HEADER = "x-shutter-edge-generation";
+
+/**
+ * The response header on a snapshot that tells the Edge whether Control still
+ * wants a refresh report for it: `wanted` or `current`. An Edge that sees any
+ * other value, or none (a Control that predates the header), reports.
+ */
+export const EDGE_REFRESH_REPORT_HEADER = "x-shutter-edge-report";
+
+export type EdgeRefreshReportDirective = "wanted" | "current";
+
+const GENERATION_HEADER_PATTERN = /^(?:0|[1-9]\d{0,15})$/u;
 
 export class EdgeConfigValidationError extends Error {
   constructor(message: string) {
@@ -123,6 +149,21 @@ export function serializeEdgeConfigRefreshReport(generation: number): EdgeConfig
   return { generation };
 }
 
+/** The serving-generation header value, or `undefined` for an absent or malformed one. */
+export function parseEdgeServingGeneration(value: string | null | undefined): number | undefined {
+  if (value === null || value === undefined || !GENERATION_HEADER_PATTERN.test(value)) {
+    return undefined;
+  }
+  const generation = Number(value);
+
+  return Number.isSafeInteger(generation) ? generation : undefined;
+}
+
+/** Whether a snapshot response asks the Edge to report the refresh; only `current` declines. */
+export function edgeRefreshReportWanted(value: string | null): boolean {
+  return value !== "current";
+}
+
 export function parseEdgeConfigRefreshReport(value: JsonValue): EdgeConfigRefreshReportWire {
   const result = refreshReportSchema.safeParse(value);
   if (!result.success) {
@@ -156,6 +197,10 @@ export function parseEdgeConfigSnapshot(value: JsonValue): ParsedEdgeConfigSnaps
   }
   for (const spaceId of spaces.keys())
     capabilityKeys.set(spaceId, capabilityKeys.get(spaceId) ?? new Map());
+  // Imported lazily, once per Space, and shared by every request that reads
+  // this snapshot; a failed import is forgotten so the next caller retries.
+  const verificationKeys = new Map<string, Promise<ReadonlyMap<string, CryptoKey>>>();
+
   return Object.freeze({
     schemaVersion: "v1",
     generation: wire.generation,
@@ -163,10 +208,21 @@ export function parseEdgeConfigSnapshot(value: JsonValue): ParsedEdgeConfigSnaps
     policyFor: (spaceId: string) => spaces.get(spaceId),
     keysFor: (spaceId: string) =>
       new Map(
-        [...(capabilityKeys.get(spaceId) ?? [])].map(([keyId, key]) => [
+        Array.from(capabilityKeys.get(spaceId) ?? [], ([keyId, key]) => [
           keyId,
           Uint8Array.from(key),
         ]),
       ),
+    verificationKeysFor(spaceId: string): Promise<ReadonlyMap<string, CryptoKey>> {
+      const keys = capabilityKeys.get(spaceId);
+      if (keys === undefined) return Promise.resolve(new Map());
+      const known = verificationKeys.get(spaceId);
+      if (known !== undefined) return known;
+      const imported = importVerificationKeys(keys);
+      verificationKeys.set(spaceId, imported);
+      imported.catch(() => verificationKeys.delete(spaceId));
+
+      return imported;
+    },
   });
 }

@@ -79,18 +79,27 @@ app.post("/internal/v1/cache/purge", async (context) => {
     });
   }
 
+  // `ctx.cache` is the Worker's own Workers Cache, and the runtime provides it
+  // only to a Worker deployed with `cache.enabled` (ADR 0031). Without it the
+  // Worker has no such cache, so there is nothing here to purge: the Cache API
+  // entries it writes with `caches.default.put` live in the zone cache, which
+  // Control clears with its zone purge by the same tag. `ctx.cache.purge`
+  // never reaches those entries, so this route cannot replace that step.
   const cache = context.executionCtx.cache;
-  if (cache === undefined) {
-    return context.json({ error: { code: "service_unavailable" } }, 503, {
-      "cache-control": "private, no-store",
-    });
+  if (cache !== undefined) {
+    let purged: boolean;
+    try {
+      purged = (await cache.purge({ tags: purge.data.tags })).success;
+    } catch {
+      purged = false;
+    }
+    if (!purged) {
+      return context.json({ error: { code: "service_unavailable" } }, 503, {
+        "cache-control": "private, no-store",
+      });
+    }
   }
-  const result = await cache.purge({ tags: purge.data.tags });
-  if (!result.success) {
-    return context.json({ error: { code: "service_unavailable" } }, 503, {
-      "cache-control": "private, no-store",
-    });
-  }
+
   return new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
 });
 

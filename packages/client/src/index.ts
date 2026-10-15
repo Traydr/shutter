@@ -8,7 +8,6 @@ import {
   buildPublicLocatedSourceUrl,
   buildPublicMasterUrl,
   buildSourcePurgeUrl,
-  buildV2DeliveryUrl,
   buildV2PreviewJobUrl,
   buildV2SourcePurgeUrl,
   type CapabilityKeyMaterial,
@@ -23,9 +22,10 @@ import {
   type SourceCapabilityClaims,
 } from "@shutter/protocol";
 import { z } from "zod";
-import { sourceIdFor } from "./urls.js";
+import { canonicalWidth, deliveryUrl, sourceIdFor } from "./urls.js";
 
 export {
+  canonicalWidth,
   type DeliverySource,
   deliveryUrl,
   isDeliveryUrl,
@@ -117,8 +117,9 @@ interface ResolverPreviewInput extends ResolverSource {
   kind: PreviewKind;
 }
 
-function referenceSegments(reference: string | readonly string[]): readonly string[] {
-  return Array.isArray(reference) ? reference : [String(reference)];
+/** The parameters with their width on the canonical ladder, so no URL needs a 308. */
+function canonicalParameters(parameters: OptimizationParameters): OptimizationParameters {
+  return { width: canonicalWidth(parameters.width), quality: parameters.quality };
 }
 
 interface WaitOptions {
@@ -281,12 +282,19 @@ export class ShutterClient {
       locator: input.locator,
     });
     return this.#edge(
-      buildPublicLocatedSourceUrl(this.#config.spaceId, input.sourceId, capability, parameters),
+      buildPublicLocatedSourceUrl(
+        this.#config.spaceId,
+        input.sourceId,
+        capability,
+        canonicalParameters(parameters),
+      ),
     );
   }
 
   publicMasterUrl(kind: PreviewKind, sourceId: string, parameters: OptimizationParameters): string {
-    return this.#edge(buildPublicMasterUrl(this.#config.spaceId, kind, sourceId, parameters));
+    return this.#edge(
+      buildPublicMasterUrl(this.#config.spaceId, kind, sourceId, canonicalParameters(parameters)),
+    );
   }
 
   async publicLocatedDeliveryUrl(input: SourceInput): Promise<string> {
@@ -306,7 +314,9 @@ export class ShutterClient {
       purpose: "image_source",
       locator: input.locator,
     });
-    return this.#edge(buildPrivateSourceUrl(this.#config.spaceId, capability, parameters));
+    return this.#edge(
+      buildPrivateSourceUrl(this.#config.spaceId, capability, canonicalParameters(parameters)),
+    );
   }
 
   async privateMasterUrl(
@@ -318,7 +328,9 @@ export class ShutterClient {
       purpose: "master_preview",
       kind: input.kind,
     });
-    return this.#edge(buildPrivateMasterUrl(this.#config.spaceId, capability, parameters));
+    return this.#edge(
+      buildPrivateMasterUrl(this.#config.spaceId, capability, canonicalParameters(parameters)),
+    );
   }
 
   async privateDeliveryUrl(input: SourceInput): Promise<string> {
@@ -381,14 +393,7 @@ export class ShutterClient {
 
   /** `/v2/{space}/{resolver}/{reference}` with the canonical query; see `@shutter/client/urls`. */
   v2DeliveryUrl(source: ResolverSource, options: DeliveryUrlOptions = {}): string {
-    return this.#edge(
-      buildV2DeliveryUrl(
-        this.#config.spaceId,
-        source.resolverId,
-        referenceSegments(source.reference),
-        options,
-      ),
-    );
+    return this.#edge(deliveryUrl({ spaceId: this.#config.spaceId, ...source }, options));
   }
 
   /** Submits a Preview Job for a resolver source. Needs the Space API token and nothing else. */
