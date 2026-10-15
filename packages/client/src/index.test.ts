@@ -285,6 +285,15 @@ describe("v2 resolver sources", () => {
     expect(
       instance.v2DeliveryUrl({ resolverId: "media", reference: "tour.mp4" }, { width: 640 }),
     ).toBe(`https://edge.example.test/v2/${SPACE}/media/tour.mp4?w=640`);
+    const sourceWithExtras = {
+      resolverId: "media",
+      reference: "tour.mp4",
+      spaceId: "another-space",
+      edgeBaseUrl: "https://elsewhere.example.test",
+    };
+    expect(instance.v2DeliveryUrl(sourceWithExtras)).toBe(
+      `https://edge.example.test/v2/${SPACE}/media/tour.mp4`,
+    );
 
     const submitted = await instance.submitV2PreviewJob({
       resolverId: "media",

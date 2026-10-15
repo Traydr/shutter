@@ -393,7 +393,10 @@ export class ShutterClient {
 
   /** `/v2/{space}/{resolver}/{reference}` with the canonical query; see `@shutter/client/urls`. */
   v2DeliveryUrl(source: ResolverSource, options: DeliveryUrlOptions = {}): string {
-    return this.#edge(deliveryUrl({ spaceId: this.#config.spaceId, ...source }, options));
+    const { resolverId, reference } = source;
+    return this.#edge(
+      deliveryUrl({ spaceId: this.#config.spaceId, resolverId, reference }, options),
+    );
   }
 
   /** Submits a Preview Job for a resolver source. Needs the Space API token and nothing else. */
