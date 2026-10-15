@@ -89,8 +89,9 @@ edge Worker is out of scope and stays on Cloudflare Workers.
 **Recommendation:**
 
 - Do not rewrite anything for Bun now.
-- Fix the start commands, the dispatch bug, and the 300-second wake timeout
-  first. Those are where the real resource and reliability gains are.
+- The real resource and reliability gains were the start commands, the
+  Executor drain, and the 300-second wake timeout. The efficiency pass makes
+  all three (see the note at the top).
 - If you still want Bun after that, pilot it on the PDF Executor using the
   minimal plan under [Migration plan if you go ahead](#migration-plan-if-you-go-ahead):
   an entry-point change to `Bun.serve`, a pinned Bun version, and a
@@ -215,7 +216,7 @@ All memory columns are MB.
 | node | 0.8 / 6.5 | 0.9 / 4.7 | 25.2 / 34.9 | 1774 [1260–1987] | 46 | 450 µs |
 | bun-node-server | 0.6 / 5.1 | 0.9 / 5.0 | 24.6 / 31.6 | 1764 [1447–2836] | 49 | 347 µs |
 | bun-native | 0.6 / 2.7 | 0.9 / 4.8 | 25.1 / 45.8 | 1951 [1466–2435] | 47 | 308 µs |
-| bun-native-bunsql | 0.6 / 5.2 | 0.7 / 16.9 | 24.3 / 144 | 1385 [997–1772] | 81 | 261 µs |
+| bun-native-bunsql | 0.6 / 5.2 | 0.7 / 16.9 | 24.3 / 144 | 1772 [997–2888] | 81 | 261 µs |
 
 - **Unloaded latency is the same on both runtimes.** It is dominated by
   Postgres and by imgproxy.
@@ -540,7 +541,8 @@ not fit:
   - memory growth with many `fetch` calls ([#20912](https://github.com/oven-sh/bun/issues/20912));
   - a reused keep-alive POST failing with ECONNRESET when the server closes
     idle sockets (opened 2026-10-13, [#45138](https://github.com/oven-sh/bun/issues/45138)).
-    Control's imgproxy and Executor calls are exactly that pattern.
+    Control's imgproxy calls are that pattern. Executor wakes now open a
+    fresh connection each time (`agent: false`), so they are not.
 - **Observability.**
   - The logs-only OTLP setup works.
   - Any future tracing through OTel auto-instrumentation will not work on
@@ -570,9 +572,10 @@ not fit:
   - Both builds run on Bun: Nitro's default `node-server` output, and the
     `bun` preset (`NITRO_PRESET=bun`, which serves through `Bun.serve`).
   - Open Nitro issues on the bun preset: raw request body proxying
-    ([nitro#4604](https://github.com/nitrojs/nitro/issues/4604)), SSE
-    ([nitro#3677](https://github.com/nitrojs/nitro/issues/3677)), and
+    ([nitro#4604](https://github.com/nitrojs/nitro/issues/4604)) and
     `createFileRoute` API endpoints ([nitro#3808](https://github.com/nitrojs/nitro/issues/3808)).
+    A crash with SSE ([nitro#3677](https://github.com/nitrojs/nitro/issues/3677))
+    was closed as not planned on 2026-10-15, unfixed.
   - Admin's login is a `createFileRoute` server handler that read form data
     correctly in this test.
 
@@ -601,12 +604,11 @@ not fit:
   - `--max-semi-space-size=1` is measured here: idle 105 → 90 MB and
     post-burst 300 → 195 MB.
   - An explicit `pg.Pool` `max` is inferred, not measured.
-- **Fix in any case:** the 300-second wake timeout. Either:
-  - add an undici `Agent` with `headersTimeout: 0` (and a `bodyTimeout` above
-    the job limit) to the wake `fetch` on Node, plus `timeout: false` on Bun;
-  - or, better because it is runtime-neutral, stop holding the wake open for
-    the whole job. Answer `202` at once and let the Executor's existing
-    complete/fail calls report the outcome.
+- **Wake timeout:** fixed on Node by the efficiency pass, which sends the wake
+  through `node:http` with no header timeout. On Bun, check that `node:http`
+  holds an 11-minute request open, or use `fetch` with `timeout: false`. An
+  immediate `202` would avoid the long request on both runtimes, but ADR 0032
+  keeps the wake open because the drain needs its `processed` or `idle` reply.
 
 ### Executors: best candidate, optional pilot
 
@@ -616,7 +618,7 @@ not fit:
   - with Bun's S3 client as well, to 50 MB idle and 70–72 MB peak;
   - process start drops from about 88 ms to about 43 ms, but only with the
     SDK gone.
-- **Why it is worth so little:** after the dispatch fix they will be asleep
+- **Why it is worth so little:** now that Control drains them, they are asleep
   almost all the time, so the saving is real per wake but tiny per month. Most
   of a cold start is Railway's container wake, not the process.
 - **Risks:**
@@ -624,7 +626,7 @@ not fit:
   - an S3 swap that cannot be verified against R2 locally;
   - a slight change in log format.
 - **Recommendation:** do it only if awake memory or cold start still matters
-  after the dispatch fix.
+  now that Control drains the Executors.
   - Keep the AWS SDK for the first step. Bun with the SDK already gives most
     of the memory saving: 60 against 88 MB idle, and 87–90 against
     123–151 MB peak.
@@ -671,7 +673,7 @@ expectations.
 2. **Types.** Add `bun-types` (or `@types/bun`), pinned to the runtime
    version, to `packages/executor-runtime` only, in its tsconfig `types`.
    Never add it to `apps/edge` or `packages/protocol`.
-3. **Server.** In `packages/executor-runtime`, make `serveExecutorApp` choose
+3. **Server.** In `packages/executor-runtime`, make `serveExecutor` choose
    `Bun.serve` when `globalThis.Bun` exists, as in Appendix B. That means
    `server.timeout(request, 0)` on `/internal/v1/run-once` and `server.stop()`
    on SIGTERM. Keep `@hono/node-server` for Node; it is only imported, not
@@ -701,8 +703,9 @@ expectations.
 7. **Control, only after the Executors have run clean for several weeks.**
    - Use a `Bun.serve` entry (Appendix A) with `idleTimeout` above 45 s.
    - Keep `pg`, the AWS SDK, pino, and OTel.
-   - Make the wake survive on Bun: pass `timeout: false` (an undici `Agent`
-     has no effect there), or use the runtime-neutral immediate-`202` wake.
+   - Make the wake survive on Bun: confirm `node:http` holds the 11-minute
+     request open there, or send it with `fetch` and `timeout: false` (an
+     undici `Agent` has no effect on Bun).
    - Verify the 11-minute wake on Bun with a slow staging job before cutting
      over.
 
