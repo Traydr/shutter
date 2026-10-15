@@ -39,9 +39,9 @@ GET /v1/public/{space}/located/{sourceId}/{cap}?w=1200&q=75
 
 One durable Master Preview per source: a one-second video frame with a
 first-decodable-frame fallback, or the first PDF page, encoded as quality-90
-WebP within 1920px. Every responsive thumbnail is an Image Optimization of that
-master. Jobs are keyed by `(space, source, kind)`, so there is no client-side
-idempotency key and no duplicate work.
+WebP with its longest edge at most 1920px. Every responsive thumbnail is an
+Image Optimization of that master. Jobs are keyed by `(space, source, kind)`,
+so there is no client-side idempotency key and no duplicate work.
 
 ```http
 PUT /v1/spaces/{space}/sources/{sourceId}/previews/video

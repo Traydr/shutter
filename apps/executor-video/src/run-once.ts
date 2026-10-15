@@ -12,12 +12,14 @@ export type VideoExecutorConfig = ExecutorConfig;
 const videoProcessor: ExecutorProcessor = {
   kind: "video",
   process: ({ locator, directory, fetch, allowedSourceOrigins, signal }) =>
-    processVideoPreview(locator, join(directory, "source"), join(directory, "preview.webp"), {
-      fetch,
-      runCommand,
-      allowedSourceOrigins,
-      signal,
-    }),
+    processVideoPreview(
+      {
+        locator,
+        inputPath: join(directory, "source"),
+        outputPath: join(directory, "preview.webp"),
+      },
+      { fetch, runCommand, allowedSourceOrigins, signal },
+    ),
   failure: (error) =>
     error instanceof ProcessingFailure
       ? { retryable: error.retryable, code: error.code }

@@ -41,7 +41,9 @@ Terminal failures:
 - Source Capability or Locator expired.
 - Unsupported media type.
 - Source exceeds the configured type limit.
-- Corrupt media or password-protected PDF.
+- Corrupt media, or a PDF that needs a user password to open. A PDF with only
+  an owner password renders normally. A video is judged corrupt only from a
+  complete local copy, never from the ranges read through the proxy.
 - Invalid capability, source identity, or origin policy.
 
 Retryable failures:

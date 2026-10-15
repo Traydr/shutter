@@ -468,8 +468,21 @@ video jobs.
 
 The v1 Master Preview contract is fixed: video captures the frame at one second
 with a first-decodable-frame fallback, PDF renders the first page, and the result
-is a composition-preserving quality-90 WebP within 1920 pixels. Callers cannot
-select timestamps, pages, crop modes, or output formats.
+is a composition-preserving quality-90 WebP whose longest edge is at most 1920
+pixels, never enlarged. Callers cannot select timestamps, pages, crop modes, or
+output formats.
+
+The video Executor does not download a whole video to grab one frame (ADR
+0034). It serves the source to ffmpeg through a loopback HTTP proxy that
+forwards only the byte ranges ffmpeg reads, typically a few MiB of a large
+file. ffmpeg never receives the Source Locator: the proxy makes every origin
+request itself, so each redirect hop is checked against the allowed source
+origins as a download is, and the size limit is read from the origin's
+`Content-Range` total before any decoding. An origin that ignores `Range` gets
+an ordinary full download. The PDF Executor renders page one straight to its
+target size and pipes it into the WebP encoder. Source reads time out after 30
+seconds without bytes, or when the average falls below 1 MiB/s once that
+allowance is spent.
 
 Video sources are limited to 512 MiB and PDF sources to 128 MiB. Exceeding the
 type-specific ceiling is a terminal job failure.
@@ -522,7 +535,9 @@ registry or a resolver failed temporarily is released back to pending with its
 attempt unspent and becomes claimable again a minute later. A five-minute
 recovery sweep requeues expired leases and work whose initial wake was missed.
 Missing, unsupported, oversized, corrupt, or password-protected input is
-permanently terminal for that Source ID. Network, Railway, R2, and
+permanently terminal for that Source ID. A PDF counts as password-protected
+only when it needs a user password to open; one with only an owner password
+restricts permissions, not reading, and renders normally. Network, Railway, R2, and
 executor-process failures are retried automatically; consuming all five attempts
 produces the manually resubmittable terminal result `attempts_exhausted`.
 
