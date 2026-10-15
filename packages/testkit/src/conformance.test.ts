@@ -17,8 +17,11 @@ import {
   buildV2DeliveryUrl,
   buildV2PreviewJobUrl,
   buildV2SourcePurgeUrl,
+  EXECUTOR_WAKE_ROUTE,
   expandS3Resolver,
   expandTemplateResolver,
+  FAILURE_ACTIONS,
+  parseExecutorWakeReply,
   parseSourceReference,
   sourceFingerprint,
   verifyAccessToken,
@@ -29,6 +32,8 @@ import { describe, expect, it } from "vitest";
 import {
   CACHE_IDENTITY_EXPECTED,
   CACHE_IDENTITY_FIXTURE,
+  EXECUTOR_CONFLICT_FIXTURE,
+  EXECUTOR_WAKE_FIXTURE,
   RESOLVER_EXPECTED,
   runAccessTokenConformance,
   runCapabilityConformance,
@@ -163,6 +168,21 @@ describe("Node protocol conformance", () => {
     );
     await expect(buildSourceDeliveryCacheUrl(SOURCE_DELIVERY_CACHE_IDENTITY_FIXTURE)).resolves.toBe(
       CACHE_IDENTITY_EXPECTED.sourceDeliveryUrl,
+    );
+  });
+
+  it("matches the Executor wake fixtures", () => {
+    expect(EXECUTOR_WAKE_ROUTE).toBe(EXECUTOR_WAKE_FIXTURE.route);
+    for (const result of ["processed", "idle"] as const) {
+      const body = EXECUTOR_WAKE_FIXTURE.replies[result];
+      expect(parseExecutorWakeReply(JSON.parse(body))).toEqual({ result });
+      expect(JSON.stringify({ result })).toBe(body);
+    }
+    for (const body of EXECUTOR_WAKE_FIXTURE.malformedReplies) {
+      expect(() => parseExecutorWakeReply(JSON.parse(body)), body).toThrow();
+    }
+    expect(Object.keys(FAILURE_ACTIONS)).toEqual(
+      expect.arrayContaining([...EXECUTOR_CONFLICT_FIXTURE.claim.codes]),
     );
   });
 });

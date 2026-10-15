@@ -10,6 +10,10 @@ timestamps, and a testable destination stream. It is not trusted to redact
 events. The shared protocol sanitizer drops invalid or unknown fields first, and
 one declarative projection table then produces both the Pino and OTLP records.
 
+The Executors have no OTLP export. They write the same sanitized events to
+Railway stdout and stderr as one JSON line each, with the level as a label, so
+Railway keeps every event as a single entry at the right level.
+
 ## OpenObserve resources
 
 Use the `default` organization and `default` log stream:
@@ -103,7 +107,7 @@ The OTLP body is the stable event name. OpenObserve fields include:
 | `shutter.processing_token.hash` | Hashed processing token |
 | `shutter.outcome` | Accepted, ready, failed, idle, or busy |
 | `shutter.failure.code` | Allowlisted failure code |
-| `shutter.count` | Bounded count, such as excluded Capability Keys or disabled features |
+| `shutter.count` | Bounded count, such as excluded Capability Keys, disabled features, or the attempts one Executor wake took |
 | `shutter.features` | Disabled features and the variables that would enable them, identifiers only |
 
 Capabilities, locators, presigned URLs, authorization values, cookies, request

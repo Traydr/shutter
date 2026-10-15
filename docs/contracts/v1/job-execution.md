@@ -5,10 +5,33 @@
 - Maximum attempts: 5 total.
 - Retry delays after failure: 1 minute, 5 minutes, 30 minutes, 2 hours.
 - Hard attempt timeout: 10 minutes, including source download, rendering, and
-  R2 write.
+  R2 write. The Executor aborts the attempt at the deadline and reports a
+  retryable failure.
 - Processing lease: 15 minutes.
-- Heartbeat interval: 1 minute.
+- Heartbeat interval: 1 minute. A heartbeat answered `409 stale_attempt` aborts
+  the attempt without a further report; any other heartbeat failure is logged
+  (`executor.heartbeat_failed`) and the attempt continues.
+- Claim release: a claim Control cannot finish serving for a temporary reason
+  (registry or resolver unavailable) returns the job to pending without spending
+  its attempt, claimable again after 1 minute.
 - Recovery sweep: every 5 minutes.
+
+## Dispatch
+
+- Each invocation claims and settles at most one job and answers its wake with
+  `processed` or `idle`.
+- Control drains a kind by waking it while the answer is `processed`, with at
+  most one drain per kind and at most 500 wakes per drain. A request during a
+  drain joins it and costs one more wake, not a queued one.
+- A wake is retried after 1, 2, 4, 8, and 16 seconds on a refused or reset
+  connection, `502`, `503`, or a `202` from an Executor that predates draining.
+  `401`, any other `4xx`, `500`, a malformed reply, and a wake that outlives its
+  11-minute timeout are not retried.
+- An Executor runs one invocation when it boots. A wake during an invocation
+  waits for it and answers `processed` if it processed a job; otherwise the wake
+  runs its own invocation.
+- A retryable failure is woken at its `next_attempt_at`; the recovery sweep
+  catches anything a wake or timer missed.
 
 ## Failure classification
 

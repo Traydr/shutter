@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createServerEnv } from "./env/server.js";
+import type { WakeRequest } from "./executor-dispatch.js";
 import type { ControlLogger } from "./logging.js";
 import { buildControlRuntime, featureReport } from "./runtime.js";
 
@@ -29,13 +30,30 @@ const FULL_ENVIRONMENT = {
   PDF_EXECUTOR_TOKEN: TOKEN,
 };
 
-function build(environment: NodeJS.ProcessEnv) {
+function build(environment: NodeJS.ProcessEnv, logger: ControlLogger = NOOP_LOGGER) {
   return buildControlRuntime(createServerEnv(environment), {
-    logger: NOOP_LOGGER,
+    logger,
     fetch: vi.fn(),
+    wakeRequest: vi.fn<WakeRequest>(),
     now: () => new Date("2026-08-15T12:00:00.000Z"),
   });
 }
+
+function recordingLogger() {
+  const emit = vi.fn<ControlLogger["emit"]>();
+  const logger: ControlLogger = { emit, async shutdown() {} };
+
+  return { emit, logger };
+}
+
+const UNCONFIGURED_DISPATCH = {
+  event: "control.dispatch.failed",
+  kind: "pdf",
+  outcome: "failed",
+  failureCode: "service_unavailable",
+  count: 0,
+  errorType: "ExecutorNotConfigured",
+};
 
 function without(...names: (keyof typeof FULL_ENVIRONMENT)[]): NodeJS.ProcessEnv {
   const environment: NodeJS.ProcessEnv = { ...FULL_ENVIRONMENT };
@@ -106,40 +124,48 @@ describe("control runtime", () => {
   });
 
   it("keeps the Job API but disables its dispatch for an unconfigured executor", async () => {
-    const runtime = build(without("PDF_EXECUTOR_TOKEN"));
+    const { emit, logger } = recordingLogger();
+    const runtime = build(without("PDF_EXECUTOR_TOKEN"), logger);
     expect(runtime.features.executorDispatch).toEqual({ missing: ["PDF_EXECUTOR_TOKEN"] });
     expect(runtime.jobApiRuntime?.executorToken("pdf")).toBeUndefined();
     expect(runtime.jobApiRuntime?.executorToken("video")).toBe(TOKEN);
-    await expect(runtime.jobApiRuntime?.dispatch("pdf")).rejects.toThrow(
-      "pdf executor dispatch is not configured",
-    );
+    runtime.jobApiRuntime?.jobDispatch.dispatch("pdf");
+    await vi.waitFor(() => expect(emit.mock.calls).toEqual([["error", UNCONFIGURED_DISPATCH]]));
     await runtime.close();
   });
 
   it("authenticates an executor by its token even when Control cannot wake it", async () => {
     // Executors poll Control for work; a token without a wake URL must still
     // pass claim authentication, as it did before dispatch became a feature.
-    const runtime = build(without("PDF_EXECUTOR_BASE_URL"));
+    const { emit, logger } = recordingLogger();
+    const runtime = build(without("PDF_EXECUTOR_BASE_URL"), logger);
     expect(runtime.features.executorDispatch).toEqual({ missing: ["PDF_EXECUTOR_BASE_URL"] });
     expect(runtime.jobApiRuntime?.executorToken("pdf")).toBe(TOKEN);
-    await expect(runtime.jobApiRuntime?.dispatch("pdf")).rejects.toThrow(
-      "pdf executor dispatch is not configured",
-    );
+    runtime.jobApiRuntime?.jobDispatch.dispatch("pdf");
+    await vi.waitFor(() => expect(emit.mock.calls).toEqual([["error", UNCONFIGURED_DISPATCH]]));
     await runtime.close();
   });
 
-  it("wakes a configured executor through the injected fetch", async () => {
-    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 200 }));
+  it("drains a configured executor through the injected wake request", async () => {
+    const answers = ["processed", "idle"];
+    const wakeRequest = vi.fn<WakeRequest>(async () => ({
+      status: 200,
+      body: JSON.stringify({ result: answers.shift() }),
+    }));
     const runtime = buildControlRuntime(createServerEnv(FULL_ENVIRONMENT), {
       logger: NOOP_LOGGER,
-      fetch,
+      fetch: vi.fn(),
+      wakeRequest,
       now: () => new Date(),
     });
-    await runtime.jobApiRuntime?.dispatch("video");
-    expect(fetch).toHaveBeenCalledOnce();
-    const [url, init] = fetch.mock.calls[0] ?? [];
-    expect(String(url)).toBe("http://video.internal:3000/internal/v1/run-once");
-    expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${TOKEN}`);
+    runtime.jobApiRuntime?.jobDispatch.dispatch("video");
+    await vi.waitFor(() => expect(wakeRequest).toHaveBeenCalledTimes(2));
+    expect(
+      wakeRequest.mock.calls.map(([request]) => [request.url.toString(), request.token]),
+    ).toEqual([
+      ["http://video.internal:3000/internal/v1/run-once", TOKEN],
+      ["http://video.internal:3000/internal/v1/run-once", TOKEN],
+    ]);
     await runtime.close();
   });
 

@@ -35,6 +35,7 @@ export const OPERATIONAL_EVENT_NAMES = [
   "executor.completed",
   "executor.stale_completion",
   "executor.failed",
+  "executor.heartbeat_failed",
 ] as const;
 
 export type OperationalEventName = (typeof OPERATIONAL_EVENT_NAMES)[number];

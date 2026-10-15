@@ -6,14 +6,19 @@ import { DeleteObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client
 import { serve } from "@hono/node-server";
 import { faviconIcoResponse, faviconSvgResponse } from "@shutter/assets";
 import {
+  EXECUTOR_WAKE_ROUTE,
   type ExecutorClaim,
-  emitOperationalEvent,
+  type ExecutorInvocationResult,
+  type ExecutorWakeReply,
   type JobFailureCode,
+  type OperationalEvent,
   type OperationalEventFields,
+  operationalErrorType,
   operationalEvent,
   type PreviewKind,
   parseExecutorClaim,
   type SourceOriginRule,
+  sanitizeOperationalEvent,
 } from "@shutter/protocol";
 import { Hono } from "hono";
 
@@ -25,6 +30,19 @@ export {
   probeWebpDimensions,
   runCommand,
 } from "./media.js";
+
+/** How often a running attempt renews its fifteen-minute processing lease. */
+export const HEARTBEAT_INTERVAL_MS = 60_000;
+
+/**
+ * The whole attempt, download through upload, ends by here: the contract's
+ * ten-minute hard timeout, inside the processing lease and inside the
+ * eleven minutes Control waits on a wake.
+ */
+export const ATTEMPT_DEADLINE_MS = 10 * 60 * 1_000;
+
+/** One request to Control; a slower one counts as failed. */
+export const CONTROL_REQUEST_TIMEOUT_MS = 30_000;
 
 /** The part of the S3 client the executor depends on: sending put and delete commands. */
 export type MediaStoreClient = Pick<S3Client, "send">;
@@ -49,38 +67,144 @@ export interface ExecutorFailure {
   code?: JobFailureCode;
 }
 
+/** One attempt's work order for a processor. */
+export interface ProcessInput {
+  locator: string;
+  /** A private scratch directory, removed after the attempt. */
+  directory: string;
+  fetch: typeof globalThis.fetch;
+  allowedSourceOrigins: readonly SourceOriginRule[];
+  /**
+   * Aborts when Control reports the attempt stale or the attempt reaches its
+   * deadline. The processor stops its download and child processes and rejects.
+   */
+  signal: AbortSignal;
+}
+
 export interface ExecutorProcessor {
   kind: PreviewKind;
-  process(
-    locator: string,
-    directory: string,
-    fetch: typeof globalThis.fetch,
-    allowedSourceOrigins: readonly SourceOriginRule[],
-  ): Promise<ProcessedMasterPreview>;
+  process(input: ProcessInput): Promise<ProcessedMasterPreview>;
   /** Classifies whatever `process` threw. */
   failure(cause: unknown): ExecutorFailure;
+}
+
+/** Control answered a heartbeat with `409`: the job is no longer this attempt's. */
+class StaleAttempt extends Error {
+  constructor() {
+    super("Control no longer recognizes this attempt");
+    this.name = "StaleAttempt";
+  }
+}
+
+/** The attempt reached `ATTEMPT_DEADLINE_MS`. */
+class AttemptDeadlineExceeded extends Error {
+  constructor() {
+    super("attempt deadline exceeded");
+    this.name = "AttemptDeadlineExceeded";
+  }
 }
 
 async function control(config: ExecutorConfig, path: string, init: RequestInit): Promise<Response> {
   return config.fetch(new URL(path, config.controlBaseUrl), {
     ...init,
     headers: { authorization: `Bearer ${config.roleToken}`, ...init.headers },
+    signal: AbortSignal.timeout(CONTROL_REQUEST_TIMEOUT_MS),
   });
+}
+
+/** Settles as `work` does, or rejects with the abort reason as soon as `signal` aborts. */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+
+    if (signal.aborted) abort();
+
+    signal.addEventListener("abort", abort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", abort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", abort);
+        reject(error);
+      },
+    );
+  });
+}
+
+/**
+ * Renews the attempt's lease. A `409` means the job is no longer this
+ * attempt's, so the attempt is aborted; any other failure is logged and left
+ * to the next beat, since the lease outlasts many missed ones.
+ */
+async function sendHeartbeat(
+  config: ExecutorConfig,
+  path: string,
+  claim: ExecutorClaim,
+  attempt: AbortController,
+): Promise<void> {
+  const fields: OperationalEventFields = {
+    kind: claim.kind,
+    executionCycle: claim.executionCycle,
+    attemptNumber: claim.attemptNumber,
+    outcome: "failed",
+    failureCode: "service_unavailable",
+  };
+
+  try {
+    const response = await control(config, path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ processingToken: claim.processingToken }),
+    });
+    await response.body?.cancel();
+
+    if (response.ok) return;
+
+    if (response.status === 409) {
+      attempt.abort(new StaleAttempt());
+      return;
+    }
+
+    fields.httpStatusCode = response.status;
+  } catch (error) {
+    fields.errorType = operationalErrorType(error);
+  }
+
+  emitExecutorEvent(
+    "error",
+    await operationalEvent({
+      event: "executor.heartbeat_failed",
+      spaceId: claim.spaceId,
+      sourceId: claim.sourceId,
+      processingToken: claim.processingToken,
+      fields,
+    }),
+  );
 }
 
 export async function runExecutorOnce(
   config: ExecutorConfig,
   processor: ExecutorProcessor,
-): Promise<"idle" | "processed"> {
+): Promise<ExecutorInvocationResult> {
   const claimed = await control(config, `/internal/v1/executors/${processor.kind}/claim`, {
     method: "POST",
   });
   if (claimed.status === 204) return "idle";
+
+  // Control settled a job for good while serving the claim (its resolver is
+  // gone, its capability expired): that job is done with, and there may be more.
+  if (claimed.status === 409) {
+    await claimed.body?.cancel();
+    return "processed";
+  }
+
   if (!claimed.ok) throw new Error(`Control claim failed with ${claimed.status}`);
   const claim = parseExecutorClaim(await claimed.json());
   if (claim.kind !== processor.kind) throw new Error("Control returned the wrong preview kind");
   const startedAt = Date.now();
-  emitOperationalEvent(
+  emitExecutorEvent(
     "info",
     await operationalEvent({
       event: "executor.claimed",
@@ -99,19 +223,29 @@ export async function runExecutorOnce(
   let uploaded = false;
   let objectEtag: string | undefined;
   const transition = `/internal/v1/executors/${processor.kind}/jobs/${encodeURIComponent(claim.spaceId)}/${encodeURIComponent(claim.sourceId)}`;
+  const attempt = new AbortController();
+  const deadline = setTimeout(
+    () => attempt.abort(new AttemptDeadlineExceeded()),
+    ATTEMPT_DEADLINE_MS,
+  );
   const heartbeat = setInterval(() => {
-    void control(config, `${transition}/heartbeat`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ processingToken: claim.processingToken }),
-    });
-  }, 60_000);
+    // A heartbeat never throws into the process: Control being briefly
+    // unreachable must not crash an Executor mid-job.
+    void sendHeartbeat(config, `${transition}/heartbeat`, claim, attempt).catch(() => undefined);
+  }, HEARTBEAT_INTERVAL_MS);
+
   try {
-    const preview = await processor.process(
-      claim.locator,
-      directory,
-      config.fetch,
-      claim.allowedSourceOrigins,
+    // Raced against the signal too, so the deadline holds even for work that
+    // does not stop when asked.
+    const preview = await untilAborted(
+      processor.process({
+        locator: claim.locator,
+        directory,
+        fetch: config.fetch,
+        allowedSourceOrigins: claim.allowedSourceOrigins,
+        signal: attempt.signal,
+      }),
+      attempt.signal,
     );
     const put = await config.s3.send(
       new PutObjectCommand({
@@ -120,6 +254,7 @@ export async function runExecutorOnce(
         Body: preview.bytes,
         ContentType: "image/webp",
       }),
+      { abortSignal: attempt.signal },
     );
     uploaded = true;
     objectEtag = put.ETag;
@@ -147,7 +282,17 @@ export async function runExecutorOnce(
     await emit("executor.completed", "info", claim, startedAt);
     return "processed";
   } catch (error) {
-    const failure = processor.failure(error);
+    // Control has already moved the job on: a fail report would be refused,
+    // and an upload stays put as after any ambiguous completion.
+    if (attempt.signal.reason instanceof StaleAttempt) {
+      await emit("executor.failed", "error", claim, startedAt, "stale_attempt");
+      return "processed";
+    }
+
+    const failure: ExecutorFailure =
+      attempt.signal.reason instanceof AttemptDeadlineExceeded
+        ? { retryable: true }
+        : processor.failure(error);
     await emit("executor.failed", "error", claim, startedAt, failure.code);
     let failed: Response;
     try {
@@ -164,6 +309,7 @@ export async function runExecutorOnce(
       await deleteUploadedAttempt(config, claim.outputKey, objectEtag);
     return "processed";
   } finally {
+    clearTimeout(deadline);
     clearInterval(heartbeat);
     await rm(directory, { recursive: true, force: true });
   }
@@ -188,6 +334,11 @@ async function deleteUploadedAttempt(
   }
 }
 
+/** Writes one sanitized event as a single JSON line, so Railway keeps it whole and reads its level. */
+function emitExecutorEvent(level: "info" | "error", event: OperationalEvent): void {
+  console[level](JSON.stringify({ level, ...sanitizeOperationalEvent(event) }));
+}
+
 async function emit(
   event: "executor.completed" | "executor.failed" | "executor.stale_completion",
   level: "info" | "error",
@@ -203,7 +354,7 @@ async function emit(
     outcome: event === "executor.completed" ? "ready" : "failed",
   };
   if (failureCode !== undefined) fields.failureCode = failureCode;
-  emitOperationalEvent(
+  emitExecutorEvent(
     level,
     await operationalEvent({
       event,
@@ -215,7 +366,7 @@ async function emit(
   );
 }
 
-export type ExecutorRunner = (config: ExecutorConfig) => Promise<"idle" | "processed">;
+export type ExecutorRunner = (config: ExecutorConfig) => Promise<ExecutorInvocationResult>;
 
 function credentialDigest(value: string): Uint8Array {
   return createHash("sha256").update(value, "utf8").digest();
@@ -230,40 +381,94 @@ function authorizedWake(header: string | undefined, expectedToken: string): bool
   );
 }
 
-export function createExecutorApp(
+export interface Executor {
+  /** Health, favicons, and the authenticated `POST /internal/v1/run-once` wake. */
+  app: Hono;
+  /**
+   * Runs one invocation as the process starts, so the wake that started a
+   * sleeping Executor still gets a job done even if Railway refused that
+   * request while the container booted. Resolves once it settles; a no-op
+   * without configuration.
+   */
+  boot(): Promise<void>;
+}
+
+function emitInvocationFailure(kind: PreviewKind): void {
+  emitExecutorEvent("error", {
+    event: "executor.failed",
+    kind,
+    outcome: "failed",
+    failureCode: "service_unavailable",
+  });
+}
+
+/**
+ * The Executor process: invocations run one at a time (ADR 0004), whether a
+ * wake or the boot invocation started them. A wake that arrives during
+ * another invocation waits for it. If that invocation processed a job, the
+ * wake answers `processed` at once and Control wakes again; if it found
+ * nothing or failed, the wake runs an invocation of its own, since its job
+ * may have been submitted after that claim.
+ */
+export function createExecutor(
   kind: PreviewKind,
   config?: ExecutorConfig,
   run?: ExecutorRunner,
-): Hono {
+): Executor {
   const app = new Hono();
-  let running = false;
+  let inFlight: Promise<ExecutorInvocationResult> | undefined;
+
+  const invoke = async (
+    configured: ExecutorConfig,
+    runner: ExecutorRunner,
+  ): Promise<ExecutorInvocationResult> => {
+    while (inFlight !== undefined) {
+      const settled = await inFlight.then(
+        (result): ExecutorInvocationResult | "failed" => result,
+        () => "failed",
+      );
+      if (settled === "processed") return "processed";
+    }
+
+    const current = runner(configured).finally(() => {
+      inFlight = undefined;
+    });
+    inFlight = current;
+
+    return current;
+  };
+
   app.get("/favicon.svg", faviconSvgResponse);
   app.get("/favicon.ico", faviconIcoResponse);
   app.get("/healthz", (context) => context.json({ ok: true, service: `executor-${kind}` }));
-  app.post("/internal/v1/run-once", async (context) => {
+  app.post(EXECUTOR_WAKE_ROUTE, async (context) => {
     if (
       config === undefined ||
       run === undefined ||
       !authorizedWake(context.req.header("authorization"), config.roleToken)
     )
       return context.json({ error: { code: "unauthorized" } }, 401);
-    if (running) return context.json({ result: "busy" }, 202);
-    running = true;
+
     try {
-      return context.json({ result: await run(config) });
+      return context.json({ result: await invoke(config, run) } satisfies ExecutorWakeReply);
     } catch {
-      emitOperationalEvent("error", {
-        event: "executor.failed",
-        kind,
-        outcome: "failed",
-        failureCode: "service_unavailable",
-      });
+      emitInvocationFailure(kind);
       return context.json({ error: { code: "service_unavailable" } }, 503);
-    } finally {
-      running = false;
     }
   });
-  return app;
+
+  return {
+    app,
+    async boot() {
+      if (config === undefined || run === undefined) return;
+
+      try {
+        await invoke(config, run);
+      } catch {
+        emitInvocationFailure(kind);
+      }
+    },
+  };
 }
 
 export function createExecutorConfigFromEnv(): ExecutorConfig | undefined {
@@ -299,19 +504,20 @@ export function createExecutorConfigFromEnv(): ExecutorConfig | undefined {
   };
 }
 
-export function serveExecutorApp(
+/** Serves the Executor and starts its boot invocation. */
+export function serveExecutor(
   kind: PreviewKind,
-  app: Hono,
+  executor: Executor,
 ): { close(callback?: (error?: Error) => void): void } {
   const portValue = process.env.PORT ?? "3000";
   if (!/^[1-9]\d*$/.test(portValue)) throw new Error("PORT must be a positive integer");
   const port = Number(portValue);
   if (!Number.isSafeInteger(port) || port > 65_535) throw new Error("PORT is out of range");
-  const server = serve({ fetch: app.fetch, port });
+  const server = serve({ fetch: executor.app.fetch, port });
   function shutdown() {
     server.close((error) => {
       if (error) {
-        emitOperationalEvent("error", {
+        emitExecutorEvent("error", {
           event: "executor.failed",
           kind,
           outcome: "failed",
@@ -323,5 +529,6 @@ export function serveExecutorApp(
   }
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
+  void executor.boot();
   return server;
 }

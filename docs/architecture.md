@@ -409,10 +409,35 @@ the Media Store. Unpic and imgproxy then produce normalized responsive image
 sizes from that master through the ordinary image-delivery pipeline rather than
 scheduling size-specific video or PDF work. Each serverless Executor claims and
 completes at most one job per invocation; it
-records a terminal outcome before returning. Control serializes wake calls
-independently for each Executor kind, and only a completed `200` wake counts as
-successful; a `202` busy response remains a missed dispatch. A recovery sweep
-re-wakes jobs whose initial dispatch was missed.
+records a terminal outcome before returning, and its `200` wake reply says
+whether it `processed` a job or found the queue `idle`.
+
+Control drains each Executor kind (ADR 0032): one drain per kind wakes it again
+while the reply is `processed` and stops on `idle`, after a failed wake, or
+after 500 wakes. A submission that creates or reactivates a job, a retry
+coming due, or the recovery sweep each request a drain; a request during a
+drain joins it and makes it wake once more before it may stop, so a burst of
+submissions costs one drain. One wake is retried with backoff (1, 2, 4, 8, 16
+seconds) on a refused or reset connection, `502`, or `503`, which is how a
+sleeping Railway service answers while it boots, but never on `401` or another
+client error. Wakes use `node:http`, whose wait for the reply has no
+response-header timeout, on a fresh connection each time, so a long job does
+not look like a failed wake and no idle socket outlives it.
+
+An Executor also runs one invocation as it boots, so the wake that started it
+gets a job done even if Railway refused that request. Invocations run one at a
+time: a wake that arrives during one waits for it, answers `processed` if it
+processed a job, and otherwise runs its own invocation, since its job may have
+been submitted after that claim. A boot claim and a few requests to Control
+are an idle Executor's only traffic, so Railway can put it back to sleep.
+
+Retryable failures are woken at their `next_attempt_at` by an in-process timer
+in Control: one per kind, set for the earliest known retry and read back from
+Postgres after each timed drain and each sweep. The recovery sweep runs every
+five minutes as the net under all of this. It expires overdue jobs, requeues
+expired leases, requests a drain for every kind with runnable work, and resets
+the retry timers, without waiting for the drains it starts, so one kind's
+unreachable Executor never holds back the other kind or the next sweep.
 
 Postgres stores the submitted Source Capability as its original opaque,
 authenticated-encryption blob, never as a plaintext Source Locator. When the
@@ -470,7 +495,14 @@ purged or changed bytes are submitted under a new Source ID.
 
 Each job receives at most five attempts with retry delays of one minute, five
 minutes, thirty minutes, and two hours. An attempt has a ten-minute hard timeout,
-a fifteen-minute processing lease, and a one-minute heartbeat. A five-minute
+a fifteen-minute processing lease, and a one-minute heartbeat. The Executor
+enforces the timeout over the whole attempt, download through upload, by
+aborting the work and reporting a retryable failure; a heartbeat answered
+`409` means the job is no longer this attempt's, and aborts it with nothing
+left to report. A heartbeat Control cannot answer is logged and retried at the
+next beat, never fatal. A claim Control cannot finish serving because the
+registry or a resolver failed temporarily is released back to pending with its
+attempt unspent and becomes claimable again a minute later. A five-minute
 recovery sweep requeues expired leases and work whose initial wake was missed.
 Missing, unsupported, oversized, corrupt, or password-protected input is
 permanently terminal for that Source ID. Network, Railway, R2, and

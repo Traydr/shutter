@@ -7,6 +7,7 @@ import type {
   ExecutorCompleteRequest,
   ExecutorFailRequest,
   ExecutorHeartbeatRequest,
+  ExecutorWakeReply,
   FailedJobRepresentation,
   JobFailureCode,
   PreviewJobSubmission,
@@ -70,6 +71,11 @@ const executorFailRequestSchema = z.strictObject({
   code: failureCodeSchema.optional(),
 });
 
+/** The Executor route Control wakes it with: one invocation per authenticated `POST`. */
+export const EXECUTOR_WAKE_ROUTE = "/internal/v1/run-once";
+
+const executorWakeReplySchema = z.object({ result: z.enum(["processed", "idle"]) });
+
 function parseWith<Output>(
   schema: z.ZodType<Output>,
   input: JsonValue,
@@ -106,6 +112,10 @@ export function parseExecutorFailRequest(input: JsonValue): ExecutorFailRequest 
   };
   if (parsed.code !== undefined) request.code = parsed.code;
   return request;
+}
+
+export function parseExecutorWakeReply(input: JsonValue): ExecutorWakeReply {
+  return parseWith(executorWakeReplySchema, input, "request_invalid", "executor wake reply");
 }
 
 export function parsePreviewJobSubmissionV2(input: JsonValue): void {

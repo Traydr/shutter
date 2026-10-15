@@ -1,9 +1,11 @@
 import { issueSourceCapability, type JsonObject } from "@shutter/protocol";
+import { EXECUTOR_CONFLICT_FIXTURE } from "@shutter/testkit";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLAIM_LOCATOR_LIFETIME_SECONDS, createJobApi, type JobApiRuntime } from "./job-api.js";
 import type { ControlLogger } from "./logging.js";
 import { createPostgresTestLifecycle, type PostgresTestLifecycle } from "./postgres-test.js";
 import type { PostgresPreviewJobLifecycle } from "./preview-job-lifecycle.js";
+import type { DispatchRequests } from "./recovery.js";
 import type { SourcePurge } from "./source-purge.js";
 import { createSourceResolverService } from "./source-resolvers.js";
 import { MemorySpaceRegistry } from "./spaces/memory-registry.js";
@@ -35,7 +37,7 @@ async function capability(): Promise<string> {
 
 function runtime(
   lifecycle: PostgresPreviewJobLifecycle,
-  dispatch = vi.fn(async () => {}),
+  dispatch: DispatchRequests["dispatch"] = vi.fn(),
   sourcePurge?: SourcePurge,
   logger: ControlLogger = NOOP_LOGGER,
 ): JobApiRuntime {
@@ -45,7 +47,7 @@ function runtime(
     now: () => NOW,
     spaceRegistry,
     executorToken: (kind) => (kind === "video" ? VIDEO_TOKEN : undefined),
-    dispatch,
+    jobDispatch: { dispatch, scheduleDispatch: vi.fn<DispatchRequests["scheduleDispatch"]>() },
     sourceResolvers: createSourceResolverService({
       credentials: spaceRegistry,
       presigner: {
@@ -158,6 +160,19 @@ describe("job API", () => {
     );
     expect(completed.status).toBe(204);
 
+    const stale = await app.request(
+      "http://shutter.test/internal/v1/executors/video/jobs/example-private/source-1/heartbeat",
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${VIDEO_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ processingToken: work.processingToken }),
+      },
+    );
+    expect(stale.status).toBe(EXECUTOR_CONFLICT_FIXTURE.heartbeat.status);
+    await expect(stale.json()).resolves.toEqual({
+      error: { code: EXECUTOR_CONFLICT_FIXTURE.heartbeat.code },
+    });
+
     const ready = await app.request(resource, {
       headers: { authorization: `Bearer ${SPACE_TOKEN}` },
     });
@@ -172,6 +187,54 @@ describe("job API", () => {
         format: "webp",
       },
     });
+  });
+
+  it("drains for a new job but not for a repeated submission of a pending one", async () => {
+    const dispatch = vi.fn<DispatchRequests["dispatch"]>();
+    const app = createJobApi(runtime(lifecycle, dispatch));
+    const submit = async () =>
+      app.request("http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video", {
+        method: "PUT",
+        headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ sourceCapability: await capability() }),
+      });
+
+    expect((await submit()).status).toBe(202);
+    expect((await submit()).status).toBe(202);
+
+    expect(dispatch.mock.calls).toEqual([["video"]]);
+  });
+
+  it("schedules a wake for the retry a failed attempt was given", async () => {
+    const api = runtime(lifecycle);
+    const scheduleDispatch = vi.fn<DispatchRequests["scheduleDispatch"]>();
+    api.jobDispatch.scheduleDispatch = scheduleDispatch;
+    const app = createJobApi(api);
+    await app.request(
+      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video",
+      {
+        method: "PUT",
+        headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ sourceCapability: await capability() }),
+      },
+    );
+    const claim = await app.request("http://shutter.test/internal/v1/executors/video/claim", {
+      method: "POST",
+      headers: { authorization: `Bearer ${VIDEO_TOKEN}` },
+    });
+    const work: JsonObject = await claim.json();
+
+    const failed = await app.request(
+      "http://shutter.test/internal/v1/executors/video/jobs/example-private/source-1/fail",
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${VIDEO_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ processingToken: work.processingToken, retryable: true }),
+      },
+    );
+
+    expect(failed.status).toBe(204);
+    expect(scheduleDispatch.mock.calls).toEqual([["video", new Date(NOW.getTime() + 60_000)]]);
   });
 
   it("runs a v2 resolver-source job with no capability and a locator resolved at claim", async () => {
@@ -315,13 +378,15 @@ describe("job API", () => {
     );
   });
 
-  it("leaves a claim to its lease when resolution fails temporarily", async () => {
+  it("releases a claim whose resolution fails temporarily, its attempt unspent", async () => {
     const api = runtime(lifecycle);
     api.sourceResolvers = {
       resolve: async () => {
         throw new Error("registry unavailable");
       },
     };
+    const scheduleDispatch = vi.fn<DispatchRequests["scheduleDispatch"]>();
+    api.jobDispatch.scheduleDispatch = scheduleDispatch;
     const app = createJobApi(api);
     const resource =
       "http://shutter.test/v2/spaces/example-public/sources/media%2Fflaky.mp4/previews/video";
@@ -339,11 +404,18 @@ describe("job API", () => {
       headers: { authorization: `Bearer ${PUBLIC_TOKEN}` },
     });
     expect(polled.status).toBe(202);
-    await expect(polled.json()).resolves.toEqual({ status: "processing" });
+    await expect(polled.json()).resolves.toEqual({ status: "pending" });
+    await expect(
+      lifecycle.read({ spaceId: "example-public", sourceId: "media/flaky.mp4", kind: "video" }),
+    ).resolves.toMatchObject({ status: "pending", attemptNumber: 0 });
+    expect(scheduleDispatch.mock.calls).toEqual([["video", new Date(NOW.getTime() + 60_000)]]);
   });
 
   it("fails a resolver job at claim when its resolver has gone", async () => {
-    const app = createJobApi(runtime(lifecycle));
+    const emit = vi.fn<ControlLogger["emit"]>();
+    const app = createJobApi(
+      runtime(lifecycle, undefined, undefined, { emit, async shutdown() {} }),
+    );
     const resource =
       "http://shutter.test/v2/spaces/example-public/sources/media%2Fgone.mp4/previews/video";
     expect(
@@ -360,8 +432,17 @@ describe("job API", () => {
       method: "POST",
       headers: { authorization: `Bearer ${VIDEO_TOKEN}` },
     });
-    expect(claim.status).toBe(409);
+    expect(claim.status).toBe(EXECUTOR_CONFLICT_FIXTURE.claim.status);
     await expect(claim.json()).resolves.toEqual({ error: { code: "configuration_error" } });
+    expect(emit).toHaveBeenCalledWith(
+      "info",
+      expect.objectContaining({
+        event: "control.job.failed",
+        kind: "video",
+        outcome: "failed",
+        failureCode: "configuration_error",
+      }),
+    );
     const failed = await app.request(resource, {
       headers: { authorization: `Bearer ${PUBLIC_TOKEN}` },
     });
@@ -414,35 +495,6 @@ describe("job API", () => {
       locator: "https://sources.example.com/private/originals/source-1.mp4",
     });
     expect((await app.request(resource)).status).toBe(404);
-  });
-
-  it("keeps a durable submission accepted when its initial dispatch fails", async () => {
-    const dispatch = vi.fn(async () => {
-      throw new Error("executor unavailable");
-    });
-    const emit = vi.fn<ControlLogger["emit"]>();
-    const app = createJobApi(
-      runtime(lifecycle, dispatch, undefined, { emit, async shutdown() {} }),
-    );
-    const response = await app.request(
-      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video",
-      {
-        method: "PUT",
-        headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
-        body: JSON.stringify({ sourceCapability: await capability() }),
-      },
-    );
-
-    expect(response.status).toBe(202);
-    await vi.waitFor(() =>
-      expect(emit).toHaveBeenCalledWith(
-        "error",
-        expect.objectContaining({ event: "control.dispatch.failed" }),
-      ),
-    );
-    expect(
-      await lifecycle.read({ spaceId: "example-private", sourceId: "source-1", kind: "video" }),
-    ).toMatchObject({ status: "pending" });
   });
 
   it("authenticates, repeats, and sanitizes Source Purge", async () => {
@@ -508,8 +560,11 @@ describe("job API", () => {
     unavailable.mockRestore();
   });
 
-  it("answers an executor claim with 503 when the registry is unavailable", async () => {
-    const app = createJobApi(runtime(lifecycle));
+  it("answers an executor claim with 503 and releases it when the registry is unavailable", async () => {
+    const api = runtime(lifecycle);
+    const scheduleDispatch = vi.fn<DispatchRequests["scheduleDispatch"]>();
+    api.jobDispatch.scheduleDispatch = scheduleDispatch;
+    const app = createJobApi(api);
     const submitted = await app.request(
       "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video",
       {
@@ -530,5 +585,37 @@ describe("job API", () => {
     expect(claim.status).toBe(503);
     await expect(claim.json()).resolves.toEqual({ error: { code: "service_unavailable" } });
     unavailable.mockRestore();
+    await expect(
+      lifecycle.read({ spaceId: "example-private", sourceId: "source-1", kind: "video" }),
+    ).resolves.toMatchObject({ status: "pending", attemptNumber: 0 });
+    expect(scheduleDispatch.mock.calls).toEqual([["video", new Date(NOW.getTime() + 60_000)]]);
+  });
+
+  it("settles a claim whose Space no longer exists with 409", async () => {
+    const app = createJobApi(runtime(lifecycle));
+    await app.request(
+      "http://shutter.test/v1/spaces/example-private/sources/source-1/previews/video",
+      {
+        method: "PUT",
+        headers: { authorization: `Bearer ${SPACE_TOKEN}`, "content-type": "application/json" },
+        body: JSON.stringify({ sourceCapability: await capability() }),
+      },
+    );
+
+    const missing = vi.spyOn(spaceRegistry, "getSpaceAuthorization").mockResolvedValue(undefined);
+    const claim = await app.request("http://shutter.test/internal/v1/executors/video/claim", {
+      method: "POST",
+      headers: { authorization: `Bearer ${VIDEO_TOKEN}` },
+    });
+    missing.mockRestore();
+
+    expect(claim.status).toBe(EXECUTOR_CONFLICT_FIXTURE.claim.status);
+    await expect(claim.json()).resolves.toEqual({ error: { code: "configuration_error" } });
+    await expect(
+      lifecycle.read({ spaceId: "example-private", sourceId: "source-1", kind: "video" }),
+    ).resolves.toMatchObject({
+      status: "failed",
+      representation: { failure: { code: "configuration_error" } },
+    });
   });
 });

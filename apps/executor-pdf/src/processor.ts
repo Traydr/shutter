@@ -17,6 +17,7 @@ export interface PdfProcessorDependencies {
   fetch: typeof globalThis.fetch;
   runCommand: CommandRunner;
   allowedSourceOrigins: readonly SourceOriginRule[];
+  signal?: AbortSignal;
 }
 
 export async function processPdfPreview(

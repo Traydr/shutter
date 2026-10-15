@@ -17,6 +17,7 @@ export interface VideoProcessorDependencies {
   fetch: typeof globalThis.fetch;
   runCommand: CommandRunner;
   allowedSourceOrigins: readonly SourceOriginRule[];
+  signal?: AbortSignal;
 }
 
 export interface ProcessedVideoPreview {
