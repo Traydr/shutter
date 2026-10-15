@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "packages": {
+    "pnpm": "12.10.1"
+  },
+  "steps": {
+    "install": {
+      "variables": {
+        "PNPM_CONFIG_CACHE_DIR": "/tmp/pnpm-cache"
+      },
+      "deployOutputs": []
+    },
+    "build": {
+      "variables": {
+        "PNPM_CONFIG_CACHE_DIR": "/tmp/pnpm-cache"
+      }
+    }
+  }
+}

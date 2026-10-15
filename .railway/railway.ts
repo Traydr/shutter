@@ -17,7 +17,14 @@ import { parseDeploymentInput } from "./deployment-input.ts";
 
 const nodePort = 8080;
 const imgproxyPort = 8080;
-const workspaceWatchPatterns = ["/package.json", "/pnpm-lock.yaml", "/pnpm-workspace.yaml"];
+/** imgproxy's budget for one whole request: queueing, the source download, and rendering. */
+const imgproxyTimeoutSeconds = 45;
+const workspaceWatchPatterns = [
+  "/package.json",
+  "/pnpm-lock.yaml",
+  "/pnpm-workspace.yaml",
+  "/railpack.json",
+];
 const executorWatchPatterns = [
   "/packages/executor-runtime/**",
   "/packages/protocol/**",
@@ -55,6 +62,9 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
     ? preserved(["IMGPROXY_KEY", "IMGPROXY_SALT", "IMGPROXY_SECRET"])
     : {};
 
+  // imgproxy fetches every source over HTTPS, Master Previews included: Control
+  // presigns those R2 reads itself. The renderer of untrusted images therefore
+  // holds no Media Store credential.
   const Imgproxy = service("Shutter-Imgproxy", {
     source: image("ghcr.io/imgproxy/imgproxy:v4.0.17", {
       autoUpdates: { type: "disabled" },
@@ -62,6 +72,15 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
     replicas: { [input.railwayRegion]: 1 },
     healthcheck: "/health",
     healthcheckTimeout: 30,
+    deploy: {
+      // On SIGTERM imgproxy stops accepting and finishes in-flight renders, each
+      // bounded by IMGPROXY_TIMEOUT, so a redeploy (an allowlist change, for
+      // one) only has to wait that long before Railway's SIGKILL.
+      drainingSeconds: imgproxyTimeoutSeconds + 5,
+      // Without a cap the container may use the plan's maximum, and imgproxy
+      // sizes its default worker pool from the CPUs it is allowed.
+      limitOverride: { containers: { cpu: 2, memoryBytes: 2 * 1024 ** 3 } },
+    },
     networking: { privateNetworkEndpoint: "shutter-imgproxy" },
     env: {
       IMGPROXY_ALLOWED_SOURCES: input.imgproxyAllowedSources,
@@ -72,6 +91,9 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
       IMGPROXY_BIND: `:${imgproxyPort}`,
       IMGPROXY_DOWNLOAD_TIMEOUT: "30",
       IMGPROXY_IGNORE_SSL_VERIFICATION: "false",
+      // The image's entrypoint preloads its bundled jemalloc, which returns
+      // memory after a burst of large decodes better than glibc malloc.
+      IMGPROXY_MALLOC: "jemalloc",
       IMGPROXY_MAX_ANIMATION_FRAMES: "1",
       IMGPROXY_MAX_REDIRECTS: "2",
       IMGPROXY_MAX_RESULT_DIMENSION: "3840",
@@ -80,10 +102,12 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
       IMGPROXY_PNG_UNLIMITED: "false",
       IMGPROXY_SIGNATURE_SIZE: "32",
       IMGPROXY_SVG_UNLIMITED: "false",
-      IMGPROXY_TIMEOUT: "45",
+      IMGPROXY_TIMEOUT: String(imgproxyTimeoutSeconds),
       IMGPROXY_TTL: "0",
+      // Concurrent image requests, download included; the rest queue within
+      // IMGPROXY_TIMEOUT. The default, two per allowed CPU, follows the host.
+      IMGPROXY_WORKERS: "4",
       ...imgproxyCredentialEnv,
-      ...s3Env,
     },
   });
 
@@ -128,6 +152,11 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
       }
     : {};
 
+  // The Node services build with Railpack and the repository's railpack.json.
+  // Pruning drops devDependencies from the image once the build is done; see
+  // docs/research/railpack-images.md for what it keeps.
+  const railpackEnv = { RAILPACK_PRUNE_DEPS: "true" };
+
   const controlEnv: ServiceEnv = {
     CLOUDFLARE_ZONE_ID: input.cloudflareZoneId,
     DATABASE_URL: Jobs.env.DATABASE_URL,
@@ -141,8 +170,13 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
     ...controlSecretEnv,
     ...observabilityEnv,
     ...s3Env,
+    ...railpackEnv,
   };
 
+  // Every Node service runs its built entrypoint with `node` rather than
+  // `pnpm --filter … start`, from the repository root (Railpack's /app). Node is
+  // then PID 1 and receives Railway's SIGTERM itself, and no package-manager
+  // process stays resident beside it.
   const Control = service("Shutter-Control", {
     source: repository,
     build: {
@@ -156,8 +190,8 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
         ...workspaceWatchPatterns,
       ],
     },
-    start: "pnpm --filter @shutter/control start",
-    preDeploy: "pnpm --filter @shutter/control db:migrate",
+    start: "node apps/control/dist/index.js",
+    preDeploy: "node apps/control/dist/migrate.js",
     replicas: { [input.railwayRegion]: 1 },
     healthcheck: "/healthz",
     healthcheckTimeout: 30,
@@ -186,7 +220,10 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
         ...workspaceWatchPatterns,
       ],
     },
-    start: "pnpm --filter @shutter/admin start",
+    // Railpack bakes CI=true into the image, and Nitro's server (srvx) installs
+    // no SIGTERM handler under CI. As PID 1, Node would then ignore SIGTERM
+    // until Railway's SIGKILL, so the admin application starts without it.
+    start: "env -u CI node apps/admin/.output/server/index.mjs",
     replicas: { [input.railwayRegion]: 1 },
     deploy: { sleepApplication: true },
     networking: { privateNetworkEndpoint: "shutter-admin" },
@@ -197,6 +234,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
       NODE_ENV: "production",
       PORT: String(nodePort),
       ...adminSecretEnv,
+      ...railpackEnv,
     },
   });
 
@@ -206,6 +244,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
       NODE_ENV: "production",
       PORT: String(nodePort),
       ...s3Env,
+      ...railpackEnv,
     };
     if (seeded) values.EXECUTOR_ROLE_TOKEN = ref(Control, roleToken);
     return values;
@@ -219,7 +258,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
       buildCommand: "pnpm --filter @shutter/executor-video... build",
       watchPatterns: ["/apps/executor-video/**", ...executorWatchPatterns],
     },
-    start: "pnpm --filter @shutter/executor-video start",
+    start: "node apps/executor-video/dist/index.js",
     replicas: { [input.railwayRegion]: 1 },
     healthcheck: "/healthz",
     healthcheckTimeout: 30,
@@ -239,7 +278,7 @@ export function buildRailwayProject(environment: NodeJS.ProcessEnv) {
       buildCommand: "pnpm --filter @shutter/executor-pdf... build",
       watchPatterns: ["/apps/executor-pdf/**", ...executorWatchPatterns],
     },
-    start: "pnpm --filter @shutter/executor-pdf start",
+    start: "node apps/executor-pdf/dist/index.js",
     replicas: { [input.railwayRegion]: 1 },
     healthcheck: "/healthz",
     healthcheckTimeout: 30,

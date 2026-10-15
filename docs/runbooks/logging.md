@@ -208,7 +208,9 @@ are no longer acceptable.
 
 ## Shutdown budget
 
-Railway gives Control 15 seconds to drain. Control reserves at most three seconds
+Railway gives Control 15 seconds to drain. Control starts as `node` itself
+rather than through pnpm, so it is PID 1 and Railway's SIGTERM reaches it
+directly. Control reserves at most three seconds
 for HTTP close before starting log shutdown, then reserves 5.5 seconds for the
 OTLP flush. A phase exceeding its budget does not by itself mark the deployment
 failed; only a real close or flush rejection sets a failing exit code. The
