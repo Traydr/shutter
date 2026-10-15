@@ -23,13 +23,29 @@ import {
 import { Hono } from "hono";
 
 export {
+  type Command,
+  CommandFailure,
+  type CommandOptions,
   type CommandRunner,
-  downloadSource,
+  MASTER_PREVIEW_ENCODER_OPTIONS,
+  MASTER_PREVIEW_SCALE_FILTER,
+  type MediaDimensions,
+  type PdfFirstPage,
   ProcessingFailure,
-  parseFfprobeDimensions,
-  probeWebpDimensions,
+  parsePdfInfo,
+  readWebpDimensions,
   runCommand,
 } from "./media.js";
+export {
+  downloadSource,
+  openRangeSource,
+  PROXY_MAX_SILENCE_MS,
+  type ProxyOutcome,
+  type RangeSource,
+  type SourceDownload,
+  SourceProxy,
+  type SourceRequest,
+} from "./source.js";
 
 /** How often a running attempt renews its fifteen-minute processing lease. */
 export const HEARTBEAT_INTERVAL_MS = 60_000;

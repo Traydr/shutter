@@ -87,8 +87,9 @@ pipeline, unsigned cache option
 **Master Preview**:
 The single high-quality stored image materialized for a video or PDF Source
 Object: a one-second video frame with first-decodable-frame fallback, or the
-first PDF page, encoded as a quality-90 WebP within 1920 pixels. Responsive
-thumbnail sizes are Image Optimizations of this master.
+first PDF page, encoded as a quality-90 WebP whose longest edge is at most 1920
+pixels, never enlarged. Responsive thumbnail sizes are Image Optimizations of
+this master.
 _Avoid_: Size-specific poster set, original media copy
 
 **Media Store**:

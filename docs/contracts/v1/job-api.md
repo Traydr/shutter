@@ -70,8 +70,9 @@ from a completed `200` response.
 }
 ```
 
-`width` and `height` are the actual Master Preview dimensions. The descriptor is
-durable and contains no delivery URL, Source Locator, or Source Capability.
+`width` and `height` are the actual Master Preview dimensions; the longest edge
+is at most 1920 pixels. The descriptor is durable and contains no delivery URL,
+Source Locator, or Source Capability.
 Shutter Control does not authorize end users or mint delivery capabilities.
 
 For a public Space, the consuming adapter constructs the canonical public

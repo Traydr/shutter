@@ -13,10 +13,11 @@ const pdfProcessor: ExecutorProcessor = {
   kind: "pdf",
   process: ({ locator, directory, fetch, allowedSourceOrigins, signal }) =>
     processPdfPreview(
-      locator,
-      join(directory, "source.pdf"),
-      join(directory, "page"),
-      join(directory, "preview.webp"),
+      {
+        locator,
+        inputPath: join(directory, "source.pdf"),
+        outputPath: join(directory, "preview.webp"),
+      },
       { fetch, runCommand, allowedSourceOrigins, signal },
     ),
   failure: (error) =>
